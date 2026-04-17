@@ -15,6 +15,8 @@ use mreg_rust::{
     authz::AuthorizerClient,
     config::{Config, StorageBackendSetting},
     events::EventSinkClient,
+    services::Services,
+    storage::ReadableStorage,
     storage::build_storage,
 };
 
@@ -181,15 +183,15 @@ fn treetop_memory_state() -> Option<AppState> {
     };
     let storage = build_storage(&config).ok()?;
     let authn = AuthnClient::from_config(&config, storage.clone()).ok()?;
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).expect("authz config");
 
     Some(AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader: ReadableStorage::new(storage.clone()),
+        services: Services::new(storage, EventSinkClient::noop()),
         authn,
         authz,
-        events: EventSinkClient::noop(),
     })
 }
 

@@ -16,7 +16,6 @@ use crate::{
         types::{CommunityName, NetworkPolicyName},
     },
     errors::AppError,
-    services::attachments as attachment_service,
 };
 
 use super::authz::request as authz_request;
@@ -121,8 +120,8 @@ pub(crate) async fn list_attachment_community_assignments(
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
     let result = state
-        .storage
-        .attachment_community_assignments()
+        .services
+        .attachments()
         .list_attachment_community_assignments(&page, &filter)
         .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
@@ -161,13 +160,11 @@ pub(crate) async fn create_attachment_community_assignment(
         .build(),
     )
     .await?;
-    let assignment = attachment_service::create_attachment_community_assignment(
-        state.storage.attachment_community_assignments(),
-        request.into_command()?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let assignment = state
+        .services
+        .attachments()
+        .create_attachment_community_assignment(request.into_command()?)
+        .await?;
     Ok(
         HttpResponse::Created().json(AttachmentCommunityAssignmentResponse::from_domain(
             &assignment,
@@ -194,8 +191,8 @@ pub(crate) async fn get_attachment_community_assignment(
     )
     .await?;
     let assignment = state
-        .storage
-        .attachment_community_assignments()
+        .services
+        .attachments()
         .get_attachment_community_assignment(assignment_id)
         .await?;
     Ok(
@@ -223,12 +220,10 @@ pub(crate) async fn delete_attachment_community_assignment(
         .build(),
     )
     .await?;
-    attachment_service::delete_attachment_community_assignment(
-        state.storage.attachment_community_assignments(),
-        assignment_id,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    state
+        .services
+        .attachments()
+        .delete_attachment_community_assignment(assignment_id)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }

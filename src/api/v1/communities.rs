@@ -16,7 +16,6 @@ use crate::{
         types::{CommunityName, NetworkPolicyName},
     },
     errors::AppError,
-    services::communities as community_service,
 };
 
 use super::authz::request as authz_request;
@@ -132,8 +131,7 @@ pub(crate) async fn list_communities(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result =
-        community_service::list_communities(state.storage.communities(), &page, &filter).await?;
+    let result = state.services.communities().list(&page, &filter).await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         result,
         CommunityResponse::from_domain,
@@ -179,13 +177,11 @@ pub(crate) async fn create_community(
         .build(),
     )
     .await?;
-    let item = community_service::create_community(
-        state.storage.communities(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let item = state
+        .services
+        .communities()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(CommunityResponse::from_domain(&item)))
 }
 
@@ -218,7 +214,7 @@ pub(crate) async fn get_community(
         .build(),
     )
     .await?;
-    let item = community_service::get_community(state.storage.communities(), community_id).await?;
+    let item = state.services.communities().get(community_id).await?;
     Ok(HttpResponse::Ok().json(CommunityResponse::from_domain(&item)))
 }
 
@@ -251,13 +247,7 @@ pub(crate) async fn delete_community(
         .build(),
     )
     .await?;
-    community_service::delete_community(
-        state.storage.communities(),
-        state.storage.audit(),
-        &state.events,
-        community_id,
-    )
-    .await?;
+    state.services.communities().delete(community_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

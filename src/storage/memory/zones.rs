@@ -7,7 +7,7 @@ use crate::{
     domain::{
         pagination::{Page, PageRequest},
         resource_records::{CreateRecordInstance, RecordOwnerKind},
-        types::{RecordTypeName, ZoneName},
+        types::{ZoneName, record_type_names},
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
             CreateReverseZoneDelegation, ForwardZone, ForwardZoneDelegation, ReverseZone,
@@ -128,7 +128,7 @@ impl ZoneStore for MemoryStorage {
         // Auto-create NS records for each nameserver
         for ns in zone.nameservers() {
             let cmd = CreateRecordInstance::new(
-                RecordTypeName::new("NS").unwrap(),
+                record_type_names::ns(),
                 RecordOwnerKind::ForwardZone,
                 zone.name().as_str(),
                 None,
@@ -207,7 +207,7 @@ impl ZoneStore for MemoryStorage {
             // Create new NS records
             for ns in updated.nameservers() {
                 let cmd = CreateRecordInstance::new(
-                    RecordTypeName::new("NS").unwrap(),
+                    record_type_names::ns(),
                     RecordOwnerKind::ForwardZone,
                     updated.name().as_str(),
                     None,
@@ -287,7 +287,7 @@ impl ZoneStore for MemoryStorage {
         // Auto-create NS records for the delegation
         for ns in delegation.nameservers() {
             let cmd = CreateRecordInstance::new(
-                RecordTypeName::new("NS").unwrap(),
+                record_type_names::ns(),
                 RecordOwnerKind::ForwardZoneDelegation,
                 delegation.name().as_str(),
                 None,
@@ -336,7 +336,7 @@ impl ZoneStore for MemoryStorage {
         // Auto-create NS records for each nameserver
         for ns in zone.nameservers() {
             let cmd = CreateRecordInstance::new(
-                RecordTypeName::new("NS").unwrap(),
+                record_type_names::ns(),
                 RecordOwnerKind::ReverseZone,
                 zone.name().as_str(),
                 None,
@@ -416,7 +416,7 @@ impl ZoneStore for MemoryStorage {
             // Create new NS records
             for ns in updated.nameservers() {
                 let cmd = CreateRecordInstance::new(
-                    RecordTypeName::new("NS").unwrap(),
+                    record_type_names::ns(),
                     RecordOwnerKind::ReverseZone,
                     updated.name().as_str(),
                     None,
@@ -496,7 +496,7 @@ impl ZoneStore for MemoryStorage {
         // Auto-create NS records for the delegation
         for ns in delegation.nameservers() {
             let cmd = CreateRecordInstance::new(
-                RecordTypeName::new("NS").unwrap(),
+                record_type_names::ns(),
                 RecordOwnerKind::ReverseZoneDelegation,
                 delegation.name().as_str(),
                 None,

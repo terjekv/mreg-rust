@@ -13,22 +13,24 @@ pub mod v1;
     ),
     paths(
         // System
-        v1::health,
-        v1::version,
-        v1::status,
+        v1::system::health,
+        v1::system::version,
+        v1::system::status,
+        v1::system::history,
         // Authentication
         v1::auth::login,
         v1::auth::me,
         v1::auth::logout,
         v1::auth::logout_all,
-        v1::tasks,
-        v1::imports,
-        v1::export_templates,
-        v1::export_runs,
-        v1::record_types,
-        v1::rrsets,
-        v1::list_records_endpoint,
-        v1::history,
+        // Workflows – list endpoints
+        v1::workflows::tasks,
+        v1::workflows::imports,
+        v1::workflows::export_templates,
+        v1::workflows::export_runs,
+        // DNS – list endpoints
+        v1::dns::record_types,
+        v1::dns::rrsets,
+        v1::dns::list_records_endpoint,
         // Policy – Host policy atoms
         v1::host_policy::list_atoms,
         v1::host_policy::create_atom,
@@ -160,9 +162,9 @@ pub mod v1;
         crate::storage::StorageCapabilities,
         crate::storage::StorageHealthReport,
         // System
-        v1::HealthResponse,
-        v1::VersionResponse,
-        v1::StatusResponse,
+        v1::system::HealthResponse,
+        v1::system::VersionResponse,
+        v1::system::StatusResponse,
         // Authentication
         v1::auth::LoginRequest,
         v1::auth::LoginResponse,
@@ -232,6 +234,8 @@ pub mod v1;
         // Workflows
         v1::workflows::CreateImportRequest,
         v1::workflows::CreateImportItemRequest,
+        crate::domain::imports::ImportKind,
+        crate::domain::imports::ImportOperation,
         v1::workflows::CreateExportTemplateRequest,
         v1::workflows::CreateExportRunRequest,
     )),

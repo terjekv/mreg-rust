@@ -56,7 +56,9 @@ pub(super) fn list(
         .into_iter()
         .map(|row| {
             Ok(BacnetIdAssignment::restore(
-                BacnetIdentifier::new(row.id as u32)?,
+                BacnetIdentifier::new(u32::try_from(row.id).map_err(|_| {
+                    AppError::internal(format!("invalid bacnet_id in database: {}", row.id))
+                })?)?,
                 Hostname::new(row.host_name)?,
                 row.created_at,
                 row.updated_at,
@@ -86,7 +88,9 @@ pub(in crate::storage::postgres) fn create(
     .map_err(map_unique("bacnet id is already assigned"))?;
 
     Ok(BacnetIdAssignment::restore(
-        BacnetIdentifier::new(row.id as u32)?,
+        BacnetIdentifier::new(u32::try_from(row.id).map_err(|_| {
+            AppError::internal(format!("invalid bacnet_id in database: {}", row.id))
+        })?)?,
         Hostname::new(row.host_name)?,
         row.created_at,
         row.updated_at,
@@ -112,7 +116,9 @@ pub(super) fn get(
     })?;
 
     Ok(BacnetIdAssignment::restore(
-        BacnetIdentifier::new(row.id as u32)?,
+        BacnetIdentifier::new(u32::try_from(row.id).map_err(|_| {
+            AppError::internal(format!("invalid bacnet_id in database: {}", row.id))
+        })?)?,
         Hostname::new(row.host_name)?,
         row.created_at,
         row.updated_at,

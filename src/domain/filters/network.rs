@@ -35,7 +35,7 @@ impl NetworkFilter {
         for cond in &self.vlan {
             match network.vlan() {
                 Some(v) => {
-                    if !apply_u32_filter(v, cond) {
+                    if !apply_u32_filter(v.as_u32(), cond) {
                         return false;
                     }
                 }

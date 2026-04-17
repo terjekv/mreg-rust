@@ -80,10 +80,7 @@ impl NameServerStore for MemoryStorage {
                 AppError::not_found(format!("nameserver '{}' was not found", name.as_str()))
             })?;
         let now = Utc::now();
-        let ttl = match command.ttl {
-            Some(new_ttl) => new_ttl,
-            None => ns.ttl(),
-        };
+        let ttl = command.ttl.resolve(ns.ttl());
         let updated = NameServer::restore(ns.id(), ns.name().clone(), ttl, ns.created_at(), now)?;
         state
             .nameservers

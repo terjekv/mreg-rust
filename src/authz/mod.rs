@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use actix_web::{HttpMessage, HttpRequest};
+use reqwest::Url;
 use treetop_client::{
     Action as TreetopAction, AttrValue as TreetopAttrValue,
     AuthorizeRequest as TreetopAuthorizeRequest, BatchResult as TreetopBatchResult,
@@ -31,17 +32,22 @@ impl AuthorizerClient {
     /// Build an authorizer client from application configuration.
     ///
     /// Selects Treetop (remote), AllowAll (dev bypass), or DenyAll based on config.
-    pub fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &Config) -> Result<Self, AppError> {
         let inner: Arc<dyn Authorizer> = match &config.treetop_url {
             Some(base_url) => Arc::new(TreetopAuthorizer::new(
                 base_url.clone(),
                 Duration::from_millis(config.treetop_timeout_ms),
-            )),
-            None if config.allow_dev_authz_bypass => Arc::new(AllowAllAuthorizer),
+            )?),
+            None if config.allow_dev_authz_bypass => {
+                tracing::warn!(
+                    "MREG_ALLOW_DEV_AUTHZ_BYPASS is enabled — all authorization checks are bypassed. Do not use in production."
+                );
+                Arc::new(AllowAllAuthorizer)
+            }
             None => Arc::new(DenyAllAuthorizer),
         };
 
-        Self::new(inner)
+        Ok(Self::new(inner))
     }
 
     /// Issue an authorization decision for the given request.
@@ -326,12 +332,14 @@ struct TreetopAuthorizer {
 }
 
 impl TreetopAuthorizer {
-    fn new(base_url: String, timeout: Duration) -> Self {
+    fn new(base_url: String, timeout: Duration) -> Result<Self, AppError> {
+        Url::parse(&base_url)
+            .map_err(|e| AppError::config(format!("failed to build treetop client: {e}")))?;
         let client = TreetopClient::builder(base_url)
             .request_timeout(timeout)
             .build()
-            .expect("treetop client must build");
-        Self { client }
+            .map_err(|e| AppError::config(format!("failed to build treetop client: {e}")))?;
+        Ok(Self { client })
     }
 }
 
@@ -422,6 +430,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::config::Config;
 
     #[test]
     fn authorization_request_builder_sets_attrs() {
@@ -543,6 +552,26 @@ mod tests {
             err.to_string(),
             "forbidden: permission denied for action 'host.delete' on host 'web-01.example.org'"
         );
+    }
+
+    #[test]
+    fn from_config_returns_error_for_invalid_treetop_url() {
+        let config = Config {
+            treetop_url: Some("http://[::1".to_string()),
+            ..Config::default()
+        };
+
+        let err = match AuthorizerClient::from_config(&config) {
+            Ok(_) => panic!("invalid treetop url should fail"),
+            Err(err) => err,
+        };
+
+        match err {
+            AppError::Config(message) => {
+                assert!(message.contains("failed to build treetop client"));
+            }
+            other => panic!("expected config error, got {other:?}"),
+        }
     }
 
     struct RecordingAuthorizer {

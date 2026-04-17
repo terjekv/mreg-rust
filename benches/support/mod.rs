@@ -16,7 +16,7 @@ use mreg_rust::{
         network::CreateNetwork,
         pagination::{PageRequest, SortDirection},
         resource_records::RecordTypeDefinition,
-        types::{CidrValue, Hostname, IpAddressValue},
+        types::{CidrValue, Hostname, IpAddressValue, ReservedCount},
     },
     storage::{DynStorage, build_storage},
 };
@@ -59,7 +59,7 @@ pub fn host_listing_scenario(
                 CreateNetwork::new(
                     CidrValue::new("10.10.0.0/20").expect("valid CIDR"),
                     "bench inventory network",
-                    1,
+                    ReservedCount::new(1).expect("valid reserved count"),
                 )
                 .expect("valid network"),
             )
@@ -120,8 +120,12 @@ pub fn auto_allocation_scenario(
         storage
             .networks()
             .create_network(
-                CreateNetwork::new(network.clone(), "dense allocation network", 1)
-                    .expect("valid network"),
+                CreateNetwork::new(
+                    network.clone(),
+                    "dense allocation network",
+                    ReservedCount::new(1).expect("valid reserved count"),
+                )
+                .expect("valid network"),
             )
             .await
             .expect("network should be created");
@@ -190,8 +194,12 @@ pub fn host_auth_context_scenario(
             storage
                 .networks()
                 .create_network(
-                    CreateNetwork::new(cidr, format!("authz bench network {network_index}"), 1)
-                        .expect("valid benchmark network"),
+                    CreateNetwork::new(
+                        cidr,
+                        format!("authz bench network {network_index}"),
+                        ReservedCount::new(1).expect("valid reserved count"),
+                    )
+                    .expect("valid benchmark network"),
                 )
                 .await
                 .expect("network should be created");

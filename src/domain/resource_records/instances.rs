@@ -4,7 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{DnsName, RecordTypeName, Ttl},
+    domain::types::{DnsName, RecordTypeName, Ttl, UpdateField},
     errors::AppError,
 };
 
@@ -343,14 +343,14 @@ impl CreateRecordInstance {
 /// Command to update an existing DNS resource record's TTL or data.
 #[derive(Clone, Debug)]
 pub struct UpdateRecord {
-    ttl: Option<Option<Ttl>>, // None=don't change, Some(None)=clear, Some(Some(t))=set
-    data: Option<Value>,      // None=don't change, Some(v)=new structured data
+    ttl: UpdateField<Ttl>,
+    data: Option<Value>, // None=don't change, Some(v)=new structured data
     raw_rdata: Option<RawRdataValue>, // None=don't change, Some(r)=new raw rdata
 }
 
 impl UpdateRecord {
     pub fn new(
-        ttl: Option<Option<Ttl>>,
+        ttl: UpdateField<Ttl>,
         data: Option<Value>,
         raw_rdata: Option<RawRdataValue>,
     ) -> Result<Self, AppError> {
@@ -366,7 +366,7 @@ impl UpdateRecord {
         })
     }
 
-    pub fn ttl(&self) -> Option<Option<Ttl>> {
+    pub fn ttl(&self) -> UpdateField<Ttl> {
         self.ttl
     }
 

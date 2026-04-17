@@ -22,7 +22,8 @@ use mreg_rust::{
     config::{Config, StorageBackendSetting},
     db::{QueryCaptureSnapshot, take_query_capture, with_query_capture},
     events::EventSinkClient,
-    storage::{DynStorage, build_storage},
+    services::Services,
+    storage::{DynStorage, ReadableStorage, build_storage},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,7 +92,7 @@ impl TestCtx {
     }
 
     pub fn storage(&self) -> DynStorage {
-        self.state.storage.clone()
+        self.state.services.inner_storage()
     }
 
     pub fn name(&self, stem: &str) -> String {
@@ -575,15 +576,18 @@ fn build_state(
     };
     let storage = build_storage(&config)?;
     let authn = AuthnClient::from_config(&config, storage.clone())?;
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).expect("authz config");
+    let events = EventSinkClient::noop();
+    let reader = ReadableStorage::new(storage.clone());
+    let services = Services::new(storage, events);
 
     Ok(AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader,
+        services,
         authn,
         authz,
-        events: EventSinkClient::noop(),
     })
 }
 

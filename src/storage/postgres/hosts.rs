@@ -21,7 +21,9 @@ use crate::{
             IpAddressAssignment, UpdateHost, UpdateIpAddress,
         },
         pagination::{Page, PageRequest},
-        types::{CidrValue, Hostname, IpAddressValue, MacAddressValue, Ttl, ZoneName},
+        types::{
+            CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressValue, Ttl, ZoneName,
+        },
     },
     errors::AppError,
     storage::HostStore,
@@ -286,6 +288,37 @@ impl PostgresStorage {
             .collect()
     }
 
+    pub(super) fn query_ip_address(
+        connection: &mut PgConnection,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError> {
+        sql_query(
+            "SELECT ip.id,
+                    ip.host_id,
+                    ip.attachment_id,
+                    host(ip.address) AS address,
+                    ip.family::int AS family,
+                    nw.id AS network_id,
+                    ip.mac_address,
+                    ip.created_at,
+                    ip.updated_at
+             FROM ip_addresses ip
+             JOIN LATERAL (
+               SELECT id
+               FROM networks
+               WHERE ip.address <<= network
+               ORDER BY masklen(network) DESC
+               LIMIT 1
+             ) nw ON true
+             WHERE host(ip.address) = $1",
+        )
+        .bind::<Text, _>(address.as_str())
+        .get_result::<IpAddressAssignmentRow>(connection)
+        .optional()?
+        .ok_or_else(|| AppError::not_found(format!("IP address {}", address.as_str())))?
+        .into_domain()
+    }
+
     pub(super) fn assign_ip_address_tx(
         connection: &mut PgConnection,
         command: AssignIpAddress,
@@ -346,7 +379,7 @@ impl PostgresStorage {
                             DhcpIdentifierFamily::V4,
                             DhcpIdentifierKind::ClientId,
                             client_id_value,
-                            1000,
+                            DhcpPriority::new(1000),
                         )?,
                     )?;
                 }
@@ -363,7 +396,7 @@ impl PostgresStorage {
                             DhcpIdentifierFamily::V6,
                             DhcpIdentifierKind::DuidLl,
                             duid_ll_value,
-                            1000,
+                            DhcpPriority::new(1000),
                         )?,
                     )?;
                 }
@@ -646,19 +679,20 @@ impl PostgresStorage {
             .as_ref()
             .map(|v| v.as_str().to_string())
             .unwrap_or_else(|| old_host.name().as_str().to_string());
-        let ttl = match &command.ttl {
-            Some(ttl_option) => ttl_option.map(|t| t.as_i32()),
-            None => old_host.ttl().map(|t| t.as_i32()),
-        };
+        let ttl: Option<i32> = command
+            .ttl
+            .map(|t| t.as_i32())
+            .resolve(old_host.ttl().map(|t| t.as_i32()));
         let comment = command
             .comment
             .as_ref()
             .cloned()
             .unwrap_or_else(|| old_host.comment().to_string());
-        let zone_name: Option<String> = match &command.zone {
-            Some(zone_option) => zone_option.as_ref().map(|z| z.as_str().to_string()),
-            None => old_host.zone().map(|z| z.as_str().to_string()),
-        };
+        let zone_name: Option<String> = command
+            .zone
+            .clone()
+            .map(|z| z.as_str().to_string())
+            .resolve(old_host.zone().map(|z| z.as_str().to_string()));
         let zone_id: Option<uuid::Uuid> = match &zone_name {
             Some(zn) => Some(
                 forward_zones::table
@@ -948,6 +982,16 @@ impl HostStore for PostgresStorage {
             .await
     }
 
+    async fn get_ip_address(
+        &self,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let address = *address;
+        self.database
+            .run(move |connection| Self::query_ip_address(connection, &address))
+            .await
+    }
+
     async fn assign_ip_address(
         &self,
         command: AssignIpAddress,
@@ -975,30 +1019,27 @@ impl HostStore for PostgresStorage {
         command: UpdateIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
         let addr = address.as_str();
-        let mac = match command.mac_address {
-            Some(mac_opt) => mac_opt.map(|m| m.as_str()),
-            None => {
-                // Keep existing - we need a sentinel; use empty string to mean "no change"
-                // Actually, we handle this by fetching existing
-                return self.database.run(move |connection| {
-                    // Fetch existing MAC, then re-update with it unchanged
-                    let row = sql_query(
-                        "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
-                         nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
-                         FROM ip_addresses ip \
-                         JOIN LATERAL ( \
-                           SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-                         ) nw ON true \
-                         WHERE ip.address = $1::inet",
-                    )
-                    .bind::<Text, _>(&addr)
-                    .get_result::<IpAddressAssignmentRow>(connection)
-                    .map_err(|_| AppError::not_found(format!("IP address assignment '{}' was not found", addr)))?;
-                    row.into_domain()
-                }).await;
-            }
-        };
-        let mac_str = mac.clone();
+        if command.mac_address.is_unchanged() {
+            return self.database.run(move |connection| {
+                let row = sql_query(
+                    "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
+                     nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
+                     FROM ip_addresses ip \
+                     JOIN LATERAL ( \
+                       SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
+                     ) nw ON true \
+                     WHERE ip.address = $1::inet",
+                )
+                .bind::<Text, _>(&addr)
+                .get_result::<IpAddressAssignmentRow>(connection)
+                .map_err(|_| AppError::not_found(format!("IP address assignment '{}' was not found", addr)))?;
+                row.into_domain()
+            }).await;
+        }
+        let mac_str: Option<String> = command
+            .mac_address
+            .into_set()
+            .map(|m| m.as_str().to_string());
         self.database
             .run(move |connection| {
                 connection.transaction::<IpAddressAssignment, AppError, _>(|connection| {

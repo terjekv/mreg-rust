@@ -24,7 +24,7 @@ use crate::{
         host_contact::CreateHostContact,
         host_group::CreateHostGroup,
         host_policy::{CreateHostPolicyAtom, CreateHostPolicyRole},
-        imports::{CreateImportBatch, ImportBatchSummary, ImportItem},
+        imports::{CreateImportBatch, ImportBatchSummary, ImportItem, ImportKind, ImportOperation},
         network::{CreateExcludedRange, CreateNetwork},
         network_policy::CreateNetworkPolicy,
         pagination::{Page, PageRequest},
@@ -35,9 +35,10 @@ use crate::{
         },
         tasks::CreateTask,
         types::{
-            BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, MacAddressValue,
-            NetworkPolicyName, OwnerGroupName, RecordTypeName, SerialNumber, Ttl, ZoneName,
+            BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, EmailAddressValue,
+            HostGroupName, HostPolicyName, Hostname, IpAddressValue, LabelName, MacAddressValue,
+            NetworkPolicyName, OwnerGroupName, RecordTypeName, ReservedCount, SerialNumber,
+            SoaSeconds, Ttl, VlanId, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -46,6 +47,11 @@ use crate::{
     },
     errors::AppError,
     storage::ImportStore,
+    storage::import_helpers::{
+        resolve_bool, resolve_i32, resolve_one_of_string, resolve_optional_string,
+        resolve_required_one_of_string, resolve_string, resolve_string_vec, resolve_u32,
+        resolve_u64, resolve_uuid, stringify_ref_value,
+    },
 };
 
 use super::PostgresStorage;
@@ -53,156 +59,6 @@ use super::helpers::{map_unique, vec_to_page};
 
 use crate::db::models::{ForwardZoneRow, LabelRow, ReverseZoneRow};
 use crate::db::schema::labels;
-
-fn resolve_string(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<String, AppError> {
-    resolve_optional_string(attributes, key, refs)?
-        .ok_or_else(|| AppError::validation(format!("missing required import attribute '{}'", key)))
-}
-
-fn resolve_one_of_string(
-    attributes: &Value,
-    keys: &[&str],
-    refs: &BTreeMap<String, String>,
-) -> Result<Option<String>, AppError> {
-    for key in keys {
-        if let Some(value) = resolve_optional_string(attributes, key, refs)? {
-            return Ok(Some(value));
-        }
-    }
-    Ok(None)
-}
-
-fn resolve_required_one_of_string(
-    attributes: &Value,
-    keys: &[&str],
-    refs: &BTreeMap<String, String>,
-) -> Result<String, AppError> {
-    resolve_one_of_string(attributes, keys, refs)?.ok_or_else(|| {
-        AppError::validation(format!(
-            "missing required import attribute '{}'",
-            keys.join("' or '")
-        ))
-    })
-}
-
-fn resolve_optional_string(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<Option<String>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-    if let Some(value) = object.get(key) {
-        return value
-            .as_str()
-            .map(|value| Some(value.to_string()))
-            .ok_or_else(|| {
-                AppError::validation(format!("import attribute '{}' must be a string", key))
-            });
-    }
-    let ref_key = format!("{}_ref", key);
-    if let Some(value) = object.get(&ref_key) {
-        let reference = value.as_str().ok_or_else(|| {
-            AppError::validation(format!("import attribute '{}' must be a string", ref_key))
-        })?;
-        return refs
-            .get(reference)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| AppError::validation(format!("unknown import ref '{}'", reference)));
-    }
-    Ok(None)
-}
-
-fn resolve_bool(attributes: &Value, key: &str) -> Result<Option<bool>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-    match object.get(key) {
-        Some(value) => value.as_bool().map(Some).ok_or_else(|| {
-            AppError::validation(format!("import attribute '{}' must be a boolean", key))
-        }),
-        None => Ok(None),
-    }
-}
-
-fn resolve_string_vec(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<Vec<String>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-
-    let values = match object.get(key) {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| {
-                let value = item.as_str().ok_or_else(|| {
-                    AppError::validation(format!(
-                        "import attribute '{}' must be an array of strings",
-                        key
-                    ))
-                })?;
-                Ok::<String, AppError>(
-                    refs.get(value)
-                        .cloned()
-                        .unwrap_or_else(|| value.to_string()),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(_) => {
-            return Err(AppError::validation(format!(
-                "import attribute '{}' must be an array of strings",
-                key
-            )));
-        }
-        None => Vec::new(),
-    };
-
-    Ok(values
-        .into_iter()
-        .map(|value| refs.get(&value).cloned().unwrap_or(value))
-        .collect())
-}
-
-fn resolve_u64(attributes: &Value, key: &str) -> Result<Option<u64>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-    match object.get(key) {
-        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
-            AppError::validation(format!("import attribute '{}' must be an integer", key))
-        }),
-        None => Ok(None),
-    }
-}
-
-fn resolve_uuid(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<Option<Uuid>, AppError> {
-    resolve_optional_string(attributes, key, refs)?
-        .map(|raw| {
-            Uuid::parse_str(&raw)
-                .map_err(|error| AppError::validation(format!("invalid {key}: {error}")))
-        })
-        .transpose()
-}
-
-fn stringify_ref_value(value: &Value) -> String {
-    value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string())
-}
 
 impl PostgresStorage {
     fn query_import_summaries(
@@ -223,71 +79,68 @@ impl PostgresStorage {
         item: &ImportItem,
         refs: &mut BTreeMap<String, String>,
     ) -> Result<Value, AppError> {
-        if item.operation() != "create" {
-            return Err(AppError::validation(format!(
-                "unsupported import operation '{}'",
-                item.operation()
-            )));
+        match item.operation() {
+            ImportOperation::Create => {}
         }
 
         let attributes = item.attributes();
         let result = match item.kind() {
-            "label" => Self::import_label(connection, attributes, refs)?,
-            "nameserver" => Self::import_nameserver(connection, attributes, refs)?,
-            "network" => Self::import_network(connection, attributes, refs)?,
-            "host_contact" => Self::import_host_contact(connection, attributes, refs)?,
-            "host_group" => Self::import_host_group(connection, attributes, refs)?,
-            "bacnet_id" => Self::import_bacnet_id(connection, attributes, refs)?,
-            "ptr_override" => Self::import_ptr_override(connection, attributes, refs)?,
-            "network_policy" => Self::import_network_policy(connection, attributes, refs)?,
-            "network_policy_attribute" => {
+            ImportKind::Label => Self::import_label(connection, attributes, refs)?,
+            ImportKind::Nameserver => Self::import_nameserver(connection, attributes, refs)?,
+            ImportKind::Network => Self::import_network(connection, attributes, refs)?,
+            ImportKind::HostContact => Self::import_host_contact(connection, attributes, refs)?,
+            ImportKind::HostGroup => Self::import_host_group(connection, attributes, refs)?,
+            ImportKind::BacnetId => Self::import_bacnet_id(connection, attributes, refs)?,
+            ImportKind::PtrOverride => Self::import_ptr_override(connection, attributes, refs)?,
+            ImportKind::NetworkPolicy => Self::import_network_policy(connection, attributes, refs)?,
+            ImportKind::NetworkPolicyAttribute => {
                 Self::import_network_policy_attribute(connection, attributes, refs)?
             }
-            "network_policy_attribute_value" => {
+            ImportKind::NetworkPolicyAttributeValue => {
                 Self::import_network_policy_attribute_value(connection, attributes, refs)?
             }
-            "community" => Self::import_community(connection, attributes, refs)?,
-            "forward_zone" => Self::import_forward_zone(connection, attributes, refs)?,
-            "reverse_zone" => Self::import_reverse_zone(connection, attributes, refs)?,
-            "forward_zone_delegation" => {
+            ImportKind::Community => Self::import_community(connection, attributes, refs)?,
+            ImportKind::ForwardZone => Self::import_forward_zone(connection, attributes, refs)?,
+            ImportKind::ReverseZone => Self::import_reverse_zone(connection, attributes, refs)?,
+            ImportKind::ForwardZoneDelegation => {
                 Self::import_forward_zone_delegation(connection, attributes, refs)?
             }
-            "reverse_zone_delegation" => {
+            ImportKind::ReverseZoneDelegation => {
                 Self::import_reverse_zone_delegation(connection, attributes, refs)?
             }
-            "excluded_range" => Self::import_excluded_range(connection, attributes, refs)?,
-            "host" => Self::import_host(connection, attributes, refs)?,
-            "host_attachment" => Self::import_host_attachment(connection, attributes, refs)?,
-            "ip_address" => Self::import_ip_address(connection, attributes, refs)?,
-            "record" => Self::import_record(connection, attributes, refs)?,
-            "attachment_dhcp_identifier" => {
+            ImportKind::ExcludedRange => Self::import_excluded_range(connection, attributes, refs)?,
+            ImportKind::Host => Self::import_host(connection, attributes, refs)?,
+            ImportKind::HostAttachment => {
+                Self::import_host_attachment(connection, attributes, refs)?
+            }
+            ImportKind::IpAddress => Self::import_ip_address(connection, attributes, refs)?,
+            ImportKind::Record => Self::import_record(connection, attributes, refs)?,
+            ImportKind::AttachmentDhcpIdentifier => {
                 Self::import_attachment_dhcp_identifier(connection, attributes, refs)?
             }
-            "attachment_prefix_reservation" => {
+            ImportKind::AttachmentPrefixReservation => {
                 Self::import_attachment_prefix_reservation(connection, attributes, refs)?
             }
-            "attachment_community_assignment" => {
+            ImportKind::AttachmentCommunityAssignment => {
                 Self::import_attachment_community_assignment(connection, attributes, refs)?
             }
-            "host_community_assignment" => {
+            ImportKind::HostCommunityAssignment => {
                 Self::import_host_community_assignment(connection, attributes, refs)?
             }
-            "host_policy_atom" => Self::import_host_policy_atom(connection, attributes, refs)?,
-            "host_policy_role" => Self::import_host_policy_role(connection, attributes, refs)?,
-            "host_policy_role_atom" => {
+            ImportKind::HostPolicyAtom => {
+                Self::import_host_policy_atom(connection, attributes, refs)?
+            }
+            ImportKind::HostPolicyRole => {
+                Self::import_host_policy_role(connection, attributes, refs)?
+            }
+            ImportKind::HostPolicyRoleAtom => {
                 Self::import_host_policy_role_atom(connection, attributes, refs)?
             }
-            "host_policy_role_host" => {
+            ImportKind::HostPolicyRoleHost => {
                 Self::import_host_policy_role_host(connection, attributes, refs)?
             }
-            "host_policy_role_label" => {
+            ImportKind::HostPolicyRoleLabel => {
                 Self::import_host_policy_role_label(connection, attributes, refs)?
-            }
-            _ => {
-                return Err(AppError::validation(format!(
-                    "unsupported import kind '{}'",
-                    item.kind()
-                )));
             }
         };
 
@@ -325,9 +178,7 @@ impl PostgresStorage {
     ) -> Result<Value, AppError> {
         use crate::db::schema::nameservers;
         let ns_name = DnsName::new(resolve_string(attributes, "name", refs)?)?;
-        let ttl = resolve_u64(attributes, "ttl")?
-            .map(|value| Ttl::new(value as u32))
-            .transpose()?;
+        let ttl = resolve_u32(attributes, "ttl")?.map(Ttl::new).transpose()?;
         let nameserver = diesel::insert_into(nameservers::table)
             .values((
                 nameservers::name.eq(ns_name.as_str()),
@@ -349,12 +200,14 @@ impl PostgresStorage {
         let command = CreateNetwork::new_full(
             cidr.clone(),
             resolve_string(attributes, "description", refs)?,
-            resolve_u64(attributes, "vlan")?.map(|value| value as u32),
+            resolve_u32(attributes, "vlan")?
+                .map(VlanId::new)
+                .transpose()?,
             resolve_bool(attributes, "dns_delegated")?.unwrap_or(false),
             resolve_optional_string(attributes, "category", refs)?.unwrap_or_default(),
             resolve_optional_string(attributes, "location", refs)?.unwrap_or_default(),
             resolve_bool(attributes, "frozen")?.unwrap_or(false),
-            resolve_u64(attributes, "reserved")?.unwrap_or(3) as u32,
+            ReservedCount::new(resolve_u32(attributes, "reserved")?.unwrap_or(3))?,
         )?;
         let policy_name = resolve_one_of_string(attributes, &["policy_name", "policy"], refs)?
             .map(NetworkPolicyName::new)
@@ -363,7 +216,7 @@ impl PostgresStorage {
             .as_ref()
             .map(|name| Self::resolve_network_policy_id(connection, name))
             .transpose()?;
-        let max_communities = resolve_u64(attributes, "max_communities")?.map(|value| value as i32);
+        let max_communities = resolve_i32(attributes, "max_communities")?;
         let network = sql_query(
             "INSERT INTO networks
                 (network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id)
@@ -374,12 +227,12 @@ impl PostgresStorage {
         )
         .bind::<Text, _>(command.cidr().as_str())
         .bind::<Text, _>(command.description())
-        .bind::<Nullable<Integer>, _>(command.vlan().map(|value| value as i32))
+        .bind::<Nullable<Integer>, _>(command.vlan().map(|value| value.as_i32()))
         .bind::<Bool, _>(command.dns_delegated())
         .bind::<Text, _>(command.category())
         .bind::<Text, _>(command.location())
         .bind::<Bool, _>(command.frozen())
-        .bind::<Integer, _>(command.reserved() as i32)
+        .bind::<Integer, _>(command.reserved().as_i32())
         .bind::<Nullable<Integer>, _>(max_communities)
         .bind::<Nullable<SqlUuid>, _>(policy_id)
         .get_result::<NetworkRow>(connection)
@@ -442,9 +295,9 @@ impl PostgresStorage {
         let assignment = super::bacnet_ids::create(
             connection,
             CreateBacnetIdAssignment::new(
-                BacnetIdentifier::new(resolve_u64(attributes, "bacnet_id")?.ok_or_else(|| {
+                BacnetIdentifier::new(resolve_u32(attributes, "bacnet_id")?.ok_or_else(|| {
                     AppError::validation("missing required import attribute 'bacnet_id'")
-                })? as u32)?,
+                })?)?,
                 Hostname::new(resolve_string(attributes, "host_name", refs)?)?,
             ),
         )?;
@@ -570,11 +423,11 @@ impl PostgresStorage {
             nameservers.clone(),
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
             SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
-            resolve_u64(attributes, "refresh")?.unwrap_or(10_800) as u32,
-            resolve_u64(attributes, "retry")?.unwrap_or(3_600) as u32,
-            resolve_u64(attributes, "expire")?.unwrap_or(1_814_400) as u32,
-            Ttl::new(resolve_u64(attributes, "soa_ttl")?.unwrap_or(43_200) as u32)?,
-            Ttl::new(resolve_u64(attributes, "default_ttl")?.unwrap_or(43_200) as u32)?,
+            SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
+            SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
+            SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
+            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         );
         let nameserver_ids = Self::lookup_nameserver_ids(connection, command.nameservers())?;
         use crate::db::schema::{forward_zone_nameservers, forward_zones};
@@ -584,9 +437,9 @@ impl PostgresStorage {
                 forward_zones::primary_ns.eq(command.primary_ns().as_str()),
                 forward_zones::email.eq(command.email().as_str()),
                 forward_zones::serial_no.eq(command.serial_no().as_i64()),
-                forward_zones::refresh.eq(command.refresh() as i32),
-                forward_zones::retry.eq(command.retry() as i32),
-                forward_zones::expire.eq(command.expire() as i32),
+                forward_zones::refresh.eq(command.refresh().as_i32()),
+                forward_zones::retry.eq(command.retry().as_i32()),
+                forward_zones::expire.eq(command.expire().as_i32()),
                 forward_zones::soa_ttl.eq(command.soa_ttl().as_i32()),
                 forward_zones::default_ttl.eq(command.default_ttl().as_i32()),
             ))
@@ -625,11 +478,11 @@ impl PostgresStorage {
             nameservers.clone(),
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
             SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
-            resolve_u64(attributes, "refresh")?.unwrap_or(10_800) as u32,
-            resolve_u64(attributes, "retry")?.unwrap_or(3_600) as u32,
-            resolve_u64(attributes, "expire")?.unwrap_or(1_814_400) as u32,
-            Ttl::new(resolve_u64(attributes, "soa_ttl")?.unwrap_or(43_200) as u32)?,
-            Ttl::new(resolve_u64(attributes, "default_ttl")?.unwrap_or(43_200) as u32)?,
+            SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
+            SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
+            SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
+            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         );
         let nameserver_ids = Self::lookup_nameserver_ids(connection, command.nameservers())?;
         let row = sql_query(
@@ -647,9 +500,9 @@ impl PostgresStorage {
         .bind::<Text, _>(command.primary_ns().as_str())
         .bind::<Text, _>(command.email().as_str())
         .bind::<diesel::sql_types::BigInt, _>(command.serial_no().as_i64())
-        .bind::<Integer, _>(command.refresh() as i32)
-        .bind::<Integer, _>(command.retry() as i32)
-        .bind::<Integer, _>(command.expire() as i32)
+        .bind::<Integer, _>(command.refresh().as_i32())
+        .bind::<Integer, _>(command.retry().as_i32())
+        .bind::<Integer, _>(command.expire().as_i32())
         .bind::<Integer, _>(command.soa_ttl().as_i32())
         .bind::<Integer, _>(command.default_ttl().as_i32())
         .get_result::<ReverseZoneRow>(connection)
@@ -783,9 +636,7 @@ impl PostgresStorage {
             resolve_optional_string(attributes, "zone", refs)?
                 .map(ZoneName::new)
                 .transpose()?,
-            resolve_u64(attributes, "ttl")?
-                .map(|value| Ttl::new(value as u32))
-                .transpose()?,
+            resolve_u32(attributes, "ttl")?.map(Ttl::new).transpose()?,
             resolve_optional_string(attributes, "comment", refs)?.unwrap_or_default(),
         )?;
         let zone_name = command.zone().map(|zone| zone.as_str().to_string());
@@ -935,7 +786,7 @@ impl PostgresStorage {
                 family,
                 kind,
                 resolve_string(attributes, "value", refs)?,
-                resolve_u64(attributes, "priority")?.unwrap_or(100) as i32,
+                DhcpPriority::new(resolve_i32(attributes, "priority")?.unwrap_or(100)),
             )?,
         )?;
         Ok(Value::String(identifier.id().to_string()))
@@ -995,9 +846,7 @@ impl PostgresStorage {
             owner_kind,
             resolve_string(attributes, "owner_name", refs)?,
             resolve_optional_string(attributes, "anchor_name", refs)?,
-            resolve_u64(attributes, "ttl")?
-                .map(|value| Ttl::new(value as u32))
-                .transpose()?,
+            resolve_u32(attributes, "ttl")?.map(Ttl::new).transpose()?,
             attributes.get("data").cloned(),
             resolve_optional_string(attributes, "raw_rdata", refs)?
                 .map(RawRdataValue::from_presentation)

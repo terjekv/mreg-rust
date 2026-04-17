@@ -8,7 +8,7 @@ use crate::{
         record_validation::{
             preprocess_builtin_payload, validate_builtin_payload, validate_owner_name,
         },
-        types::{DnsName, RecordTypeName},
+        types::{DnsName, DnsTypeCode, RecordTypeName},
     },
     errors::AppError,
 };
@@ -20,7 +20,7 @@ use super::{RawRdataValue, RecordTypeSchema, ValidatedRecordContent};
 pub struct RecordTypeDefinition {
     id: Uuid,
     name: RecordTypeName,
-    dns_type: Option<i32>,
+    dns_type: Option<DnsTypeCode>,
     schema: RecordTypeSchema,
     built_in: bool,
     created_at: DateTime<Utc>,
@@ -31,7 +31,7 @@ impl RecordTypeDefinition {
     pub fn restore(
         id: Uuid,
         name: RecordTypeName,
-        dns_type: Option<i32>,
+        dns_type: Option<DnsTypeCode>,
         schema: RecordTypeSchema,
         built_in: bool,
         created_at: DateTime<Utc>,
@@ -56,7 +56,7 @@ impl RecordTypeDefinition {
         &self.name
     }
 
-    pub fn dns_type(&self) -> Option<i32> {
+    pub fn dns_type(&self) -> Option<DnsTypeCode> {
         self.dns_type
     }
 
@@ -119,7 +119,7 @@ impl RecordTypeDefinition {
 #[derive(Clone, Debug)]
 pub struct CreateRecordTypeDefinition {
     name: RecordTypeName,
-    dns_type: Option<i32>,
+    dns_type: Option<DnsTypeCode>,
     schema: RecordTypeSchema,
     built_in: bool,
 }
@@ -127,7 +127,7 @@ pub struct CreateRecordTypeDefinition {
 impl CreateRecordTypeDefinition {
     pub fn new(
         name: RecordTypeName,
-        dns_type: Option<i32>,
+        dns_type: Option<DnsTypeCode>,
         schema: RecordTypeSchema,
         built_in: bool,
     ) -> Self {
@@ -143,7 +143,7 @@ impl CreateRecordTypeDefinition {
         &self.name
     }
 
-    pub fn dns_type(&self) -> Option<i32> {
+    pub fn dns_type(&self) -> Option<DnsTypeCode> {
         self.dns_type
     }
 

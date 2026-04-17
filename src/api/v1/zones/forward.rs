@@ -9,11 +9,10 @@ use crate::{
     authz::{self, AttrValue, AuthorizationRequest, require_permission, require_permissions},
     domain::{
         pagination::{PageRequest, PageResponse},
-        types::{DnsName, EmailAddressValue, SerialNumber, Ttl, ZoneName},
+        types::{DnsName, EmailAddressValue, SerialNumber, SoaSeconds, Ttl, ZoneName},
         zone::{CreateForwardZone, ForwardZone, UpdateForwardZone},
     },
     errors::AppError,
-    services::zones as zone_service,
 };
 
 use crate::api::v1::authz::{UpdateAuthzBuilder, request as authz_request, string_set};
@@ -69,9 +68,9 @@ impl CreateForwardZoneRequest {
             nameservers,
             EmailAddressValue::new(self.email)?,
             SerialNumber::new(self.serial_no)?,
-            self.refresh,
-            self.retry,
-            self.expire,
+            SoaSeconds::new(self.refresh)?,
+            SoaSeconds::new(self.retry)?,
+            SoaSeconds::new(self.expire)?,
             Ttl::new(self.soa_ttl)?,
             Ttl::new(self.default_ttl)?,
         ))
@@ -112,9 +111,9 @@ impl ForwardZoneResponse {
             email: zone.email().as_str().to_string(),
             serial_no: zone.serial_no().as_u64(),
             serial_no_updated_at: zone.serial_no_updated_at(),
-            refresh: zone.refresh(),
-            retry: zone.retry(),
-            expire: zone.expire(),
+            refresh: zone.refresh().as_u32(),
+            retry: zone.retry().as_u32(),
+            expire: zone.expire().as_u32(),
             soa_ttl: zone.soa_ttl().as_u32(),
             default_ttl: zone.default_ttl().as_u32(),
             created_at: zone.created_at(),
@@ -196,7 +195,11 @@ pub(crate) async fn list_forward_zones(
         .build(),
     )
     .await?;
-    let page = zone_service::list_forward(state.storage.zones(), &query.into_inner()).await?;
+    let page = state
+        .services
+        .zones()
+        .list_forward(&query.into_inner())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
         ForwardZoneResponse::from_domain,
@@ -246,13 +249,11 @@ pub(crate) async fn create_forward_zone(
         .build(),
     )
     .await?;
-    let zone = zone_service::create_forward(
-        state.storage.zones(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let zone = state
+        .services
+        .zones()
+        .create_forward(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(ForwardZoneResponse::from_domain(&zone)))
 }
 
@@ -285,7 +286,7 @@ pub(crate) async fn get_forward_zone(
         .build(),
     )
     .await?;
-    let zone = zone_service::get_forward(state.storage.zones(), &name).await?;
+    let zone = state.services.zones().get_forward(&name).await?;
     Ok(HttpResponse::Ok().json(ForwardZoneResponse::from_domain(&zone)))
 }
 
@@ -322,26 +323,26 @@ pub(crate) async fn update_forward_zone(
         })
         .transpose()?;
     let email = request.email.map(EmailAddressValue::new).transpose()?;
+    let refresh = request.refresh.map(SoaSeconds::new).transpose()?;
+    let retry = request.retry.map(SoaSeconds::new).transpose()?;
+    let expire = request.expire.map(SoaSeconds::new).transpose()?;
     let soa_ttl = request.soa_ttl.map(Ttl::new).transpose()?;
     let default_ttl = request.default_ttl.map(Ttl::new).transpose()?;
     let command = UpdateForwardZone {
         primary_ns,
         nameservers,
         email,
-        refresh: request.refresh,
-        retry: request.retry,
-        expire: request.expire,
+        refresh,
+        retry,
+        expire,
         soa_ttl,
         default_ttl,
     };
-    let zone = zone_service::update_forward(
-        state.storage.zones(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-        command,
-    )
-    .await?;
+    let zone = state
+        .services
+        .zones()
+        .update_forward(&name, command)
+        .await?;
     Ok(HttpResponse::Ok().json(ForwardZoneResponse::from_domain(&zone)))
 }
 
@@ -374,13 +375,7 @@ pub(crate) async fn delete_forward_zone(
         .build(),
     )
     .await?;
-    zone_service::delete_forward(
-        state.storage.zones(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.zones().delete_forward(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

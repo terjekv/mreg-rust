@@ -16,7 +16,6 @@ use crate::{
         types::{DnsName, Hostname, IpAddressValue},
     },
     errors::AppError,
-    services::ptr_overrides as ptr_override_service,
 };
 
 use super::authz::request as authz_request;
@@ -124,9 +123,7 @@ pub(crate) async fn list_ptr_overrides(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result =
-        ptr_override_service::list_ptr_overrides(state.storage.ptr_overrides(), &page, &filter)
-            .await?;
+    let result = state.services.ptr_overrides().list(&page, &filter).await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         result,
         PtrOverrideResponse::from_domain,
@@ -164,13 +161,11 @@ pub(crate) async fn create_ptr_override(
         authz = authz.attr("target_name", AttrValue::String(target_name.clone()));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let item = ptr_override_service::create_ptr_override(
-        state.storage.ptr_overrides(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let item = state
+        .services
+        .ptr_overrides()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(PtrOverrideResponse::from_domain(&item)))
 }
 
@@ -203,8 +198,7 @@ pub(crate) async fn get_ptr_override(
         .build(),
     )
     .await?;
-    let item =
-        ptr_override_service::get_ptr_override(state.storage.ptr_overrides(), &address).await?;
+    let item = state.services.ptr_overrides().get(&address).await?;
     Ok(HttpResponse::Ok().json(PtrOverrideResponse::from_domain(&item)))
 }
 
@@ -237,12 +231,6 @@ pub(crate) async fn delete_ptr_override(
         .build(),
     )
     .await?;
-    ptr_override_service::delete_ptr_override(
-        state.storage.ptr_overrides(),
-        state.storage.audit(),
-        &state.events,
-        &address,
-    )
-    .await?;
+    state.services.ptr_overrides().delete(&address).await?;
     Ok(HttpResponse::NoContent().finish())
 }

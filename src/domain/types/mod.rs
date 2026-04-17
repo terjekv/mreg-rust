@@ -4,20 +4,24 @@ mod encoded;
 mod identifiers;
 mod numerics;
 mod record_values;
+mod update_field;
 
 pub use addresses::*;
 pub use dns_names::*;
 pub use encoded::*;
 pub use identifiers::*;
 pub use numerics::*;
+pub use record_values::record_type_names;
 pub use record_values::*;
+pub use update_field::*;
 
 #[cfg(test)]
 mod tests {
     use super::{
         BacnetIdentifier, CidrValue, CommunityName, DnsCharacterString, DnsName, DomainNameValue,
         EmailAddressValue, HexEncodedValue, HostGroupName, Hostname, IpAddressValue, Ipv4AddrValue,
-        Ipv6AddrValue, LabelName, NetworkPolicyName, RecordTypeName, SerialNumber, Ttl,
+        Ipv6AddrValue, LabelName, NetworkPolicyName, RecordTypeName, SerialNumber, SoaSeconds, Ttl,
+        VlanId,
     };
 
     #[test]
@@ -224,5 +228,37 @@ mod tests {
     fn record_type_name_normalizes_to_uppercase() {
         let value = RecordTypeName::new("cname").expect("should parse");
         assert_eq!(value.as_str(), "CNAME");
+    }
+
+    #[test]
+    fn soa_seconds_accepts_valid_value() {
+        let value = SoaSeconds::new(10_800).expect("should be valid");
+        assert_eq!(value.as_u32(), 10_800);
+        assert_eq!(value.as_i32(), 10_800);
+    }
+
+    #[test]
+    fn soa_seconds_rejects_out_of_range() {
+        assert!(SoaSeconds::new(i32::MAX as u32 + 1).is_err());
+    }
+
+    #[test]
+    fn soa_seconds_accepts_zero() {
+        let value = SoaSeconds::new(0).expect("zero should be valid");
+        assert_eq!(value.as_u32(), 0);
+    }
+
+    #[test]
+    fn vlan_id_accepts_valid_values() {
+        let value = VlanId::new(0).expect("0 should be valid");
+        assert_eq!(value.as_u32(), 0);
+        let value = VlanId::new(4094).expect("4094 should be valid");
+        assert_eq!(value.as_u32(), 4094);
+    }
+
+    #[test]
+    fn vlan_id_rejects_out_of_range() {
+        assert!(VlanId::new(4095).is_err());
+        assert!(VlanId::new(5000).is_err());
     }
 }

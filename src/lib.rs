@@ -36,7 +36,8 @@ use crate::{
     config::Config,
     errors::AppError,
     events::EventSinkClient,
-    storage::{DynStorage, build_storage},
+    services::Services,
+    storage::{ReadableStorage, build_storage},
 };
 
 /// Compile-time build metadata embedded in API health responses.
@@ -63,10 +64,10 @@ impl BuildInfo {
 pub struct AppState {
     pub config: Arc<Config>,
     pub build_info: BuildInfo,
-    pub storage: DynStorage,
+    pub reader: ReadableStorage,
+    pub services: Services,
     pub authn: AuthnClient,
     pub authz: AuthorizerClient,
-    pub events: EventSinkClient,
 }
 
 /// Bootstrap configuration, storage, authorization, and start the HTTP server.
@@ -77,15 +78,17 @@ pub async fn run() -> io::Result<()> {
     let storage = build_storage(&config).map_err(to_io_error)?;
     let storage_backend = storage.backend_kind();
     let authn = AuthnClient::from_config(&config, storage.clone()).map_err(to_io_error)?;
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).map_err(to_io_error)?;
     let events = EventSinkClient::from_config(&config);
+    let reader = ReadableStorage::new(storage.clone());
+    let services = Services::new(storage, events.clone());
     let state = AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader,
+        services,
         authn,
         authz,
-        events,
     };
 
     let bind_addr = state.config.bind_addr();

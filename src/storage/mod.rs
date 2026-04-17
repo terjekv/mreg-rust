@@ -1,6 +1,10 @@
 // Backend modules
 pub mod memory;
 pub mod postgres;
+pub mod readable;
+
+// Shared import helpers (used by both backends)
+pub(crate) mod import_helpers;
 
 // Trait definition modules
 mod attachment_community_assignments;
@@ -47,6 +51,8 @@ pub use ptr_overrides::PtrOverrideStore;
 pub use records::RecordStore;
 pub use tasks::TaskStore;
 pub use zones::ZoneStore;
+
+pub use readable::ReadableStorage;
 
 use std::sync::Arc;
 

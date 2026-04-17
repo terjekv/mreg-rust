@@ -17,6 +17,8 @@ use mreg_rust::{
     },
     events::EventSinkClient,
     middleware,
+    services::Services,
+    storage::ReadableStorage,
     storage::build_storage,
 };
 use serde::Serialize;
@@ -41,14 +43,14 @@ fn base_config() -> Config {
 fn build_state(config: Config) -> AppState {
     let storage = build_storage(&config).expect("memory storage");
     let authn = AuthnClient::from_config(&config, storage.clone()).expect("authn config");
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).expect("authz config");
     AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader: ReadableStorage::new(storage.clone()),
+        services: Services::new(storage, EventSinkClient::noop()),
         authn,
         authz,
-        events: EventSinkClient::noop(),
     }
 }
 

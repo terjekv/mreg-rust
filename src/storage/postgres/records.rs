@@ -276,7 +276,7 @@ impl RecordStore for PostgresStorage {
         command: CreateRecordTypeDefinition,
     ) -> Result<RecordTypeDefinition, AppError> {
         let name = command.name().as_str().to_string();
-        let dns_type = command.dns_type();
+        let dns_type = command.dns_type().map(|v| v.as_i32());
         let (owner_kind, cardinality, validation_schema, rendering_schema, behavior_flags) =
             record_type_storage_parts(command.schema());
         let built_in = command.built_in();
@@ -451,10 +451,7 @@ impl RecordStore for PostgresStorage {
                     let record_type = Self::query_record_type_by_name(connection, existing.type_name())?;
                     let owner_name = DnsName::new(existing.owner_name())?;
 
-                    let new_ttl = match command.ttl() {
-                        Some(ttl_opt) => ttl_opt,
-                        None => existing.ttl(),
-                    };
+                    let new_ttl = command.ttl().resolve(existing.ttl());
 
                     let data_changed = command.data().is_some() || command.raw_rdata().is_some();
 

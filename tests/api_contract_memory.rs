@@ -7,6 +7,8 @@ use mreg_rust::{
     authz::AuthorizerClient,
     config::{Config, StorageBackendSetting},
     events::EventSinkClient,
+    services::Services,
+    storage::ReadableStorage,
     storage::build_storage,
 };
 use serde_json::{Value, json};
@@ -23,15 +25,15 @@ fn memory_state() -> AppState {
 
     let storage = build_storage(&config).expect("memory storage should initialize");
     let authn = AuthnClient::from_config(&config, storage.clone()).expect("authn config");
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).expect("authz config");
 
     AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader: ReadableStorage::new(storage.clone()),
+        services: Services::new(storage, EventSinkClient::noop()),
         authn,
         authz,
-        events: EventSinkClient::noop(),
     }
 }
 
@@ -1000,7 +1002,7 @@ async fn export_run_lifecycle_and_listing() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = test::read_body_json(response).await;
     assert!(
-        body["items"].as_array().unwrap().len() >= 1,
+        !body["items"].as_array().unwrap().is_empty(),
         "export runs list should contain at least one run"
     );
     let run = &body["items"][0];

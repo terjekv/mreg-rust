@@ -10,10 +10,9 @@ use crate::{
     domain::{
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         pagination::{PageRequest, PageResponse},
-        types::{DnsName, Ttl},
+        types::{DnsName, Ttl, UpdateField},
     },
     errors::AppError,
-    services::nameservers as nameserver_service,
 };
 
 use super::authz::request as authz_request;
@@ -93,7 +92,11 @@ pub(crate) async fn list_nameservers(
         .build(),
     )
     .await?;
-    let page = nameserver_service::list(state.storage.nameservers(), &query.into_inner()).await?;
+    let page = state
+        .services
+        .nameservers()
+        .list(&query.into_inner())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
         NameServerResponse::from_domain,
@@ -129,13 +132,11 @@ pub(crate) async fn create_nameserver(
         authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let nameserver = nameserver_service::create(
-        state.storage.nameservers(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let nameserver = state
+        .services
+        .nameservers()
+        .create(request.into_command()?)
+        .await?;
 
     Ok(HttpResponse::Created().json(NameServerResponse::from_domain(&nameserver)))
 }
@@ -169,14 +170,15 @@ pub(crate) async fn get_nameserver(
         .build(),
     )
     .await?;
-    let nameserver = nameserver_service::get(state.storage.nameservers(), &name).await?;
+    let nameserver = state.services.nameservers().get(&name).await?;
     Ok(HttpResponse::Ok().json(NameServerResponse::from_domain(&nameserver)))
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateNameServerRequest {
+    #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    ttl: Option<Option<u32>>,
+    ttl: UpdateField<u32>,
 }
 
 /// Update a nameserver
@@ -206,26 +208,19 @@ pub(crate) async fn update_nameserver(
         authz::actions::resource_kinds::NAMESERVER,
         name.as_str(),
     );
-    if let Some(ttl) = request.ttl {
-        authz = match ttl {
-            Some(ttl) => authz.attr("new_ttl", AttrValue::Long(i64::from(ttl))),
-            None => authz.attr("clear_ttl", AttrValue::Bool(true)),
-        };
+    match &request.ttl {
+        UpdateField::Set(ttl) => {
+            authz = authz.attr("new_ttl", AttrValue::Long(i64::from(*ttl)));
+        }
+        UpdateField::Clear => {
+            authz = authz.attr("clear_ttl", AttrValue::Bool(true));
+        }
+        UpdateField::Unchanged => {}
     }
     require_permission(&state.authz, authz.build()).await?;
-    let ttl = request
-        .ttl
-        .map(|opt| opt.map(Ttl::new).transpose())
-        .transpose()?;
+    let ttl = request.ttl.try_map(Ttl::new)?;
     let command = UpdateNameServer { ttl };
-    let nameserver = nameserver_service::update(
-        state.storage.nameservers(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-        command,
-    )
-    .await?;
+    let nameserver = state.services.nameservers().update(&name, command).await?;
     Ok(HttpResponse::Ok().json(NameServerResponse::from_domain(&nameserver)))
 }
 
@@ -258,13 +253,7 @@ pub(crate) async fn delete_nameserver(
         .build(),
     )
     .await?;
-    nameserver_service::delete(
-        state.storage.nameservers(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.nameservers().delete(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

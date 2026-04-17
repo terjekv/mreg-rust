@@ -35,6 +35,10 @@ pub trait HostStore: Send + Sync {
         host: &Hostname,
         page: &PageRequest,
     ) -> Result<Page<IpAddressAssignment>, AppError>;
+    async fn get_ip_address(
+        &self,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError>;
     async fn assign_ip_address(
         &self,
         command: AssignIpAddress,

@@ -380,12 +380,12 @@ impl NetworkStore for PostgresStorage {
     async fn create_network(&self, command: CreateNetwork) -> Result<Network, AppError> {
         let cidr = command.cidr().as_str();
         let description = command.description().to_string();
-        let vlan = command.vlan().map(|v| v as i32);
+        let vlan = command.vlan().map(|v| v.as_i32());
         let dns_delegated = command.dns_delegated();
         let category = command.category().to_string();
         let location = command.location().to_string();
         let frozen = command.frozen();
-        let reserved = command.reserved() as i32;
+        let reserved = command.reserved().as_i32();
         self.database
             .run(move |connection| {
                 sql_query(
@@ -426,15 +426,15 @@ impl NetworkStore for PostgresStorage {
                 connection.transaction::<Network, AppError, _>(|connection| {
                     let old = Self::query_network_by_cidr(connection, &cidr)?;
                     let description = command.description.unwrap_or_else(|| old.description().to_string());
-                    let vlan: Option<i32> = match command.vlan {
-                        Some(v) => v.map(|x| x as i32),
-                        None => old.vlan().map(|x| x as i32),
-                    };
+                    let vlan: Option<i32> = command
+                        .vlan
+                        .resolve(old.vlan())
+                        .map(|v| v.as_i32());
                     let dns_delegated = command.dns_delegated.unwrap_or(old.dns_delegated());
                     let category = command.category.unwrap_or_else(|| old.category().to_string());
                     let location = command.location.unwrap_or_else(|| old.location().to_string());
                     let frozen = command.frozen.unwrap_or(old.frozen());
-                    let reserved = command.reserved.unwrap_or(old.reserved()) as i32;
+                    let reserved: i32 = command.reserved.unwrap_or(old.reserved()).as_i32();
 
                     sql_query(
                         "UPDATE networks SET description = $1, vlan = $2, dns_delegated = $3, \

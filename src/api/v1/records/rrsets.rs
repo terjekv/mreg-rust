@@ -9,7 +9,6 @@ use crate::{
     authz::{self, require_permission},
     domain::resource_records::{RecordOwnerKind, RecordRrset},
     errors::AppError,
-    services::records as record_service,
 };
 
 use crate::api::v1::authz::request as authz_request;
@@ -86,7 +85,7 @@ pub(crate) async fn get_rrset_endpoint(
         .build(),
     )
     .await?;
-    let rrset = record_service::get_rrset(state.storage.records(), rrset_id).await?;
+    let rrset = state.services.records().get_rrset(rrset_id).await?;
     Ok(HttpResponse::Ok().json(RrsetResponse::from_domain(&rrset)))
 }
 
@@ -119,12 +118,6 @@ pub(crate) async fn delete_rrset_endpoint(
         .build(),
     )
     .await?;
-    record_service::delete_rrset(
-        state.storage.records(),
-        state.storage.audit(),
-        &state.events,
-        rrset_id,
-    )
-    .await?;
+    state.services.records().delete_rrset(rrset_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }

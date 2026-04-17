@@ -17,7 +17,9 @@ use mreg_rust::domain::{
     exports::{CreateExportRun, CreateExportTemplate, ExportRunStatus},
     filters::{AttachmentCommunityAssignmentFilter, RecordFilter},
     host::{AssignIpAddress, CreateHost},
-    imports::{CreateImportBatch, ImportBatch, ImportBatchStatus, ImportItem},
+    imports::{
+        CreateImportBatch, ImportBatch, ImportBatchStatus, ImportItem, ImportKind, ImportOperation,
+    },
     network::CreateNetwork,
     pagination::PageRequest,
     resource_records::{
@@ -26,9 +28,10 @@ use mreg_rust::domain::{
     },
     tasks::{CreateTask, TaskStatus},
     types::{
-        BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-        HostPolicyName, Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyName,
-        RecordTypeName, SerialNumber, Ttl, ZoneName,
+        BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, DnsTypeCode,
+        EmailAddressValue, HostGroupName, HostPolicyName, Hostname, IpAddressValue, LabelName,
+        MacAddressValue, NetworkPolicyName, RecordTypeName, ReservedCount, SerialNumber,
+        SoaSeconds, Ttl, VlanId, ZoneName,
     },
     zone::CreateForwardZone,
 };
@@ -43,6 +46,8 @@ use mreg_rust::{
     },
     events::EventSinkClient,
     middleware,
+    services::Services,
+    storage::ReadableStorage,
     storage::build_storage,
 };
 use serde_json::{Value, json};
@@ -90,14 +95,14 @@ fn postgres_scoped_auth_state(scope_name: &str, allow_dev_authz_bypass: bool) ->
     };
     let storage = build_storage(&config).ok()?;
     let authn = AuthnClient::from_config(&config, storage.clone()).ok()?;
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).expect("authz config");
     Some(AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader: ReadableStorage::new(storage.clone()),
+        services: Services::new(storage, EventSinkClient::noop()),
         authn,
         authz,
-        events: EventSinkClient::noop(),
     })
 }
 
@@ -162,20 +167,20 @@ fn build_extended_import_batch(
     let mut items = vec![
         ImportItem::new(
             "ns-1",
-            "nameserver",
-            "create",
+            ImportKind::Nameserver,
+            ImportOperation::Create,
             json!({ "name": nameserver, "ttl": 600 }),
         )?,
         ImportItem::new(
             "ns-2",
-            "nameserver",
-            "create",
+            ImportKind::Nameserver,
+            ImportOperation::Create,
             json!({ "name": secondary_ns }),
         )?,
         ImportItem::new(
             "policy-1",
-            "network_policy",
-            "create",
+            ImportKind::NetworkPolicy,
+            ImportOperation::Create,
             json!({
                 "name": policy,
                 "description": "Imported policy",
@@ -184,8 +189,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "policy-attr-1",
-            "network_policy_attribute",
-            "create",
+            ImportKind::NetworkPolicyAttribute,
+            ImportOperation::Create,
             json!({
                 "name": policy_attr,
                 "description": "Imported attribute"
@@ -193,8 +198,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "policy-attr-value-1",
-            "network_policy_attribute_value",
-            "create",
+            ImportKind::NetworkPolicyAttributeValue,
+            ImportOperation::Create,
             json!({
                 "policy_name": policy,
                 "attribute_name": policy_attr,
@@ -203,8 +208,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "network-1",
-            "network",
-            "create",
+            ImportKind::Network,
+            ImportOperation::Create,
             json!({
                 "cidr": cidr,
                 "description": "Imported network",
@@ -220,8 +225,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "zone-1",
-            "forward_zone",
-            "create",
+            ImportKind::ForwardZone,
+            ImportOperation::Create,
             json!({
                 "name": zone,
                 "primary_ns": nameserver,
@@ -231,8 +236,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "label-1",
-            "label",
-            "create",
+            ImportKind::Label,
+            ImportOperation::Create,
             json!({
                 "name": label,
                 "description": "Managed host"
@@ -240,8 +245,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "host-1",
-            "host",
-            "create",
+            ImportKind::Host,
+            ImportOperation::Create,
             json!({
                 "name": host,
                 "zone": zone,
@@ -251,8 +256,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "attachment-1",
-            "host_attachment",
-            "create",
+            ImportKind::HostAttachment,
+            ImportOperation::Create,
             json!({
                 "host_name": host,
                 "network": cidr,
@@ -261,8 +266,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "ip-1",
-            "ip_address",
-            "create",
+            ImportKind::IpAddress,
+            ImportOperation::Create,
             json!({
                 "host_name": host,
                 "network": cidr,
@@ -272,8 +277,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "attachment-id-1",
-            "attachment_dhcp_identifier",
-            "create",
+            ImportKind::AttachmentDhcpIdentifier,
+            ImportOperation::Create,
             json!({
                 "attachment_id_ref": "attachment-1",
                 "family": 4,
@@ -284,8 +289,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "contact-1",
-            "host_contact",
-            "create",
+            ImportKind::HostContact,
+            ImportOperation::Create,
             json!({
                 "email": contact,
                 "display_name": "Ops Team",
@@ -294,8 +299,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "group-1",
-            "host_group",
-            "create",
+            ImportKind::HostGroup,
+            ImportOperation::Create,
             json!({
                 "name": group,
                 "description": "Imported host group",
@@ -305,8 +310,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "bacnet-1",
-            "bacnet_id",
-            "create",
+            ImportKind::BacnetId,
+            ImportOperation::Create,
             json!({
                 "bacnet_id": bacnet_id,
                 "host_name": host
@@ -314,8 +319,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "ptr-1",
-            "ptr_override",
-            "create",
+            ImportKind::PtrOverride,
+            ImportOperation::Create,
             json!({
                 "host_name": host,
                 "address": address,
@@ -324,8 +329,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "community-1",
-            "community",
-            "create",
+            ImportKind::Community,
+            ImportOperation::Create,
             json!({
                 "policy_name": policy,
                 "network": cidr,
@@ -335,8 +340,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "mapping-1",
-            "attachment_community_assignment",
-            "create",
+            ImportKind::AttachmentCommunityAssignment,
+            ImportOperation::Create,
             json!({
                 "attachment_id_ref": "attachment-1",
                 "policy_name_ref": "policy-1",
@@ -345,8 +350,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "atom-1",
-            "host_policy_atom",
-            "create",
+            ImportKind::HostPolicyAtom,
+            ImportOperation::Create,
             json!({
                 "name": atom,
                 "description": "Imported atom"
@@ -354,8 +359,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "role-1",
-            "host_policy_role",
-            "create",
+            ImportKind::HostPolicyRole,
+            ImportOperation::Create,
             json!({
                 "name": role,
                 "description": "Imported role"
@@ -363,8 +368,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "role-atom-1",
-            "host_policy_role_atom",
-            "create",
+            ImportKind::HostPolicyRoleAtom,
+            ImportOperation::Create,
             json!({
                 "role_name": role,
                 "atom_name": atom
@@ -372,8 +377,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "role-host-1",
-            "host_policy_role_host",
-            "create",
+            ImportKind::HostPolicyRoleHost,
+            ImportOperation::Create,
             json!({
                 "role_name": role,
                 "host_name": host
@@ -381,8 +386,8 @@ fn build_extended_import_batch(
         )?,
         ImportItem::new(
             "delegation-1",
-            "forward_zone_delegation",
-            "create",
+            ImportKind::ForwardZoneDelegation,
+            ImportOperation::Create,
             json!({
                 "zone": zone,
                 "name": delegation,
@@ -395,8 +400,8 @@ fn build_extended_import_batch(
     items.push(if invalid_tail {
         ImportItem::new(
             "role-label-invalid",
-            "host_policy_role_label",
-            "create",
+            ImportKind::HostPolicyRoleLabel,
+            ImportOperation::Create,
             json!({
                 "role_name": role,
                 "label_name": ctx.name("missing-label")
@@ -405,8 +410,8 @@ fn build_extended_import_batch(
     } else {
         ImportItem::new(
             "role-label-1",
-            "host_policy_role_label",
-            "create",
+            ImportKind::HostPolicyRoleLabel,
+            ImportOperation::Create,
             json!({
                 "role_name": role,
                 "label_name": label
@@ -512,7 +517,7 @@ async fn postgres_assign_ip_rolls_back_when_auto_record_creation_fails()
         .create_network(CreateNetwork::new(
             CidrValue::new(&cidr)?,
             "Rollback network",
-            3,
+            ReservedCount::new(3)?,
         )?)
         .await?;
 
@@ -620,7 +625,7 @@ async fn postgres_record_registry_and_export_run_work() -> Result<(), Box<dyn st
             .create_network(CreateNetwork::new(
                 CidrValue::new(&candidate_cidr)?,
                 "Export network",
-                3,
+                ReservedCount::new(3)?,
             )?)
             .await
         {
@@ -695,7 +700,7 @@ async fn postgres_dhcp_export_scope_renders_attachment_graph()
         .create_network(CreateNetwork::new(
             CidrValue::new(&cidr)?,
             "DHCP network",
-            3,
+            ReservedCount::new(3)?,
         )?)
         .await?;
     let attachment = storage
@@ -723,7 +728,7 @@ async fn postgres_dhcp_export_scope_renders_attachment_graph()
             DhcpIdentifierFamily::V4,
             DhcpIdentifierKind::ClientId,
             "01:aa:bb:cc:dd:ee:ff",
-            10,
+            DhcpPriority::new(10),
         )?)
         .await?;
 
@@ -792,8 +797,8 @@ async fn postgres_import_supports_zone_and_record_entities()
             ImportBatch::new(vec![
                 ImportItem::new(
                     "zone-1",
-                    "forward_zone",
-                    "create",
+                    ImportKind::ForwardZone,
+                    ImportOperation::Create,
                     json!({
                         "name": zone,
                         "primary_ns": nameserver,
@@ -803,8 +808,8 @@ async fn postgres_import_supports_zone_and_record_entities()
                 )?,
                 ImportItem::new(
                     "host-1",
-                    "host",
-                    "create",
+                    ImportKind::Host,
+                    ImportOperation::Create,
                     json!({
                         "name": host,
                         "zone": zone
@@ -812,8 +817,8 @@ async fn postgres_import_supports_zone_and_record_entities()
                 )?,
                 ImportItem::new(
                     "record-1",
-                    "record",
-                    "create",
+                    ImportKind::Record,
+                    ImportOperation::Create,
                     json!({
                         "type_name": "CNAME",
                         "owner_kind": "host",
@@ -878,9 +883,9 @@ async fn postgres_rejects_rrset_ttl_mismatches_and_alias_mx_targets()
             vec![DnsName::new(&nameserver)?],
             EmailAddressValue::new(format!("hostmaster@{zone}"))?,
             SerialNumber::new(1)?,
-            10800,
-            3600,
-            604800,
+            SoaSeconds::new(10800)?,
+            SoaSeconds::new(3600)?,
+            SoaSeconds::new(604800)?,
             Ttl::new(43_200)?,
             Ttl::new(43_200)?,
         ))
@@ -971,12 +976,12 @@ async fn postgres_imports_extended_legacy_entities() -> Result<(), Box<dyn std::
         .networks()
         .get_network_by_cidr(&CidrValue::new(&fixture.cidr)?)
         .await?;
-    assert_eq!(imported_network.vlan(), Some(42));
+    assert_eq!(imported_network.vlan(), Some(VlanId::new(42).unwrap()));
     assert!(imported_network.dns_delegated());
     assert_eq!(imported_network.category(), "prod");
     assert_eq!(imported_network.location(), "dc1");
     assert!(imported_network.frozen());
-    assert_eq!(imported_network.reserved(), 5);
+    assert_eq!(imported_network.reserved(), ReservedCount::new(5).unwrap());
 
     let imported_host = storage
         .hosts()
@@ -1275,9 +1280,9 @@ async fn postgres_supports_unanchored_srv_and_rfc3597_raw_records()
             vec![DnsName::new(&nameserver)?],
             EmailAddressValue::new(format!("hostmaster@{zone}"))?,
             SerialNumber::new(1)?,
-            10800,
-            3600,
-            604800,
+            SoaSeconds::new(10800)?,
+            SoaSeconds::new(3600)?,
+            SoaSeconds::new(604800)?,
             Ttl::new(43_200)?,
             Ttl::new(43_200)?,
         ))
@@ -1309,7 +1314,7 @@ async fn postgres_supports_unanchored_srv_and_rfc3597_raw_records()
             .records()
             .create_record_type(CreateRecordTypeDefinition::new(
                 RecordTypeName::new(&candidate_name)?,
-                Some(raw_type_number as i32),
+                Some(DnsTypeCode::new(raw_type_number as i32)?),
                 RecordTypeSchema::new(
                     RecordOwnerKind::Host,
                     RecordCardinality::Multiple,

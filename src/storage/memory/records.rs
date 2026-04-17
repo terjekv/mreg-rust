@@ -435,10 +435,7 @@ impl RecordStore for MemoryStorage {
                 ))
             })?;
 
-        let new_ttl = match command.ttl() {
-            Some(ttl_opt) => ttl_opt,
-            None => existing.ttl(),
-        };
+        let new_ttl = command.ttl().resolve(existing.ttl());
 
         let data_changed = command.data().is_some() || command.raw_rdata().is_some();
         let new_data;

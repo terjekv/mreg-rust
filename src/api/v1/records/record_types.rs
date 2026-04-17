@@ -13,10 +13,9 @@ use crate::{
             CreateRecordTypeDefinition, RecordCardinality, RecordFieldKind, RecordFieldSchema,
             RecordOwnerKind, RecordRfcProfile, RecordTypeDefinition, RecordTypeSchema,
         },
-        types::RecordTypeName,
+        types::{DnsTypeCode, RecordTypeName},
     },
     errors::AppError,
-    services::records as record_service,
 };
 
 use crate::api::v1::authz::request as authz_request;
@@ -69,7 +68,7 @@ impl CreateRecordTypeRequest {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CreateRecordTypeDefinition::new(
             RecordTypeName::new(self.name)?,
-            self.dns_type,
+            self.dns_type.map(DnsTypeCode::new).transpose()?,
             RecordTypeSchema::new(
                 self.owner_kind,
                 self.cardinality,
@@ -99,7 +98,7 @@ impl RecordTypeResponse {
         Self {
             id: record_type.id(),
             name: record_type.name().as_str().to_string(),
-            dns_type: record_type.dns_type(),
+            dns_type: record_type.dns_type().map(|v| v.as_i32()),
             built_in: record_type.built_in(),
             rfc_profile: record_type.schema().rfc_profile().ok().flatten(),
             created_at: record_type.created_at(),
@@ -143,13 +142,11 @@ pub(crate) async fn create_record_type(
         .build(),
     )
     .await?;
-    let record_type = record_service::create_type(
-        state.storage.records(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let record_type = state
+        .services
+        .records()
+        .create_type(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(RecordTypeResponse::from_domain(&record_type)))
 }
 
@@ -182,12 +179,6 @@ pub(crate) async fn delete_record_type_endpoint(
         .build(),
     )
     .await?;
-    record_service::delete_record_type(
-        state.storage.records(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.records().delete_record_type(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }

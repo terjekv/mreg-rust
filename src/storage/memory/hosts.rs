@@ -17,7 +17,7 @@ use crate::{
         pagination::{Page, PageRequest},
         resource_records::{CreateRecordInstance, RecordInstance, RecordOwnerKind, RecordRrset},
         types::ip_to_ptr_name,
-        types::{DnsName, Hostname, IpAddressValue, RecordTypeName},
+        types::{DhcpPriority, DnsName, Hostname, IpAddressValue, record_type_names},
     },
     errors::AppError,
     storage::HostStore,
@@ -139,7 +139,7 @@ pub(super) fn assign_ip_in_state(
                         DhcpIdentifierFamily::V4,
                         DhcpIdentifierKind::ClientId,
                         client_id_value,
-                        1000,
+                        DhcpPriority::new(1000),
                     )?,
                 )?;
             }
@@ -158,7 +158,7 @@ pub(super) fn assign_ip_in_state(
                         DhcpIdentifierFamily::V6,
                         DhcpIdentifierKind::DuidLl,
                         duid_ll_value,
-                        1000,
+                        DhcpPriority::new(1000),
                     )?,
                 )?;
             }
@@ -362,13 +362,13 @@ impl HostStore for MemoryStorage {
                 let assignment = assign_ip_in_state(&mut state, assign_cmd)?;
 
                 // Auto-create A/AAAA record
-                let type_name = if assignment.family() == 4 {
-                    "A"
+                let rtype = if assignment.family() == 4 {
+                    record_type_names::a()
                 } else {
-                    "AAAA"
+                    record_type_names::aaaa()
                 };
                 let record_cmd = CreateRecordInstance::new(
-                    RecordTypeName::new(type_name).unwrap(),
+                    rtype,
                     RecordOwnerKind::Host,
                     host_name.as_str(),
                     None,
@@ -387,7 +387,7 @@ impl HostStore for MemoryStorage {
                 });
                 if has_matching_rz {
                     let ptr_cmd = CreateRecordInstance::new(
-                        RecordTypeName::new("PTR").unwrap(),
+                        record_type_names::ptr(),
                         RecordOwnerKind::ReverseZone,
                         &ptr_name,
                         None,
@@ -464,17 +464,11 @@ impl HostStore for MemoryStorage {
         })?;
         let now = Utc::now();
         let new_name = command.name.unwrap_or_else(|| host.name().clone());
-        let ttl = match command.ttl {
-            Some(new_ttl) => new_ttl,
-            None => host.ttl(),
-        };
+        let ttl = command.ttl.resolve(host.ttl());
         let comment = command
             .comment
             .unwrap_or_else(|| host.comment().to_string());
-        let zone = match command.zone {
-            Some(new_zone) => new_zone,
-            None => host.zone().cloned(),
-        };
+        let zone = command.zone.resolve(host.zone().cloned());
         if let Some(ref z) = zone
             && !state.forward_zones.contains_key(z.as_str())
         {
@@ -607,6 +601,19 @@ impl HostStore for MemoryStorage {
         paginate_by_cursor(items, page)
     }
 
+    async fn get_ip_address(
+        &self,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let state = self.state.read().await;
+        let key = address.as_str();
+        state
+            .ip_addresses
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| AppError::not_found(format!("IP address {key}")))
+    }
+
     async fn assign_ip_address(
         &self,
         command: AssignIpAddress,
@@ -616,13 +623,13 @@ impl HostStore for MemoryStorage {
         let assignment = assign_ip_in_state(&mut state, command)?;
 
         // Auto-create A/AAAA record
-        let type_name = if assignment.family() == 4 {
-            "A"
+        let rtype = if assignment.family() == 4 {
+            record_type_names::a()
         } else {
-            "AAAA"
+            record_type_names::aaaa()
         };
         let record_cmd = CreateRecordInstance::new(
-            RecordTypeName::new(type_name).unwrap(),
+            rtype,
             RecordOwnerKind::Host,
             host_name.as_str(),
             None,
@@ -640,7 +647,7 @@ impl HostStore for MemoryStorage {
         });
         if has_matching_rz {
             let ptr_cmd = CreateRecordInstance::new(
-                RecordTypeName::new("PTR").unwrap(),
+                record_type_names::ptr(),
                 RecordOwnerKind::ReverseZone,
                 &ptr_name,
                 None,
@@ -665,10 +672,7 @@ impl HostStore for MemoryStorage {
             AppError::not_found(format!("IP address assignment '{}' was not found", key))
         })?;
         let now = Utc::now();
-        let mac = match command.mac_address {
-            Some(new_mac) => new_mac,
-            None => existing.mac_address().cloned(),
-        };
+        let mac = command.mac_address.resolve(existing.mac_address().cloned());
         let updated = IpAddressAssignment::restore(
             existing.id(),
             existing.host_id(),
@@ -769,8 +773,12 @@ mod tests {
         storage
             .networks()
             .create_network(
-                CreateNetwork::new(network.clone(), "legacy authz network", 1)
-                    .expect("valid network"),
+                CreateNetwork::new(
+                    network.clone(),
+                    "legacy authz network",
+                    crate::domain::types::ReservedCount::new(1).unwrap(),
+                )
+                .expect("valid network"),
             )
             .await
             .expect("network should be created");

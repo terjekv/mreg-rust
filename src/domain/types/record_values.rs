@@ -25,8 +25,81 @@ impl RecordTypeName {
         Ok(Self(candidate))
     }
 
+    /// Construct a `RecordTypeName` from a known-valid uppercase string literal.
+    ///
+    /// # Panics
+    /// Panics if `name` is empty or contains invalid characters.
+    /// Only use with compile-time-known valid values (e.g. `"NS"`, `"PTR"`).
+    fn known(name: &str) -> Self {
+        Self(name.to_string())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Well-known DNS record type names. These avoid fallible `RecordTypeName::new().unwrap()`
+/// calls throughout the codebase.
+pub mod record_type_names {
+    use super::RecordTypeName;
+
+    pub fn a() -> RecordTypeName {
+        RecordTypeName::known("A")
+    }
+    pub fn aaaa() -> RecordTypeName {
+        RecordTypeName::known("AAAA")
+    }
+    pub fn cname() -> RecordTypeName {
+        RecordTypeName::known("CNAME")
+    }
+    pub fn dname() -> RecordTypeName {
+        RecordTypeName::known("DNAME")
+    }
+    pub fn mx() -> RecordTypeName {
+        RecordTypeName::known("MX")
+    }
+    pub fn ns() -> RecordTypeName {
+        RecordTypeName::known("NS")
+    }
+    pub fn ptr() -> RecordTypeName {
+        RecordTypeName::known("PTR")
+    }
+    pub fn srv() -> RecordTypeName {
+        RecordTypeName::known("SRV")
+    }
+    pub fn txt() -> RecordTypeName {
+        RecordTypeName::known("TXT")
+    }
+    pub fn hinfo() -> RecordTypeName {
+        RecordTypeName::known("HINFO")
+    }
+    pub fn naptr() -> RecordTypeName {
+        RecordTypeName::known("NAPTR")
+    }
+    pub fn sshfp() -> RecordTypeName {
+        RecordTypeName::known("SSHFP")
+    }
+    pub fn loc() -> RecordTypeName {
+        RecordTypeName::known("LOC")
+    }
+    pub fn caa() -> RecordTypeName {
+        RecordTypeName::known("CAA")
+    }
+    pub fn tlsa() -> RecordTypeName {
+        RecordTypeName::known("TLSA")
+    }
+    pub fn ds() -> RecordTypeName {
+        RecordTypeName::known("DS")
+    }
+    pub fn dnskey() -> RecordTypeName {
+        RecordTypeName::known("DNSKEY")
+    }
+    pub fn svcb() -> RecordTypeName {
+        RecordTypeName::known("SVCB")
+    }
+    pub fn https() -> RecordTypeName {
+        RecordTypeName::known("HTTPS")
     }
 }
 

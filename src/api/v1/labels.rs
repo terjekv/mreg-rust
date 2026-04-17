@@ -13,7 +13,6 @@ use crate::{
         types::LabelName,
     },
     errors::AppError,
-    services::labels as label_service,
 };
 
 use super::authz::request as authz_request;
@@ -92,7 +91,7 @@ pub(crate) async fn list_labels(
         .build(),
     )
     .await?;
-    let page = label_service::list(state.storage.labels(), &query.into_inner()).await?;
+    let page = state.services.labels().list(&query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(page, LabelResponse::from_domain)))
 }
 
@@ -126,13 +125,11 @@ pub(crate) async fn create_label(
         .build(),
     )
     .await?;
-    let label = label_service::create(
-        state.storage.labels(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let label = state
+        .services
+        .labels()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(LabelResponse::from_domain(&label)))
 }
 
@@ -165,7 +162,7 @@ pub(crate) async fn get_label(
         .build(),
     )
     .await?;
-    let label = label_service::get(state.storage.labels(), &name).await?;
+    let label = state.services.labels().get(&name).await?;
     Ok(HttpResponse::Ok().json(LabelResponse::from_domain(&label)))
 }
 
@@ -206,14 +203,7 @@ pub(crate) async fn update_label(
     }
     require_permission(&state.authz, authz.build()).await?;
     let command = UpdateLabel::new(request.description)?;
-    let label = label_service::update(
-        state.storage.labels(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-        command,
-    )
-    .await?;
+    let label = state.services.labels().update(&name, command).await?;
     Ok(HttpResponse::Ok().json(LabelResponse::from_domain(&label)))
 }
 
@@ -246,13 +236,7 @@ pub(crate) async fn delete_label(
         .build(),
     )
     .await?;
-    label_service::delete(
-        state.storage.labels(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.labels().delete(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

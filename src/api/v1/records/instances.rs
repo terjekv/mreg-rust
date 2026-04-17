@@ -12,10 +12,9 @@ use crate::{
         resource_records::{
             CreateRecordInstance, RawRdataValue, RecordInstance, RecordOwnerKind, UpdateRecord,
         },
-        types::{RecordTypeName, Ttl},
+        types::{RecordTypeName, Ttl, UpdateField},
     },
     errors::AppError,
-    services::records as record_service,
 };
 
 use crate::api::v1::authz::request as authz_request;
@@ -50,8 +49,9 @@ impl CreateRecordRequest {
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateRecordRequest {
+    #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    ttl: Option<Option<u32>>,
+    ttl: UpdateField<u32>,
     #[schema(value_type = Option<Object>)]
     data: Option<Value>,
     raw_rdata: Option<String>,
@@ -60,9 +60,7 @@ pub struct UpdateRecordRequest {
 impl UpdateRecordRequest {
     fn into_command(self) -> Result<UpdateRecord, AppError> {
         UpdateRecord::new(
-            self.ttl
-                .map(|opt| opt.map(Ttl::new).transpose())
-                .transpose()?,
+            self.ttl.try_map(Ttl::new)?,
             self.data,
             self.raw_rdata
                 .map(RawRdataValue::from_presentation)
@@ -164,13 +162,11 @@ pub(crate) async fn create_record(
         authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let record = record_service::create_record(
-        state.storage.records(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let record = state
+        .services
+        .records()
+        .create_record(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(RecordResponse::from_domain(&record)))
 }
 
@@ -203,7 +199,7 @@ pub(crate) async fn get_record_endpoint(
         .build(),
     )
     .await?;
-    let record = record_service::get_record(state.storage.records(), record_id).await?;
+    let record = state.services.records().get_record(record_id).await?;
     Ok(HttpResponse::Ok().json(RecordResponse::from_domain(&record)))
 }
 
@@ -229,17 +225,21 @@ pub(crate) async fn update_record_endpoint(
     let record_id = path.into_inner();
     let request = payload.into_inner();
     let mut authz_requests = Vec::new();
-    if let Some(ttl) = request.ttl {
+    if request.ttl.is_changed() {
         let mut authz = authz_request(
             &req,
             authz::actions::record::UPDATE_TTL,
             authz::actions::resource_kinds::RECORD,
             record_id.to_string(),
         );
-        if let Some(ttl) = ttl {
-            authz = authz.attr("new_ttl", AttrValue::Long(i64::from(ttl)));
-        } else {
-            authz = authz.attr("clear_ttl", AttrValue::Bool(true));
+        match &request.ttl {
+            UpdateField::Set(ttl) => {
+                authz = authz.attr("new_ttl", AttrValue::Long(i64::from(*ttl)));
+            }
+            UpdateField::Clear => {
+                authz = authz.attr("clear_ttl", AttrValue::Bool(true));
+            }
+            UpdateField::Unchanged => {}
         }
         authz_requests.push(authz.build());
     }
@@ -255,14 +255,11 @@ pub(crate) async fn update_record_endpoint(
         );
     }
     require_permissions(&state.authz, authz_requests).await?;
-    let record = record_service::update_record(
-        state.storage.records(),
-        state.storage.audit(),
-        &state.events,
-        record_id,
-        request.into_command()?,
-    )
-    .await?;
+    let record = state
+        .services
+        .records()
+        .update_record(record_id, request.into_command()?)
+        .await?;
     Ok(HttpResponse::Ok().json(RecordResponse::from_domain(&record)))
 }
 
@@ -295,13 +292,7 @@ pub(crate) async fn delete_record_endpoint(
         .build(),
     )
     .await?;
-    record_service::delete_record(
-        state.storage.records(),
-        state.storage.audit(),
-        &state.events,
-        record_id,
-    )
-    .await?;
+    state.services.records().delete_record(record_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

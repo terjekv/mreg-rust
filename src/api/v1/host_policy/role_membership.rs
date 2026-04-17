@@ -5,7 +5,6 @@ use crate::{
     authz::{self, AttrValue, require_permission},
     domain::types::HostPolicyName,
     errors::AppError,
-    services::host_policy as hp_service,
 };
 
 use crate::api::v1::authz::request as authz_request;
@@ -59,14 +58,11 @@ pub(crate) async fn add_atom_to_role(
         .build(),
     )
     .await?;
-    hp_service::add_atom_to_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &role_name,
-        &atom_name,
-    )
-    .await?;
+    state
+        .services
+        .host_policy()
+        .add_atom_to_role(&role_name, &atom_name)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -105,14 +101,11 @@ pub(crate) async fn remove_atom_from_role(
         .build(),
     )
     .await?;
-    hp_service::remove_atom_from_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &role_name,
-        &atom_name,
-    )
-    .await?;
+    state
+        .services
+        .host_policy()
+        .remove_atom_from_role(&role_name, &atom_name)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -151,14 +144,11 @@ pub(crate) async fn add_host_to_role(
         .build(),
     )
     .await?;
-    hp_service::add_host_to_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &role_name,
-        &host_name,
-    )
-    .await?;
+    state
+        .services
+        .host_policy()
+        .add_host_to_role(&role_name, &host_name)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -196,14 +186,11 @@ pub(crate) async fn remove_host_from_role(
         .build(),
     )
     .await?;
-    hp_service::remove_host_from_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &role_name,
-        &host_name,
-    )
-    .await?;
+    state
+        .services
+        .host_policy()
+        .remove_host_from_role(&role_name, &host_name)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -242,14 +229,11 @@ pub(crate) async fn add_label_to_role(
         .build(),
     )
     .await?;
-    hp_service::add_label_to_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &role_name,
-        &label_name,
-    )
-    .await?;
+    state
+        .services
+        .host_policy()
+        .add_label_to_role(&role_name, &label_name)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -287,14 +271,11 @@ pub(crate) async fn remove_label_from_role(
         .build(),
     )
     .await?;
-    hp_service::remove_label_from_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &role_name,
-        &label_name,
-    )
-    .await?;
+    state
+        .services
+        .host_policy()
+        .remove_label_from_role(&role_name, &label_name)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

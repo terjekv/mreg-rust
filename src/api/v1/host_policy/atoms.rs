@@ -13,7 +13,6 @@ use crate::{
         types::HostPolicyName,
     },
     errors::AppError,
-    services::host_policy as hp_service,
 };
 
 use crate::api::v1::authz::request as authz_request;
@@ -111,7 +110,11 @@ pub(crate) async fn list_atoms(
         .build(),
     )
     .await?;
-    let page = hp_service::list_atoms(state.storage.host_policy(), &query.into_inner()).await?;
+    let page = state
+        .services
+        .host_policy()
+        .list_atoms(&query.into_inner())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(page, AtomResponse::from_domain)))
 }
 
@@ -149,13 +152,11 @@ pub(crate) async fn create_atom(
         .build(),
     )
     .await?;
-    let atom = hp_service::create_atom(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let atom = state
+        .services
+        .host_policy()
+        .create_atom(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(AtomResponse::from_domain(&atom)))
 }
 
@@ -188,7 +189,7 @@ pub(crate) async fn get_atom(
         .build(),
     )
     .await?;
-    let atom = hp_service::get_atom(state.storage.host_policy(), &name).await?;
+    let atom = state.services.host_policy().get_atom(&name).await?;
     Ok(HttpResponse::Ok().json(AtomResponse::from_domain(&atom)))
 }
 
@@ -226,14 +227,11 @@ pub(crate) async fn update_atom(
     let command = UpdateHostPolicyAtom {
         description: request.description,
     };
-    let atom = hp_service::update_atom(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-        command,
-    )
-    .await?;
+    let atom = state
+        .services
+        .host_policy()
+        .update_atom(&name, command)
+        .await?;
     Ok(HttpResponse::Ok().json(AtomResponse::from_domain(&atom)))
 }
 
@@ -267,13 +265,7 @@ pub(crate) async fn delete_atom(
         .build(),
     )
     .await?;
-    hp_service::delete_atom(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.host_policy().delete_atom(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

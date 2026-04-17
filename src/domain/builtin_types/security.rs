@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_sshfp() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("SSHFP")?,
-        Some(44),
+        Some(DnsTypeCode::new(44)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -61,7 +61,7 @@ pub(super) fn builtin_sshfp() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_ds() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("DS")?,
-        Some(43),
+        Some(DnsTypeCode::new(43)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Multiple,
@@ -110,7 +110,7 @@ pub(super) fn builtin_ds() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_dnskey() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("DNSKEY")?,
-        Some(48),
+        Some(DnsTypeCode::new(48)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Multiple,
@@ -160,7 +160,7 @@ pub(super) fn builtin_dnskey() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_cds() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("CDS")?,
-        Some(59),
+        Some(DnsTypeCode::new(59)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Multiple,
@@ -210,7 +210,7 @@ pub(super) fn builtin_cds() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_cdnskey() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("CDNSKEY")?,
-        Some(60),
+        Some(DnsTypeCode::new(60)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Multiple,
@@ -260,7 +260,7 @@ pub(super) fn builtin_cdnskey() -> Result<CreateRecordTypeDefinition, AppError> 
 pub(super) fn builtin_csync() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("CSYNC")?,
-        Some(62),
+        Some(DnsTypeCode::new(62)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Single,
@@ -302,7 +302,7 @@ pub(super) fn builtin_csync() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_caa() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("CAA")?,
-        Some(257),
+        Some(DnsTypeCode::new(257)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,

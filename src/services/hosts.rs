@@ -5,7 +5,8 @@ use crate::{
     domain::{
         filters::HostFilter,
         host::{
-            AssignIpAddress, CreateHost, Host, IpAddressAssignment, UpdateHost, UpdateIpAddress,
+            AssignIpAddress, CreateHost, Host, HostAuthContext, IpAddressAssignment, UpdateHost,
+            UpdateIpAddress,
         },
         pagination::{Page, PageRequest},
         types::{Hostname, IpAddressValue},
@@ -49,6 +50,14 @@ pub async fn create(
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "host"))]
 pub async fn get(store: &(dyn HostStore + Send + Sync), name: &Hostname) -> Result<Host, AppError> {
     store.get_host_by_name(name).await
+}
+
+#[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "host"))]
+pub async fn get_auth_context(
+    store: &(dyn HostStore + Send + Sync),
+    name: &Hostname,
+) -> Result<HostAuthContext, AppError> {
+    store.get_host_auth_context(name).await
 }
 
 #[tracing::instrument(skip(store, audit, events), fields(resource_kind = "host"))]
@@ -148,13 +157,7 @@ pub async fn update_ip_address(
     audit: &(dyn AuditStore + Send + Sync),
     events: &EventSinkClient,
 ) -> Result<IpAddressAssignment, AppError> {
-    // Fetch all IP assignments to find the current one for old-value capture.
-    let all = store.list_ip_addresses(&PageRequest::all()).await?;
-    let old: &IpAddressAssignment = all
-        .items
-        .iter()
-        .find(|a| a.address().as_str() == address.as_str())
-        .ok_or_else(|| AppError::not_found(format!("IP address {}", address.as_str())))?;
+    let old = store.get_ip_address(address).await?;
     let old_mac: Option<String> = old.mac_address().map(|m| m.as_str());
 
     let updated = store.update_ip_address(address, command).await?;

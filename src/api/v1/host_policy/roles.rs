@@ -13,7 +13,6 @@ use crate::{
         types::HostPolicyName,
     },
     errors::AppError,
-    services::host_policy as hp_service,
 };
 
 use crate::api::v1::authz::request as authz_request;
@@ -117,7 +116,11 @@ pub(crate) async fn list_roles(
         .build(),
     )
     .await?;
-    let page = hp_service::list_roles(state.storage.host_policy(), &query.into_inner()).await?;
+    let page = state
+        .services
+        .host_policy()
+        .list_roles(&query.into_inner())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(page, RoleResponse::from_domain)))
 }
 
@@ -155,13 +158,11 @@ pub(crate) async fn create_role(
         .build(),
     )
     .await?;
-    let role = hp_service::create_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let role = state
+        .services
+        .host_policy()
+        .create_role(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(RoleResponse::from_domain(&role)))
 }
 
@@ -194,7 +195,7 @@ pub(crate) async fn get_role(
         .build(),
     )
     .await?;
-    let role = hp_service::get_role(state.storage.host_policy(), &name).await?;
+    let role = state.services.host_policy().get_role(&name).await?;
     Ok(HttpResponse::Ok().json(RoleResponse::from_domain(&role)))
 }
 
@@ -232,14 +233,11 @@ pub(crate) async fn update_role(
     let command = UpdateHostPolicyRole {
         description: request.description,
     };
-    let role = hp_service::update_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-        command,
-    )
-    .await?;
+    let role = state
+        .services
+        .host_policy()
+        .update_role(&name, command)
+        .await?;
     Ok(HttpResponse::Ok().json(RoleResponse::from_domain(&role)))
 }
 
@@ -272,12 +270,6 @@ pub(crate) async fn delete_role(
         .build(),
     )
     .await?;
-    hp_service::delete_role(
-        state.storage.host_policy(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.host_policy().delete_role(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }

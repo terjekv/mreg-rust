@@ -159,7 +159,12 @@ pub(crate) trait ScopeAuthenticator: Send + Sync {
 impl AuthnClient {
     pub fn from_config(config: &Config, storage: DynStorage) -> Result<Self, AppError> {
         let scoped = match config.auth_mode {
-            AuthMode::None => None,
+            AuthMode::None => {
+                tracing::warn!(
+                    "Authentication mode is 'none' — identity is trusted from X-Mreg-User/X-Mreg-Groups headers without verification."
+                );
+                None
+            }
             AuthMode::Scoped => {
                 let signing_key = config
                     .auth_jwt_signing_key

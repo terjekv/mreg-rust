@@ -16,7 +16,6 @@ use crate::{
         types::{CommunityName, Hostname, IpAddressValue, NetworkPolicyName},
     },
     errors::AppError,
-    services::host_community_assignments as host_community_assignment_service,
 };
 
 use super::authz::request as authz_request;
@@ -139,12 +138,11 @@ pub(crate) async fn list_host_community_assignments(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result = host_community_assignment_service::list_host_community_assignments(
-        state.storage.host_community_assignments(),
-        &page,
-        &filter,
-    )
-    .await?;
+    let result = state
+        .services
+        .host_community_assignments()
+        .list(&page, &filter)
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         result,
         HostCommunityAssignmentResponse::from_domain,
@@ -191,13 +189,11 @@ pub(crate) async fn create_host_community_assignment(
         .build(),
     )
     .await?;
-    let item = host_community_assignment_service::create_host_community_assignment(
-        state.storage.host_community_assignments(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let item = state
+        .services
+        .host_community_assignments()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(HostCommunityAssignmentResponse::from_domain(&item)))
 }
 
@@ -230,11 +226,11 @@ pub(crate) async fn get_host_community_assignment(
         .build(),
     )
     .await?;
-    let item = host_community_assignment_service::get_host_community_assignment(
-        state.storage.host_community_assignments(),
-        mapping_id,
-    )
-    .await?;
+    let item = state
+        .services
+        .host_community_assignments()
+        .get(mapping_id)
+        .await?;
     Ok(HttpResponse::Ok().json(HostCommunityAssignmentResponse::from_domain(&item)))
 }
 
@@ -267,12 +263,10 @@ pub(crate) async fn delete_host_community_assignment(
         .build(),
     )
     .await?;
-    host_community_assignment_service::delete_host_community_assignment(
-        state.storage.host_community_assignments(),
-        state.storage.audit(),
-        &state.events,
-        mapping_id,
-    )
-    .await?;
+    state
+        .services
+        .host_community_assignments()
+        .delete(mapping_id)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }

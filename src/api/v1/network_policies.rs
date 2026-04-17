@@ -16,7 +16,6 @@ use crate::{
         types::NetworkPolicyName,
     },
     errors::AppError,
-    services::network_policies as network_policy_service,
 };
 
 use super::authz::request as authz_request;
@@ -126,12 +125,11 @@ pub(crate) async fn list_network_policies(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result = network_policy_service::list_network_policies(
-        state.storage.network_policies(),
-        &page,
-        &filter,
-    )
-    .await?;
+    let result = state
+        .services
+        .network_policies()
+        .list(&page, &filter)
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         result,
         NetworkPolicyResponse::from_domain,
@@ -174,13 +172,11 @@ pub(crate) async fn create_network_policy(
         );
     }
     require_permission(&state.authz, authz.build()).await?;
-    let item = network_policy_service::create_network_policy(
-        state.storage.network_policies(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let item = state
+        .services
+        .network_policies()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(NetworkPolicyResponse::from_domain(&item)))
 }
 
@@ -213,8 +209,7 @@ pub(crate) async fn get_network_policy(
         .build(),
     )
     .await?;
-    let item =
-        network_policy_service::get_network_policy(state.storage.network_policies(), &name).await?;
+    let item = state.services.network_policies().get(&name).await?;
     Ok(HttpResponse::Ok().json(NetworkPolicyResponse::from_domain(&item)))
 }
 
@@ -247,12 +242,6 @@ pub(crate) async fn delete_network_policy(
         .build(),
     )
     .await?;
-    network_policy_service::delete_network_policy(
-        state.storage.network_policies(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.network_policies().delete(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }

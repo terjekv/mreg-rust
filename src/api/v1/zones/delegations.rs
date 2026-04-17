@@ -1,13 +1,11 @@
 use actix_web::{HttpRequest, HttpResponse, delete, get, post, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    audit::CreateHistoryEvent,
     authz::{self, AttrValue, require_permission},
     domain::{
         pagination::{PageRequest, PageResponse},
@@ -144,9 +142,9 @@ pub(crate) async fn list_forward_zone_delegations(
     )
     .await?;
     let page = state
-        .storage
+        .services
         .zones()
-        .list_forward_zone_delegations(&zone_name, &query.into_inner())
+        .list_forward_delegations(&zone_name, &query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
@@ -204,20 +202,10 @@ pub(crate) async fn create_forward_zone_delegation(
         nameservers,
     );
     let delegation = state
-        .storage
+        .services
         .zones()
-        .create_forward_zone_delegation(command)
+        .create_forward_delegation(command)
         .await?;
-
-    let audit_event = CreateHistoryEvent::new(
-        "system",
-        "forward_zone_delegation",
-        Some(delegation.id()),
-        delegation.name().as_str(),
-        "create",
-        json!({"name": delegation.name().as_str()}),
-    );
-    crate::services::record_and_emit(state.storage.audit(), &state.events, audit_event).await;
 
     Ok(HttpResponse::Created().json(ForwardZoneDelegationResponse::from_domain(&delegation)))
 }
@@ -252,20 +240,10 @@ pub(crate) async fn delete_forward_zone_delegation(
     )
     .await?;
     state
-        .storage
+        .services
         .zones()
-        .delete_forward_zone_delegation(delegation_id)
+        .delete_forward_delegation(delegation_id)
         .await?;
-
-    let audit_event = CreateHistoryEvent::new(
-        "system",
-        "forward_zone_delegation",
-        Some(delegation_id),
-        delegation_id.to_string(),
-        "delete",
-        json!({"id": delegation_id.to_string()}),
-    );
-    crate::services::record_and_emit(state.storage.audit(), &state.events, audit_event).await;
 
     Ok(HttpResponse::NoContent().finish())
 }
@@ -305,9 +283,9 @@ pub(crate) async fn list_reverse_zone_delegations(
     )
     .await?;
     let page = state
-        .storage
+        .services
         .zones()
-        .list_reverse_zone_delegations(&zone_name, &query.into_inner())
+        .list_reverse_delegations(&zone_name, &query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
@@ -365,20 +343,10 @@ pub(crate) async fn create_reverse_zone_delegation(
         nameservers,
     );
     let delegation = state
-        .storage
+        .services
         .zones()
-        .create_reverse_zone_delegation(command)
+        .create_reverse_delegation(command)
         .await?;
-
-    let audit_event = CreateHistoryEvent::new(
-        "system",
-        "reverse_zone_delegation",
-        Some(delegation.id()),
-        delegation.name().as_str(),
-        "create",
-        json!({"name": delegation.name().as_str()}),
-    );
-    crate::services::record_and_emit(state.storage.audit(), &state.events, audit_event).await;
 
     Ok(HttpResponse::Created().json(ReverseZoneDelegationResponse::from_domain(&delegation)))
 }
@@ -413,20 +381,10 @@ pub(crate) async fn delete_reverse_zone_delegation(
     )
     .await?;
     state
-        .storage
+        .services
         .zones()
-        .delete_reverse_zone_delegation(delegation_id)
+        .delete_reverse_delegation(delegation_id)
         .await?;
-
-    let audit_event = CreateHistoryEvent::new(
-        "system",
-        "reverse_zone_delegation",
-        Some(delegation_id),
-        delegation_id.to_string(),
-        "delete",
-        json!({"id": delegation_id.to_string()}),
-    );
-    crate::services::record_and_emit(state.storage.audit(), &state.events, audit_event).await;
 
     Ok(HttpResponse::NoContent().finish())
 }

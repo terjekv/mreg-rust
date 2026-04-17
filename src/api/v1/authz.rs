@@ -7,7 +7,10 @@ use crate::authz::{
 };
 use crate::{
     AppState,
-    domain::{host::HostAuthContext, types::Hostname},
+    domain::{
+        host::HostAuthContext,
+        types::{Hostname, UpdateField},
+    },
     errors::AppError,
 };
 
@@ -114,30 +117,34 @@ impl<'a> UpdateAuthzBuilder<'a> {
         self
     }
 
-    /// Handle an `Option<Option<T>>` "clearable" field.
+    /// Handle an `UpdateField<T>` clearable field.
     ///
-    /// - `Some(Some(v))` → emit request with `set_attr_name` = the value
-    /// - `Some(None)` → emit request with `clear_attr_name` = `true`
-    /// - `None` → no request
+    /// - `Set(v)` → emit request with `set_attr_name` = the value
+    /// - `Clear` → emit request with `clear_attr_name` = `true`
+    /// - `Unchanged` → no request
     ///
     /// The caller provides a closure to convert the inner value to an
     /// `AttrValue`.
     pub fn field_clearable<T>(
         &mut self,
-        value: &Option<Option<T>>,
+        value: &UpdateField<T>,
         action: &str,
         set_attr_name: &str,
         clear_attr_name: &str,
         to_attr: impl FnOnce(&T) -> AttrValue,
     ) -> &mut Self {
-        if let Some(inner) = value {
-            let mut authz = self.base_request(action);
-            if let Some(val) = inner {
-                authz = authz.attr(set_attr_name, to_attr(val));
-            } else {
-                authz = authz.attr(clear_attr_name, AttrValue::Bool(true));
+        match value {
+            UpdateField::Set(val) => {
+                let authz = self.base_request(action).attr(set_attr_name, to_attr(val));
+                self.requests.push(authz.build());
             }
-            self.requests.push(authz.build());
+            UpdateField::Clear => {
+                let authz = self
+                    .base_request(action)
+                    .attr(clear_attr_name, AttrValue::Bool(true));
+                self.requests.push(authz.build());
+            }
+            UpdateField::Unchanged => {}
         }
         self
     }
@@ -247,11 +254,7 @@ pub(crate) async fn host_attrs_for_host(
     state: &AppState,
     host_name: &Hostname,
 ) -> Result<BTreeMap<String, AttrValue>, AppError> {
-    let context = state
-        .storage
-        .hosts()
-        .get_host_auth_context(host_name)
-        .await?;
+    let context = state.services.hosts().get_auth_context(host_name).await?;
     Ok(host_attrs(&context))
 }
 

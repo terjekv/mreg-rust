@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_tlsa() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("TLSA")?,
-        Some(52),
+        Some(DnsTypeCode::new(52)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -64,7 +64,7 @@ pub(super) fn builtin_tlsa() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_svcb() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("SVCB")?,
-        Some(64),
+        Some(DnsTypeCode::new(64)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -109,7 +109,7 @@ pub(super) fn builtin_svcb() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_https() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("HTTPS")?,
-        Some(65),
+        Some(DnsTypeCode::new(65)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -155,7 +155,7 @@ pub(super) fn builtin_https() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_openpgpkey() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("OPENPGPKEY")?,
-        Some(61),
+        Some(DnsTypeCode::new(61)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -188,7 +188,7 @@ pub(super) fn builtin_openpgpkey() -> Result<CreateRecordTypeDefinition, AppErro
 pub(super) fn builtin_smimea() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("SMIMEA")?,
-        Some(53),
+        Some(DnsTypeCode::new(53)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,

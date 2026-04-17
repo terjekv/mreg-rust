@@ -1425,6 +1425,18 @@ async fn attachment_update_and_delete_scenario(ctx: &TestCtx) {
     let attachment_id = body["id"].as_str().unwrap().to_string();
     assert_eq!(body["comment"], "initial comment");
 
+    // Duplicate POST must remain a strict create, not an idempotent upsert.
+    let status = ctx
+        .post(
+            &format!("/inventory/hosts/{host}/attachments"),
+            json!({
+                "network": cidr,
+                "comment": "second comment",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
     // PATCH the attachment (update comment).
     let (status, body) = ctx
         .patch_json(

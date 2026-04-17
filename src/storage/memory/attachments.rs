@@ -380,12 +380,10 @@ impl AttachmentStore for MemoryStorage {
             existing.host_name().clone(),
             existing.network_id(),
             existing.network_cidr().clone(),
-            command
-                .mac_address
-                .unwrap_or_else(|| existing.mac_address().cloned()),
+            command.mac_address.resolve(existing.mac_address().cloned()),
             command
                 .comment
-                .unwrap_or_else(|| existing.comment().map(str::to_string)),
+                .resolve(existing.comment().map(str::to_string)),
             existing.created_at(),
             now,
         );

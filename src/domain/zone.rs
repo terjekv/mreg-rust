@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{CidrValue, DnsName, EmailAddressValue, SerialNumber, Ttl, ZoneName},
+    domain::types::{
+        CidrValue, DnsName, EmailAddressValue, SerialNumber, SoaSeconds, Ttl, ZoneName,
+    },
     errors::AppError,
 };
 
@@ -17,9 +19,9 @@ pub struct ForwardZone {
     email: EmailAddressValue,
     serial_no: SerialNumber,
     serial_no_updated_at: DateTime<Utc>,
-    refresh: u32,
-    retry: u32,
-    expire: u32,
+    refresh: SoaSeconds,
+    retry: SoaSeconds,
+    expire: SoaSeconds,
     soa_ttl: Ttl,
     default_ttl: Ttl,
     created_at: DateTime<Utc>,
@@ -37,9 +39,9 @@ impl ForwardZone {
         email: EmailAddressValue,
         serial_no: SerialNumber,
         serial_no_updated_at: DateTime<Utc>,
-        refresh: u32,
-        retry: u32,
-        expire: u32,
+        refresh: SoaSeconds,
+        retry: SoaSeconds,
+        expire: SoaSeconds,
         soa_ttl: Ttl,
         default_ttl: Ttl,
         created_at: DateTime<Utc>,
@@ -89,13 +91,13 @@ impl ForwardZone {
     pub fn serial_no_updated_at(&self) -> DateTime<Utc> {
         self.serial_no_updated_at
     }
-    pub fn refresh(&self) -> u32 {
+    pub fn refresh(&self) -> SoaSeconds {
         self.refresh
     }
-    pub fn retry(&self) -> u32 {
+    pub fn retry(&self) -> SoaSeconds {
         self.retry
     }
-    pub fn expire(&self) -> u32 {
+    pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
     pub fn soa_ttl(&self) -> Ttl {
@@ -124,9 +126,9 @@ pub struct ReverseZone {
     email: EmailAddressValue,
     serial_no: SerialNumber,
     serial_no_updated_at: DateTime<Utc>,
-    refresh: u32,
-    retry: u32,
-    expire: u32,
+    refresh: SoaSeconds,
+    retry: SoaSeconds,
+    expire: SoaSeconds,
     soa_ttl: Ttl,
     default_ttl: Ttl,
     created_at: DateTime<Utc>,
@@ -145,9 +147,9 @@ impl ReverseZone {
         email: EmailAddressValue,
         serial_no: SerialNumber,
         serial_no_updated_at: DateTime<Utc>,
-        refresh: u32,
-        retry: u32,
-        expire: u32,
+        refresh: SoaSeconds,
+        retry: SoaSeconds,
+        expire: SoaSeconds,
         soa_ttl: Ttl,
         default_ttl: Ttl,
         created_at: DateTime<Utc>,
@@ -201,13 +203,13 @@ impl ReverseZone {
     pub fn serial_no_updated_at(&self) -> DateTime<Utc> {
         self.serial_no_updated_at
     }
-    pub fn refresh(&self) -> u32 {
+    pub fn refresh(&self) -> SoaSeconds {
         self.refresh
     }
-    pub fn retry(&self) -> u32 {
+    pub fn retry(&self) -> SoaSeconds {
         self.retry
     }
-    pub fn expire(&self) -> u32 {
+    pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
     pub fn soa_ttl(&self) -> Ttl {
@@ -232,9 +234,9 @@ pub struct CreateForwardZone {
     nameservers: Vec<DnsName>,
     email: EmailAddressValue,
     serial_no: SerialNumber,
-    refresh: u32,
-    retry: u32,
-    expire: u32,
+    refresh: SoaSeconds,
+    retry: SoaSeconds,
+    expire: SoaSeconds,
     soa_ttl: Ttl,
     default_ttl: Ttl,
 }
@@ -247,9 +249,9 @@ impl CreateForwardZone {
         nameservers: Vec<DnsName>,
         email: EmailAddressValue,
         serial_no: SerialNumber,
-        refresh: u32,
-        retry: u32,
-        expire: u32,
+        refresh: SoaSeconds,
+        retry: SoaSeconds,
+        expire: SoaSeconds,
         soa_ttl: Ttl,
         default_ttl: Ttl,
     ) -> Self {
@@ -282,13 +284,13 @@ impl CreateForwardZone {
     pub fn serial_no(&self) -> SerialNumber {
         self.serial_no
     }
-    pub fn refresh(&self) -> u32 {
+    pub fn refresh(&self) -> SoaSeconds {
         self.refresh
     }
-    pub fn retry(&self) -> u32 {
+    pub fn retry(&self) -> SoaSeconds {
         self.retry
     }
-    pub fn expire(&self) -> u32 {
+    pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
     pub fn soa_ttl(&self) -> Ttl {
@@ -308,9 +310,9 @@ pub struct CreateReverseZone {
     nameservers: Vec<DnsName>,
     email: EmailAddressValue,
     serial_no: SerialNumber,
-    refresh: u32,
-    retry: u32,
-    expire: u32,
+    refresh: SoaSeconds,
+    retry: SoaSeconds,
+    expire: SoaSeconds,
     soa_ttl: Ttl,
     default_ttl: Ttl,
 }
@@ -324,9 +326,9 @@ impl CreateReverseZone {
         nameservers: Vec<DnsName>,
         email: EmailAddressValue,
         serial_no: SerialNumber,
-        refresh: u32,
-        retry: u32,
-        expire: u32,
+        refresh: SoaSeconds,
+        retry: SoaSeconds,
+        expire: SoaSeconds,
         soa_ttl: Ttl,
         default_ttl: Ttl,
     ) -> Self {
@@ -363,13 +365,13 @@ impl CreateReverseZone {
     pub fn serial_no(&self) -> SerialNumber {
         self.serial_no
     }
-    pub fn refresh(&self) -> u32 {
+    pub fn refresh(&self) -> SoaSeconds {
         self.refresh
     }
-    pub fn retry(&self) -> u32 {
+    pub fn retry(&self) -> SoaSeconds {
         self.retry
     }
-    pub fn expire(&self) -> u32 {
+    pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
     pub fn soa_ttl(&self) -> Ttl {
@@ -386,9 +388,9 @@ pub struct UpdateForwardZone {
     pub primary_ns: Option<DnsName>,
     pub nameservers: Option<Vec<DnsName>>,
     pub email: Option<EmailAddressValue>,
-    pub refresh: Option<u32>,
-    pub retry: Option<u32>,
-    pub expire: Option<u32>,
+    pub refresh: Option<SoaSeconds>,
+    pub retry: Option<SoaSeconds>,
+    pub expire: Option<SoaSeconds>,
     pub soa_ttl: Option<Ttl>,
     pub default_ttl: Option<Ttl>,
 }
@@ -399,9 +401,9 @@ pub struct UpdateReverseZone {
     pub primary_ns: Option<DnsName>,
     pub nameservers: Option<Vec<DnsName>>,
     pub email: Option<EmailAddressValue>,
-    pub refresh: Option<u32>,
-    pub retry: Option<u32>,
-    pub expire: Option<u32>,
+    pub refresh: Option<SoaSeconds>,
+    pub retry: Option<SoaSeconds>,
+    pub expire: Option<SoaSeconds>,
     pub soa_ttl: Option<Ttl>,
     pub default_ttl: Option<Ttl>,
 }

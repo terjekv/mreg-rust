@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_txt() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("TXT")?,
-        Some(16),
+        Some(DnsTypeCode::new(16)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -48,7 +48,7 @@ pub(super) fn builtin_txt() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_srv() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("SRV")?,
-        Some(33),
+        Some(DnsTypeCode::new(33)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -91,7 +91,7 @@ pub(super) fn builtin_srv() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_naptr() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("NAPTR")?,
-        Some(35),
+        Some(DnsTypeCode::new(35)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -160,7 +160,7 @@ pub(super) fn builtin_naptr() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_hinfo() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("HINFO")?,
-        Some(13),
+        Some(DnsTypeCode::new(13)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Single,

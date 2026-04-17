@@ -16,7 +16,6 @@ use crate::{
         types::{HostGroupName, Hostname, OwnerGroupName},
     },
     errors::AppError,
-    services::host_groups as host_group_service,
 };
 
 use super::authz::{request as authz_request, string_set};
@@ -158,8 +157,7 @@ pub(crate) async fn list_host_groups(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result =
-        host_group_service::list_host_groups(state.storage.host_groups(), &page, &filter).await?;
+    let result = state.services.host_groups().list(&page, &filter).await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         result,
         HostGroupResponse::from_domain,
@@ -203,13 +201,11 @@ pub(crate) async fn create_host_group(
         .build(),
     )
     .await?;
-    let group = host_group_service::create_host_group(
-        state.storage.host_groups(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let group = state
+        .services
+        .host_groups()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(HostGroupResponse::from_domain(&group)))
 }
 
@@ -242,7 +238,7 @@ pub(crate) async fn get_host_group(
         .build(),
     )
     .await?;
-    let group = host_group_service::get_host_group(state.storage.host_groups(), &name).await?;
+    let group = state.services.host_groups().get(&name).await?;
     Ok(HttpResponse::Ok().json(HostGroupResponse::from_domain(&group)))
 }
 
@@ -275,12 +271,6 @@ pub(crate) async fn delete_host_group(
         .build(),
     )
     .await?;
-    host_group_service::delete_host_group(
-        state.storage.host_groups(),
-        state.storage.audit(),
-        &state.events,
-        &name,
-    )
-    .await?;
+    state.services.host_groups().delete(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }

@@ -13,10 +13,9 @@ use crate::{
         filters::NetworkFilter,
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
         pagination::{PageRequest, PageResponse, SortDirection},
-        types::{CidrValue, IpAddressValue},
+        types::{CidrValue, IpAddressValue, ReservedCount, UpdateField, VlanId},
     },
     errors::AppError,
-    services::networks as network_service,
 };
 
 use super::authz::{UpdateAuthzBuilder, request as authz_request};
@@ -113,12 +112,12 @@ impl CreateNetworkRequest {
         CreateNetwork::new_full(
             CidrValue::new(self.cidr)?,
             self.description,
-            self.vlan,
+            self.vlan.map(VlanId::new).transpose()?,
             self.dns_delegated,
             self.category,
             self.location,
             self.frozen,
-            self.reserved,
+            ReservedCount::new(self.reserved)?,
         )
     }
 }
@@ -126,8 +125,9 @@ impl CreateNetworkRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateNetworkRequest {
     description: Option<String>,
+    #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    vlan: Option<Option<u32>>,
+    vlan: UpdateField<u32>,
     dns_delegated: Option<bool>,
     category: Option<String>,
     location: Option<String>,
@@ -229,12 +229,12 @@ impl NetworkResponse {
             id: network.id(),
             cidr: network.cidr().as_str(),
             description: network.description().to_string(),
-            vlan: network.vlan(),
+            vlan: network.vlan().map(|v| v.as_u32()),
             dns_delegated: network.dns_delegated(),
             category: network.category().to_string(),
             location: network.location().to_string(),
             frozen: network.frozen(),
-            reserved: network.reserved(),
+            reserved: network.reserved().as_u32(),
             capacity: NetworkCapacitySummary::default(),
             hosts: Vec::new(),
             created_at: network.created_at(),
@@ -277,14 +277,17 @@ async fn build_network_response(
     }
 
     let attachments = state
-        .storage
+        .services
         .attachments()
         .list_attachments_for_network(network.cidr())
         .await?;
-    let used =
-        network_service::list_used_addresses(state.storage.networks(), network.cidr()).await?;
+    let used = state
+        .services
+        .networks()
+        .list_used_addresses(network.cidr())
+        .await?;
     let unused = state
-        .storage
+        .services
         .networks()
         .count_unused_addresses(network.cidr())
         .await?;
@@ -293,17 +296,17 @@ async fn build_network_response(
         .map(|attachment| attachment.id())
         .collect::<Vec<_>>();
     let all_attachment_assignments = state
-        .storage
-        .attachment_community_assignments()
+        .services
+        .attachments()
         .list_attachment_community_assignments_for_attachments(&attachment_ids)
         .await?;
     let all_dhcp_identifiers = state
-        .storage
+        .services
         .attachments()
         .list_attachment_dhcp_identifiers_for_attachments(&attachment_ids)
         .await?;
     let all_prefix_reservations = state
-        .storage
+        .services
         .attachments()
         .list_attachment_prefix_reservations_for_attachments(&attachment_ids)
         .await?;
@@ -436,7 +439,7 @@ pub(crate) async fn list_networks(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result = network_service::list(state.storage.networks(), &page, &filter).await?;
+    let result = state.services.networks().list(&page, &filter).await?;
     let mut items = Vec::with_capacity(result.items.len());
     for network in &result.items {
         items.push(build_network_response(state.get_ref(), network, false).await?);
@@ -483,13 +486,11 @@ pub(crate) async fn create_network(
         authz = authz.attr("vlan", AttrValue::Long(i64::from(vlan)));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let network = network_service::create(
-        state.storage.networks(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let network = state
+        .services
+        .networks()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created()
         .json(build_network_response(state.get_ref(), &network, false).await?))
 }
@@ -523,7 +524,7 @@ pub(crate) async fn get_network(
         .build(),
     )
     .await?;
-    let network = network_service::get(state.storage.networks(), &cidr).await?;
+    let network = state.services.networks().get(&cidr).await?;
     Ok(HttpResponse::Ok().json(build_network_response(state.get_ref(), &network, true).await?))
 }
 
@@ -552,21 +553,14 @@ pub(crate) async fn update_network(
     require_permissions(&state.authz, authz_requests).await?;
     let command = UpdateNetwork {
         description: request.description,
-        vlan: request.vlan,
+        vlan: request.vlan.try_map(VlanId::new)?,
         dns_delegated: request.dns_delegated,
         category: request.category,
         location: request.location,
         frozen: request.frozen,
-        reserved: request.reserved,
+        reserved: request.reserved.map(ReservedCount::new).transpose()?,
     };
-    let network = network_service::update(
-        state.storage.networks(),
-        state.storage.audit(),
-        &state.events,
-        &cidr,
-        command,
-    )
-    .await?;
+    let network = state.services.networks().update(&cidr, command).await?;
     Ok(HttpResponse::Ok().json(build_network_response(state.get_ref(), &network, false).await?))
 }
 
@@ -598,7 +592,7 @@ pub(crate) async fn list_used_addresses(
         .build(),
     )
     .await?;
-    let assignments = network_service::list_used_addresses(state.storage.networks(), &cidr).await?;
+    let assignments = state.services.networks().list_used_addresses(&cidr).await?;
     let items: Vec<_> = assignments
         .iter()
         .map(IpAddressResponse::from_domain)
@@ -634,9 +628,11 @@ pub(crate) async fn list_unused_addresses(
         authz = authz.attr("limit", AttrValue::Long(i64::from(limit)));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let addresses =
-        network_service::list_unused_addresses(state.storage.networks(), &cidr, query.limit)
-            .await?;
+    let addresses = state
+        .services
+        .networks()
+        .list_unused_addresses(&cidr, query.limit)
+        .await?;
     let items: Vec<String> = addresses.iter().map(|a| a.as_str()).collect();
     Ok(HttpResponse::Ok().json(UnusedAddressListResponse { items }))
 }
@@ -670,13 +666,7 @@ pub(crate) async fn delete_network(
         .build(),
     )
     .await?;
-    network_service::delete(
-        state.storage.networks(),
-        state.storage.audit(),
-        &state.events,
-        &cidr,
-    )
-    .await?;
+    state.services.networks().delete(&cidr).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -708,9 +698,11 @@ pub(crate) async fn list_excluded_ranges(
         .build(),
     )
     .await?;
-    let page =
-        network_service::list_excluded_ranges(state.storage.networks(), &cidr, &PageRequest::all())
-            .await?;
+    let page = state
+        .services
+        .networks()
+        .list_excluded_ranges(&cidr, &PageRequest::all())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
         ExcludedRangeResponse::from_domain,
@@ -757,14 +749,11 @@ pub(crate) async fn create_excluded_range(
     )
     .await?;
     let (network, command) = request.into_parts()?;
-    let range = network_service::add_excluded_range(
-        state.storage.networks(),
-        state.storage.audit(),
-        &state.events,
-        &network,
-        command,
-    )
-    .await?;
+    let range = state
+        .services
+        .networks()
+        .add_excluded_range(&network, command)
+        .await?;
     Ok(HttpResponse::Created().json(ExcludedRangeResponse::from_domain(&range)))
 }
 

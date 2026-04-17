@@ -4,7 +4,10 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{CidrValue, CommunityName, Hostname, MacAddressValue, NetworkPolicyName},
+    domain::types::{
+        CidrValue, CommunityName, DhcpPriority, Hostname, MacAddressValue, NetworkPolicyName,
+        UpdateField,
+    },
     errors::AppError,
 };
 
@@ -173,8 +176,8 @@ impl CreateHostAttachment {
 
 #[derive(Clone, Debug)]
 pub struct UpdateHostAttachment {
-    pub mac_address: Option<Option<MacAddressValue>>,
-    pub comment: Option<Option<String>>,
+    pub mac_address: UpdateField<MacAddressValue>,
+    pub comment: UpdateField<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,7 +187,7 @@ pub struct AttachmentDhcpIdentifier {
     family: DhcpIdentifierFamily,
     kind: DhcpIdentifierKind,
     value: String,
-    priority: i32,
+    priority: DhcpPriority,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -197,7 +200,7 @@ impl AttachmentDhcpIdentifier {
         family: DhcpIdentifierFamily,
         kind: DhcpIdentifierKind,
         value: impl Into<String>,
-        priority: i32,
+        priority: DhcpPriority,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Result<Self, AppError> {
@@ -235,7 +238,7 @@ impl AttachmentDhcpIdentifier {
         &self.value
     }
 
-    pub fn priority(&self) -> i32 {
+    pub fn priority(&self) -> DhcpPriority {
         self.priority
     }
 
@@ -254,7 +257,7 @@ pub struct CreateAttachmentDhcpIdentifier {
     family: DhcpIdentifierFamily,
     kind: DhcpIdentifierKind,
     value: String,
-    priority: i32,
+    priority: DhcpPriority,
 }
 
 impl CreateAttachmentDhcpIdentifier {
@@ -263,7 +266,7 @@ impl CreateAttachmentDhcpIdentifier {
         family: DhcpIdentifierFamily,
         kind: DhcpIdentifierKind,
         value: impl Into<String>,
-        priority: i32,
+        priority: DhcpPriority,
     ) -> Result<Self, AppError> {
         kind.validate_for_family(family)?;
         let value = normalize_required_text(value.into(), "dhcp identifier value")?;
@@ -292,7 +295,7 @@ impl CreateAttachmentDhcpIdentifier {
         &self.value
     }
 
-    pub fn priority(&self) -> i32 {
+    pub fn priority(&self) -> DhcpPriority {
         self.priority
     }
 }

@@ -5,7 +5,7 @@ use ipnet::IpNet;
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{CidrValue, IpAddressValue},
+    domain::types::{CidrValue, IpAddressValue, ReservedCount, UpdateField, VlanId},
     errors::AppError,
 };
 
@@ -15,12 +15,12 @@ pub struct Network {
     id: Uuid,
     cidr: CidrValue,
     description: String,
-    vlan: Option<u32>,
+    vlan: Option<VlanId>,
     dns_delegated: bool,
     category: String,
     location: String,
     frozen: bool,
-    reserved: u32,
+    reserved: ReservedCount,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -31,12 +31,12 @@ impl Network {
         id: Uuid,
         cidr: CidrValue,
         description: impl Into<String>,
-        vlan: Option<u32>,
+        vlan: Option<VlanId>,
         dns_delegated: bool,
         category: impl Into<String>,
         location: impl Into<String>,
         frozen: bool,
-        reserved: u32,
+        reserved: ReservedCount,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Result<Self, AppError> {
@@ -72,7 +72,7 @@ impl Network {
         &self.description
     }
 
-    pub fn vlan(&self) -> Option<u32> {
+    pub fn vlan(&self) -> Option<VlanId> {
         self.vlan
     }
 
@@ -92,7 +92,7 @@ impl Network {
         self.frozen
     }
 
-    pub fn reserved(&self) -> u32 {
+    pub fn reserved(&self) -> ReservedCount {
         self.reserved
     }
 
@@ -118,19 +118,19 @@ impl Network {
 pub struct CreateNetwork {
     cidr: CidrValue,
     description: String,
-    vlan: Option<u32>,
+    vlan: Option<VlanId>,
     dns_delegated: bool,
     category: String,
     location: String,
     frozen: bool,
-    reserved: u32,
+    reserved: ReservedCount,
 }
 
 impl CreateNetwork {
     pub fn new(
         cidr: CidrValue,
         description: impl Into<String>,
-        reserved: u32,
+        reserved: ReservedCount,
     ) -> Result<Self, AppError> {
         let description = description.into().trim().to_string();
         if description.is_empty() {
@@ -153,12 +153,12 @@ impl CreateNetwork {
     pub fn new_full(
         cidr: CidrValue,
         description: impl Into<String>,
-        vlan: Option<u32>,
+        vlan: Option<VlanId>,
         dns_delegated: bool,
         category: impl Into<String>,
         location: impl Into<String>,
         frozen: bool,
-        reserved: u32,
+        reserved: ReservedCount,
     ) -> Result<Self, AppError> {
         let description = description.into().trim().to_string();
         if description.is_empty() {
@@ -185,7 +185,7 @@ impl CreateNetwork {
         &self.description
     }
 
-    pub fn vlan(&self) -> Option<u32> {
+    pub fn vlan(&self) -> Option<VlanId> {
         self.vlan
     }
 
@@ -205,7 +205,7 @@ impl CreateNetwork {
         self.frozen
     }
 
-    pub fn reserved(&self) -> u32 {
+    pub fn reserved(&self) -> ReservedCount {
         self.reserved
     }
 }
@@ -214,12 +214,12 @@ impl CreateNetwork {
 #[derive(Clone, Debug)]
 pub struct UpdateNetwork {
     pub description: Option<String>,
-    pub vlan: Option<Option<u32>>,
+    pub vlan: UpdateField<VlanId>,
     pub dns_delegated: Option<bool>,
     pub category: Option<String>,
     pub location: Option<String>,
     pub frozen: Option<bool>,
-    pub reserved: Option<u32>,
+    pub reserved: Option<ReservedCount>,
 }
 
 /// Contiguous IP range excluded from automatic address allocation within a network.
@@ -382,12 +382,15 @@ pub fn cidr_contains(net: &CidrValue, ip: &IpAddressValue) -> bool {
 }
 
 /// Compute the usable (first, last) address bounds of a network after reserved space.
-pub fn network_usable_bounds(net: &CidrValue, reserved: u32) -> Result<(u128, u128), AppError> {
+pub fn network_usable_bounds(
+    net: &CidrValue,
+    reserved: ReservedCount,
+) -> Result<(u128, u128), AppError> {
     match net.as_inner() {
         IpNet::V4(v4) => {
             let network = u32::from(v4.network()) as u128;
             let broadcast = u32::from(v4.broadcast()) as u128;
-            let first = network.saturating_add(reserved as u128);
+            let first = network.saturating_add(reserved.as_u32() as u128);
             let last = broadcast.saturating_sub(1);
             if first > last {
                 return Err(AppError::validation(
@@ -398,7 +401,7 @@ pub fn network_usable_bounds(net: &CidrValue, reserved: u32) -> Result<(u128, u1
         }
         IpNet::V6(v6) => {
             let network = u128::from(v6.network());
-            let first = network.saturating_add(reserved as u128);
+            let first = network.saturating_add(reserved.as_u32() as u128);
             let host_bits = 128u32.saturating_sub(v6.prefix_len() as u32);
             if host_bits > 20 {
                 return Err(AppError::validation(
@@ -436,7 +439,11 @@ mod tests {
 
     #[test]
     fn network_creation_requires_description() {
-        let result = CreateNetwork::new(CidrValue::new("10.0.0.0/24").expect("valid CIDR"), " ", 3);
+        let result = CreateNetwork::new(
+            CidrValue::new("10.0.0.0/24").expect("valid CIDR"),
+            " ",
+            crate::domain::types::ReservedCount::new(3).unwrap(),
+        );
         assert!(result.is_err());
     }
 

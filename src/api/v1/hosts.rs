@@ -20,10 +20,9 @@ use crate::{
             IpAssignmentSpec, UpdateHost, UpdateIpAddress,
         },
         pagination::{PageRequest, PageResponse, SortDirection},
-        types::{CidrValue, Hostname, IpAddressValue, MacAddressValue, Ttl, ZoneName},
+        types::{CidrValue, Hostname, IpAddressValue, MacAddressValue, Ttl, UpdateField, ZoneName},
     },
     errors::AppError,
-    services::hosts as host_service,
 };
 
 use super::authz::{
@@ -237,32 +236,31 @@ async fn build_host_response(
     }
 
     let attachments = state
-        .storage
+        .services
         .attachments()
         .list_attachments_for_host(host.name())
         .await?;
-    let all_ip_addresses = host_service::list_host_ip_addresses(
-        state.storage.hosts(),
-        host.name(),
-        &PageRequest::all(),
-    )
-    .await?;
+    let all_ip_addresses = state
+        .services
+        .hosts()
+        .list_host_ip_addresses(host.name(), &PageRequest::all())
+        .await?;
     let attachment_ids = attachments
         .iter()
         .map(|attachment| attachment.id())
         .collect::<Vec<_>>();
     let all_attachment_assignments = state
-        .storage
-        .attachment_community_assignments()
+        .services
+        .attachments()
         .list_attachment_community_assignments_for_attachments(&attachment_ids)
         .await?;
     let all_dhcp_identifiers = state
-        .storage
+        .services
         .attachments()
         .list_attachment_dhcp_identifiers_for_attachments(&attachment_ids)
         .await?;
     let all_prefix_reservations = state
-        .storage
+        .services
         .attachments()
         .list_attachment_prefix_reservations_for_attachments(&attachment_ids)
         .await?;
@@ -335,9 +333,9 @@ async fn build_host_response(
         value: host.name().as_str().to_string(),
     };
     response.inventory.contacts = state
-        .storage
+        .services
         .host_contacts()
-        .list_host_contacts(
+        .list(
             &PageRequest::all(),
             &HostContactFilter {
                 host: vec![exact_host.clone()],
@@ -350,9 +348,9 @@ async fn build_host_response(
         .map(|contact| contact.email().as_str().to_string())
         .collect();
     response.inventory.groups = state
-        .storage
+        .services
         .host_groups()
-        .list_host_groups(
+        .list(
             &PageRequest::all(),
             &HostGroupFilter {
                 host: vec![exact_host.clone()],
@@ -365,9 +363,9 @@ async fn build_host_response(
         .map(|group| group.name().as_str().to_string())
         .collect();
     response.inventory.bacnet_id = state
-        .storage
+        .services
         .bacnet()
-        .list_bacnet_ids(
+        .list(
             &PageRequest::all(),
             &BacnetIdFilter {
                 host: vec![exact_host.clone()],
@@ -381,7 +379,7 @@ async fn build_host_response(
         .map(|assignment| assignment.bacnet_id().as_u32());
 
     response.dns_records = state
-        .storage
+        .services
         .records()
         .list_records(
             &PageRequest::all(),
@@ -406,7 +404,7 @@ async fn build_host_response(
         .collect();
 
     let roles = state
-        .storage
+        .services
         .host_policy()
         .list_roles_for_host(host.name())
         .await?;
@@ -479,7 +477,7 @@ pub(crate) async fn list_hosts(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result = host_service::list(state.storage.hosts(), &page, &filter).await?;
+    let result = state.services.hosts().list(&page, &filter).await?;
     let mut items = Vec::with_capacity(result.items.len());
     for host in &result.items {
         items.push(build_host_response(state.get_ref(), host, false).await?);
@@ -531,13 +529,11 @@ pub(crate) async fn create_host(
 
     let auto_v4 = state.config.dhcp_auto_v4_client_id;
     let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
-    let host = host_service::create(
-        state.storage.hosts(),
-        request.into_command(auto_v4, auto_v6)?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let host = state
+        .services
+        .hosts()
+        .create(request.into_command(auto_v4, auto_v6)?)
+        .await?;
     Ok(HttpResponse::Created().json(build_host_response(state.get_ref(), &host, false).await?))
 }
 
@@ -566,18 +562,20 @@ pub(crate) async fn get_host(
             .build(),
     )
     .await?;
-    let host = host_service::get(state.storage.hosts(), &name).await?;
+    let host = state.services.hosts().get(&name).await?;
     Ok(HttpResponse::Ok().json(build_host_response(state.get_ref(), &host, true).await?))
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateHostRequest {
     name: Option<String>,
+    #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    ttl: Option<Option<u32>>,
+    ttl: UpdateField<u32>,
     comment: Option<String>,
+    #[serde(default)]
     #[schema(value_type = Option<String>)]
-    zone: Option<Option<String>>,
+    zone: UpdateField<String>,
 }
 
 fn build_host_update_authz(
@@ -633,28 +631,19 @@ pub(crate) async fn update_host(
     require_permissions(&state.authz, authz_requests).await?;
 
     let name = request.name.map(Hostname::new).transpose()?;
-    let ttl = request
-        .ttl
-        .map(|opt| opt.map(Ttl::new).transpose())
-        .transpose()?;
-    let zone = request
-        .zone
-        .map(|opt| opt.map(ZoneName::new).transpose())
-        .transpose()?;
+    let ttl = request.ttl.try_map(Ttl::new)?;
+    let zone = request.zone.try_map(ZoneName::new)?;
     let command = UpdateHost {
         name,
         ttl,
         comment: request.comment,
         zone,
     };
-    let host = host_service::update(
-        state.storage.hosts(),
-        &current_name,
-        command,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let host = state
+        .services
+        .hosts()
+        .update(&current_name, command)
+        .await?;
     Ok(HttpResponse::Ok().json(build_host_response(state.get_ref(), &host, false).await?))
 }
 
@@ -683,13 +672,7 @@ pub(crate) async fn delete_host(
             .build(),
     )
     .await?;
-    host_service::delete(
-        state.storage.hosts(),
-        &name,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    state.services.hosts().delete(&name).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -718,7 +701,11 @@ pub(crate) async fn list_ip_addresses(
         .build(),
     )
     .await?;
-    let page = host_service::list_ip_addresses(state.storage.hosts(), &PageRequest::all()).await?;
+    let page = state
+        .services
+        .hosts()
+        .list_ip_addresses(&PageRequest::all())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
         IpAddressResponse::from_domain,
@@ -754,9 +741,11 @@ pub(crate) async fn list_host_ip_addresses(
         .build(),
     )
     .await?;
-    let page =
-        host_service::list_host_ip_addresses(state.storage.hosts(), &name, &PageRequest::all())
-            .await?;
+    let page = state
+        .services
+        .hosts()
+        .list_host_ip_addresses(&name, &PageRequest::all())
+        .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,
         IpAddressResponse::from_domain,
@@ -813,20 +802,19 @@ pub(crate) async fn assign_ip_address(
 
     let auto_v4 = state.config.dhcp_auto_v4_client_id;
     let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
-    let assignment = host_service::assign_ip_address(
-        state.storage.hosts(),
-        request.into_command()?.with_auto_dhcp(auto_v4, auto_v6),
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let assignment = state
+        .services
+        .hosts()
+        .assign_ip_address(request.into_command()?.with_auto_dhcp(auto_v4, auto_v6))
+        .await?;
     Ok(HttpResponse::Created().json(IpAddressResponse::from_domain(&assignment)))
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateIpAddressRequest {
+    #[serde(default)]
     #[schema(value_type = Option<String>)]
-    mac_address: Option<Option<String>>,
+    mac_address: UpdateField<String>,
 }
 
 /// Update an IP address assignment
@@ -856,27 +844,17 @@ pub(crate) async fn update_ip_address(
         authz::actions::resource_kinds::IP_ADDRESS,
         address.as_str(),
     );
-    if let Some(mac_address) = request
-        .mac_address
-        .as_ref()
-        .and_then(|value| value.as_ref())
-    {
+    if let UpdateField::Set(ref mac_address) = request.mac_address {
         authz = authz.attr("new_mac_address", AttrValue::String(mac_address.clone()));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let mac = request
-        .mac_address
-        .map(|opt| opt.map(MacAddressValue::new).transpose())
-        .transpose()?;
+    let mac = request.mac_address.try_map(MacAddressValue::new)?;
     let command = UpdateIpAddress { mac_address: mac };
-    let assignment = host_service::update_ip_address(
-        state.storage.hosts(),
-        &address,
-        command,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let assignment = state
+        .services
+        .hosts()
+        .update_ip_address(&address, command)
+        .await?;
     Ok(HttpResponse::Ok().json(IpAddressResponse::from_domain(&assignment)))
 }
 
@@ -909,13 +887,7 @@ pub(crate) async fn unassign_ip_address(
         .build(),
     )
     .await?;
-    host_service::unassign_ip_address(
-        state.storage.hosts(),
-        &address,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    state.services.hosts().unassign_ip_address(&address).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

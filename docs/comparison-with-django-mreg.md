@@ -6,6 +6,7 @@ This document gives a high-level overview of what changed, what improved, and wh
 
 The original [mreg](https://github.com/unioslo/mreg) is a Django REST framework application backed by PostgreSQL. It works, but over time several pain points emerged:
 
+- **Mixing of domains.** MREG conceptually handles DNS (as per RFCs), inventory (hosts, IPs, networks, host groups), DHCP, and more. In Django mreg, these domains are intertwined in models and views both, making it hard to seperate concerns and rules. For example, HINFO is a data field on the host model instead of a first-class DNS record type.
 - **Performance at scale.** Django ORM queries and Python runtime overhead limit throughput for large zone exports and bulk operations.
 - **Type safety.** Python's dynamic types let invalid data slip through to the database. DNS names, CIDRs, serial numbers, and TTLs deserve compile-time enforcement.
 - **Tight coupling.** Django model serializers mix persistence, validation, and HTTP concerns in one layer. Adding a new record type means touching models, serializers, views, and URL configs.
@@ -38,10 +39,57 @@ Services        Audit recording, event emission. Thin delegation.
 Storage traits  Backend-neutral CRUD + query interfaces.
   memory/       HashMap backend for tests (no database needed).
   postgres/     Diesel backend for production.
-Domain          Value objects, commands, validation. No I/O.
+Domain          Types, value objects, commands, validation. No I/O.
 ```
 
 The storage layer is pluggable at startup (`MREG_STORAGE_BACKEND=auto|memory|postgres`). The in-memory backend enables the full test suite to run quickly without any external dependencies.
+
+### How a request flows through the layers
+
+Here is a concrete example: creating a label via `POST /inventory/labels`. It uses the DTO (data transfer object) pattern to separate API concerns from domain logic, and the command pattern to encapsulate validated operations.
+
++**1. API handler** (`src/api/v1/labels.rs`) — Receives the HTTP request, deserializes the JSON body into a `CreateLabelRequest` DTO (a plain serde struct with `name: String, description: String`). Calls `into_command()` which converts the raw strings into validated domain types: `LabelName::new(self.name)?` validates the name (lowercase, no special characters). If validation fails, the handler returns a 400 immediately. The result is a `CreateLabel` command — a domain object that is guaranteed to carry valid data.
+
+```rust
+// API DTO → domain command (validation happens here)
+fn into_command(self) -> Result<CreateLabel, AppError> {
+    CreateLabel::new(LabelName::new(self.name)?, self.description)
+}
+```
+
+**2. Service** (`src/services/labels.rs`) — The handler calls `label_service::create(store, audit, events, command)`. The service forwards the command to the storage trait, then records an audit event and emits a domain event. The service never inspects or transforms the data — it trusts the command is valid because the domain layer enforced that.
+
+**3. Storage trait** (`src/storage/labels.rs`) — Defines `LabelStore::create_label(&self, command: CreateLabel) -> Result<Label, AppError>`. This trait is backend-neutral — callers don't know whether they're talking to PostgreSQL or an in-memory HashMap.
+
+**4. Storage backend** (e.g., `src/storage/postgres/labels.rs`) — Inserts a row using Diesel, gets back a `LabelRow` (a Diesel model struct with raw database types), and calls `row.into_domain()` to convert it back to a domain `Label`.
+
+**5. Database row → domain entity** (`src/db/models.rs`) — The `into_domain()` method re-validates data coming out of the database through the same newtype constructors:
+
+```rust
+impl LabelRow {
+    pub fn into_domain(self) -> Result<Label, AppError> {
+        Label::restore(
+            self.id,
+            LabelName::new(self.name)?,   // re-validated
+            self.description,
+            self.created_at,
+            self.updated_at,
+        )
+    }
+}
+```
+
+**6. API response** — The handler converts the domain `Label` to a `LabelResponse` DTO (extracting values via accessors like `label.name().as_str()`) and returns it as JSON.
+
+### Type-driven validation at every boundary
+
+A key design principle: **data is validated at every boundary, not just on input.** The newtype constructors (`LabelName::new()`, `Ttl::new()`, `VlanId::new()`, `SoaSeconds::new()`, etc.) are called both when parsing API requests and when reading rows from the database via `into_domain()`.
+
+This means that if someone manually modifies a database value to something invalid — say, setting a VLAN ID to 99999 or a TTL to -1 — the system will return an error rather than silently propagating the corrupt value. The application never constructs a domain entity with invalid field values, regardless of where the data came from.
+
+All newtype inner fields are private (e.g., `pub struct Ttl(u32)`, not `pub struct Ttl(pub u32)`), so the only way to obtain a value is through the validating constructor. Accessors like `as_u32()` and `as_i32()` expose the value read-only.
+
+Django mreg, by contrast, trusts whatever the ORM loads from the database. If a column contains an out-of-range value, it propagates through serializers to API responses without complaint.
 
 ## Data model changes
 
@@ -51,9 +99,13 @@ Django mreg has a separate model, serializer, view, and URL route for each recor
 
 mreg-rust has a single `POST /dns/records` endpoint that accepts a `type_name` field. 18 built-in types ship with RFC-aware validation schemas. Custom types can be registered at runtime and use RFC 3597 raw RDATA encoding.
 
+### Hosts, networks, and IPs are inventory, not DNS
+
+Django mreg models hosts, networks, and IP addresses as part of the DNS data model. mreg-rust treats them as inventory entities separate from DNS records. This allows for clearer separation of concerns and more flexible relationships (e.g. a host can have multiple IPs across different zones without being tied to a specific DNS record).
+
 ### HINFO is a record, not a host field
 
-Django mreg stores HINFO as a JSON field on the host model. mreg-rust treats it as a standard DNS record anchored to the host, just like MX or TXT.
+Django mreg stores HINFO as a field on the host model. mreg-rust treats it as a standard DNS record anchored to the host, just like MX or TXT.
 
 ### Wildcards are records, not hosts
 

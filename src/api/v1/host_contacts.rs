@@ -16,7 +16,6 @@ use crate::{
         types::{EmailAddressValue, Hostname},
     },
     errors::AppError,
-    services::host_contacts as host_contact_service,
 };
 
 use super::authz::{request as authz_request, string_set};
@@ -134,9 +133,7 @@ pub(crate) async fn list_host_contacts(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result =
-        host_contact_service::list_host_contacts(state.storage.host_contacts(), &page, &filter)
-            .await?;
+    let result = state.services.host_contacts().list(&page, &filter).await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         result,
         HostContactResponse::from_domain,
@@ -174,13 +171,11 @@ pub(crate) async fn create_host_contact(
         authz = authz.attr("display_name", AttrValue::String(display_name.clone()));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let contact = host_contact_service::create_host_contact(
-        state.storage.host_contacts(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let contact = state
+        .services
+        .host_contacts()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(HostContactResponse::from_domain(&contact)))
 }
 
@@ -213,8 +208,7 @@ pub(crate) async fn get_host_contact(
         .build(),
     )
     .await?;
-    let contact =
-        host_contact_service::get_host_contact(state.storage.host_contacts(), &email).await?;
+    let contact = state.services.host_contacts().get(&email).await?;
     Ok(HttpResponse::Ok().json(HostContactResponse::from_domain(&contact)))
 }
 
@@ -247,13 +241,7 @@ pub(crate) async fn delete_host_contact(
         .build(),
     )
     .await?;
-    host_contact_service::delete_host_contact(
-        state.storage.host_contacts(),
-        state.storage.audit(),
-        &state.events,
-        &email,
-    )
-    .await?;
+    state.services.host_contacts().delete(&email).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

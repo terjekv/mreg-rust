@@ -18,7 +18,10 @@ use crate::{
         host_community_assignment::CreateHostCommunityAssignment,
         host_contact::CreateHostContact,
         host_group::CreateHostGroup,
-        imports::{CreateImportBatch, ImportBatchStatus, ImportBatchSummary, ImportItem},
+        imports::{
+            CreateImportBatch, ImportBatchStatus, ImportBatchSummary, ImportItem, ImportKind,
+            ImportOperation,
+        },
         label::CreateLabel,
         nameserver::CreateNameServer,
         network::{CreateExcludedRange, CreateNetwork},
@@ -28,14 +31,18 @@ use crate::{
         resource_records::CreateRecordInstance,
         tasks::{CreateTask, TaskEnvelope, TaskStatus},
         types::{
-            BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyName,
-            OwnerGroupName, SerialNumber, Ttl, ZoneName,
+            BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, EmailAddressValue,
+            HostGroupName, Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyName,
+            OwnerGroupName, ReservedCount, SerialNumber, SoaSeconds, Ttl, ZoneName,
         },
         zone::{CreateForwardZone, CreateReverseZone},
     },
     errors::AppError,
     storage::ImportStore,
+    storage::import_helpers::{
+        resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec, resolve_u32,
+        resolve_u64, resolve_uuid, stringify_ref_value,
+    },
 };
 
 use super::attachments::{
@@ -119,42 +126,43 @@ fn apply_import_item(
     item: &ImportItem,
     refs: &mut BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
-    if item.operation() != "create" {
-        return Err(AppError::validation(format!(
-            "unsupported import operation '{}'",
-            item.operation()
-        )));
+    match item.operation() {
+        ImportOperation::Create => {}
     }
     let attributes = item.attributes();
     let result = match item.kind() {
-        "label" => import_label(state, attributes, refs)?,
-        "nameserver" => import_nameserver(state, attributes, refs)?,
-        "network" => import_network(state, attributes, refs)?,
-        "host_contact" => import_host_contact(state, attributes, refs)?,
-        "host_group" => import_host_group(state, attributes, refs)?,
-        "bacnet_id" => import_bacnet_id(state, attributes, refs)?,
-        "ptr_override" => import_ptr_override(state, attributes, refs)?,
-        "network_policy" => import_network_policy(state, attributes, refs)?,
-        "community" => import_community(state, attributes, refs)?,
-        "forward_zone" => import_forward_zone(state, attributes, refs)?,
-        "reverse_zone" => import_reverse_zone(state, attributes, refs)?,
-        "excluded_range" => import_excluded_range(state, attributes, refs)?,
-        "host" => import_host(state, attributes, refs)?,
-        "host_attachment" => import_host_attachment(state, attributes, refs)?,
-        "ip_address" => import_ip_address(state, attributes, refs)?,
-        "record" => import_record(state, attributes, refs)?,
-        "attachment_dhcp_identifier" => import_attachment_dhcp_identifier(state, attributes, refs)?,
-        "attachment_prefix_reservation" => {
+        ImportKind::Label => import_label(state, attributes, refs)?,
+        ImportKind::Nameserver => import_nameserver(state, attributes, refs)?,
+        ImportKind::Network => import_network(state, attributes, refs)?,
+        ImportKind::HostContact => import_host_contact(state, attributes, refs)?,
+        ImportKind::HostGroup => import_host_group(state, attributes, refs)?,
+        ImportKind::BacnetId => import_bacnet_id(state, attributes, refs)?,
+        ImportKind::PtrOverride => import_ptr_override(state, attributes, refs)?,
+        ImportKind::NetworkPolicy => import_network_policy(state, attributes, refs)?,
+        ImportKind::Community => import_community(state, attributes, refs)?,
+        ImportKind::ForwardZone => import_forward_zone(state, attributes, refs)?,
+        ImportKind::ReverseZone => import_reverse_zone(state, attributes, refs)?,
+        ImportKind::ExcludedRange => import_excluded_range(state, attributes, refs)?,
+        ImportKind::Host => import_host(state, attributes, refs)?,
+        ImportKind::HostAttachment => import_host_attachment(state, attributes, refs)?,
+        ImportKind::IpAddress => import_ip_address(state, attributes, refs)?,
+        ImportKind::Record => import_record(state, attributes, refs)?,
+        ImportKind::AttachmentDhcpIdentifier => {
+            import_attachment_dhcp_identifier(state, attributes, refs)?
+        }
+        ImportKind::AttachmentPrefixReservation => {
             import_attachment_prefix_reservation(state, attributes, refs)?
         }
-        "attachment_community_assignment" => {
+        ImportKind::AttachmentCommunityAssignment => {
             import_attachment_community_assignment(state, attributes, refs)?
         }
-        "host_community_assignment" => import_host_community_assignment(state, attributes, refs)?,
-        _ => {
+        ImportKind::HostCommunityAssignment => {
+            import_host_community_assignment(state, attributes, refs)?
+        }
+        kind => {
             return Err(AppError::validation(format!(
-                "unsupported import kind '{}'",
-                item.kind()
+                "unsupported import kind '{}' for memory backend",
+                kind
             )));
         }
     };
@@ -207,7 +215,7 @@ fn import_network(
         CreateNetwork::new(
             CidrValue::new(resolve_string(attributes, "cidr", refs)?)?,
             resolve_string(attributes, "description", refs)?,
-            resolve_u64(attributes, "reserved")?.unwrap_or(3) as u32,
+            ReservedCount::new(resolve_u32(attributes, "reserved")?.unwrap_or(3))?,
         )?,
     )?;
     Ok(Value::String(network.cidr().as_str()))
@@ -267,9 +275,9 @@ fn import_bacnet_id(
     let assignment = create_bacnet_id_in_state(
         state,
         CreateBacnetIdAssignment::new(
-            BacnetIdentifier::new(resolve_u64(attributes, "bacnet_id")?.ok_or_else(|| {
+            BacnetIdentifier::new(resolve_u32(attributes, "bacnet_id")?.ok_or_else(|| {
                 AppError::validation("missing required import attribute 'bacnet_id'")
-            })? as u32)?,
+            })?)?,
             Hostname::new(resolve_string(attributes, "host_name", refs)?)?,
         ),
     )?;
@@ -344,11 +352,11 @@ fn import_forward_zone(
                 .collect::<Result<Vec<_>, _>>()?,
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
             SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
-            resolve_u64(attributes, "refresh")?.unwrap_or(10_800) as u32,
-            resolve_u64(attributes, "retry")?.unwrap_or(3_600) as u32,
-            resolve_u64(attributes, "expire")?.unwrap_or(1_814_400) as u32,
-            Ttl::new(resolve_u64(attributes, "soa_ttl")?.unwrap_or(43_200) as u32)?,
-            Ttl::new(resolve_u64(attributes, "default_ttl")?.unwrap_or(43_200) as u32)?,
+            SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
+            SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
+            SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
+            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         ),
     )?;
     Ok(Value::String(zone.name().as_str().to_string()))
@@ -374,11 +382,11 @@ fn import_reverse_zone(
                 .collect::<Result<Vec<_>, _>>()?,
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
             SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
-            resolve_u64(attributes, "refresh")?.unwrap_or(10_800) as u32,
-            resolve_u64(attributes, "retry")?.unwrap_or(3_600) as u32,
-            resolve_u64(attributes, "expire")?.unwrap_or(1_814_400) as u32,
-            Ttl::new(resolve_u64(attributes, "soa_ttl")?.unwrap_or(43_200) as u32)?,
-            Ttl::new(resolve_u64(attributes, "default_ttl")?.unwrap_or(43_200) as u32)?,
+            SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
+            SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
+            SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
+            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         ),
     )?;
     Ok(Value::String(zone.name().as_str().to_string()))
@@ -427,18 +435,6 @@ fn import_host(
     Ok(Value::String(host.name().as_str().to_string()))
 }
 
-fn resolve_attachment_id(
-    attributes: &Value,
-    refs: &BTreeMap<String, String>,
-) -> Result<Option<Uuid>, AppError> {
-    resolve_optional_string(attributes, "attachment_id", refs)?
-        .map(|raw| {
-            Uuid::parse_str(&raw)
-                .map_err(|error| AppError::validation(format!("invalid attachment id: {error}")))
-        })
-        .transpose()
-}
-
 fn import_host_attachment(
     state: &mut MemoryState,
     attributes: &Value,
@@ -463,7 +459,7 @@ fn import_ip_address(
     attributes: &Value,
     refs: &BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
-    let attachment = resolve_attachment_id(attributes, refs)?
+    let attachment = resolve_uuid(attributes, "attachment_id", refs)?
         .map(|attachment_id| {
             state
                 .host_attachments
@@ -522,7 +518,7 @@ fn import_attachment_dhcp_identifier(
     attributes: &Value,
     refs: &BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
-    let attachment_id = resolve_attachment_id(attributes, refs)?.ok_or_else(|| {
+    let attachment_id = resolve_uuid(attributes, "attachment_id", refs)?.ok_or_else(|| {
         AppError::validation(
             "missing required import attribute 'attachment_id' or 'attachment_id_ref'",
         )
@@ -561,7 +557,7 @@ fn import_attachment_dhcp_identifier(
             family,
             kind,
             resolve_string(attributes, "value", refs)?,
-            resolve_u64(attributes, "priority")?.unwrap_or(100) as i32,
+            DhcpPriority::new(resolve_i32(attributes, "priority")?.unwrap_or(100)),
         )?,
     )?;
     Ok(Value::String(identifier.id().to_string()))
@@ -572,7 +568,7 @@ fn import_attachment_prefix_reservation(
     attributes: &Value,
     refs: &BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
-    let attachment_id = resolve_attachment_id(attributes, refs)?.ok_or_else(|| {
+    let attachment_id = resolve_uuid(attributes, "attachment_id", refs)?.ok_or_else(|| {
         AppError::validation(
             "missing required import attribute 'attachment_id' or 'attachment_id_ref'",
         )
@@ -592,7 +588,7 @@ fn import_attachment_community_assignment(
     attributes: &Value,
     refs: &BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
-    let attachment_id = resolve_attachment_id(attributes, refs)?.ok_or_else(|| {
+    let attachment_id = resolve_uuid(attributes, "attachment_id", refs)?.ok_or_else(|| {
         AppError::validation(
             "missing required import attribute 'attachment_id' or 'attachment_id_ref'",
         )
@@ -626,9 +622,7 @@ fn import_record(
                 .transpose()?,
             resolve_string(attributes, "owner_name", refs)?,
             resolve_optional_string(attributes, "anchor_name", refs)?,
-            resolve_u64(attributes, "ttl")?
-                .map(|value| Ttl::new(value as u32))
-                .transpose()?,
+            resolve_u32(attributes, "ttl")?.map(Ttl::new).transpose()?,
             attributes.get("data").cloned(),
             resolve_optional_string(attributes, "raw_rdata", refs)?
                 .map(crate::domain::resource_records::RawRdataValue::from_presentation)
@@ -653,99 +647,6 @@ fn import_host_community_assignment(
         ),
     )?;
     Ok(Value::String(mapping.id().to_string()))
-}
-
-fn resolve_string(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<String, AppError> {
-    resolve_optional_string(attributes, key, refs)?
-        .ok_or_else(|| AppError::validation(format!("missing required import attribute '{}'", key)))
-}
-
-fn resolve_optional_string(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<Option<String>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-    if let Some(value) = object.get(key) {
-        return value
-            .as_str()
-            .map(|value| Some(value.to_string()))
-            .ok_or_else(|| {
-                AppError::validation(format!("import attribute '{}' must be a string", key))
-            });
-    }
-    let ref_key = format!("{}_ref", key);
-    if let Some(value) = object.get(&ref_key) {
-        let reference = value.as_str().ok_or_else(|| {
-            AppError::validation(format!("import attribute '{}' must be a string", ref_key))
-        })?;
-        return refs
-            .get(reference)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| AppError::validation(format!("unknown import ref '{}'", reference)));
-    }
-    Ok(None)
-}
-
-fn resolve_string_vec(
-    attributes: &Value,
-    key: &str,
-    refs: &BTreeMap<String, String>,
-) -> Result<Vec<String>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-
-    match object.get(key) {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| {
-                item.as_str().map(str::to_string).ok_or_else(|| {
-                    AppError::validation(format!(
-                        "import attribute '{}' must be an array of strings",
-                        key
-                    ))
-                })
-            })
-            .collect(),
-        Some(_) => Err(AppError::validation(format!(
-            "import attribute '{}' must be an array of strings",
-            key
-        ))),
-        None => Ok(Vec::new()),
-    }
-    .map(|values: Vec<String>| {
-        values
-            .into_iter()
-            .map(|value| refs.get(&value).cloned().unwrap_or(value))
-            .collect()
-    })
-}
-
-fn resolve_u64(attributes: &Value, key: &str) -> Result<Option<u64>, AppError> {
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| AppError::validation("import item attributes must be a JSON object"))?;
-    match object.get(key) {
-        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
-            AppError::validation(format!("import attribute '{}' must be an integer", key))
-        }),
-        None => Ok(None),
-    }
-}
-
-fn stringify_ref_value(value: &Value) -> String {
-    value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string())
 }
 
 #[async_trait]

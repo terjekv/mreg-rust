@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_cname() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("CNAME")?,
-        Some(5),
+        Some(DnsTypeCode::new(5)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Single,
@@ -46,7 +46,7 @@ pub(super) fn builtin_cname() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_dname() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("DNAME")?,
-        Some(39),
+        Some(DnsTypeCode::new(39)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Single,

@@ -1,4 +1,5 @@
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::{
     audit::CreateHistoryEvent,
@@ -6,8 +7,9 @@ use crate::{
         pagination::{Page, PageRequest},
         types::ZoneName,
         zone::{
-            CreateForwardZone, CreateReverseZone, ForwardZone, ReverseZone, UpdateForwardZone,
-            UpdateReverseZone,
+            CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
+            CreateReverseZoneDelegation, ForwardZone, ForwardZoneDelegation, ReverseZone,
+            ReverseZoneDelegation, UpdateForwardZone, UpdateReverseZone,
         },
     },
     errors::AppError,
@@ -179,6 +181,136 @@ pub async fn delete_reverse(
         old.name().as_str(),
         "delete",
         json!({"name": old.name().as_str()}),
+    );
+    super::record_and_emit(audit, events, audit_event).await;
+
+    Ok(())
+}
+
+// --- Forward zone delegation service functions ---
+
+#[tracing::instrument(
+    level = "debug",
+    skip(store),
+    fields(resource_kind = "forward_zone_delegation")
+)]
+pub async fn list_forward_delegations(
+    store: &(dyn ZoneStore + Send + Sync),
+    zone_name: &ZoneName,
+    page: &PageRequest,
+) -> Result<Page<ForwardZoneDelegation>, AppError> {
+    store.list_forward_zone_delegations(zone_name, page).await
+}
+
+#[tracing::instrument(
+    skip(store, audit, events),
+    fields(resource_kind = "forward_zone_delegation")
+)]
+pub async fn create_forward_delegation(
+    store: &(dyn ZoneStore + Send + Sync),
+    audit: &(dyn AuditStore + Send + Sync),
+    events: &EventSinkClient,
+    command: CreateForwardZoneDelegation,
+) -> Result<ForwardZoneDelegation, AppError> {
+    let delegation = store.create_forward_zone_delegation(command).await?;
+
+    let audit_event = CreateHistoryEvent::new(
+        "system",
+        "forward_zone_delegation",
+        Some(delegation.id()),
+        delegation.name().as_str(),
+        "create",
+        json!({"name": delegation.name().as_str()}),
+    );
+    super::record_and_emit(audit, events, audit_event).await;
+
+    Ok(delegation)
+}
+
+#[tracing::instrument(
+    skip(store, audit, events),
+    fields(resource_kind = "forward_zone_delegation")
+)]
+pub async fn delete_forward_delegation(
+    store: &(dyn ZoneStore + Send + Sync),
+    audit: &(dyn AuditStore + Send + Sync),
+    events: &EventSinkClient,
+    delegation_id: Uuid,
+) -> Result<(), AppError> {
+    store.delete_forward_zone_delegation(delegation_id).await?;
+
+    let audit_event = CreateHistoryEvent::new(
+        "system",
+        "forward_zone_delegation",
+        Some(delegation_id),
+        delegation_id.to_string(),
+        "delete",
+        json!({"id": delegation_id.to_string()}),
+    );
+    super::record_and_emit(audit, events, audit_event).await;
+
+    Ok(())
+}
+
+// --- Reverse zone delegation service functions ---
+
+#[tracing::instrument(
+    level = "debug",
+    skip(store),
+    fields(resource_kind = "reverse_zone_delegation")
+)]
+pub async fn list_reverse_delegations(
+    store: &(dyn ZoneStore + Send + Sync),
+    zone_name: &ZoneName,
+    page: &PageRequest,
+) -> Result<Page<ReverseZoneDelegation>, AppError> {
+    store.list_reverse_zone_delegations(zone_name, page).await
+}
+
+#[tracing::instrument(
+    skip(store, audit, events),
+    fields(resource_kind = "reverse_zone_delegation")
+)]
+pub async fn create_reverse_delegation(
+    store: &(dyn ZoneStore + Send + Sync),
+    audit: &(dyn AuditStore + Send + Sync),
+    events: &EventSinkClient,
+    command: CreateReverseZoneDelegation,
+) -> Result<ReverseZoneDelegation, AppError> {
+    let delegation = store.create_reverse_zone_delegation(command).await?;
+
+    let audit_event = CreateHistoryEvent::new(
+        "system",
+        "reverse_zone_delegation",
+        Some(delegation.id()),
+        delegation.name().as_str(),
+        "create",
+        json!({"name": delegation.name().as_str()}),
+    );
+    super::record_and_emit(audit, events, audit_event).await;
+
+    Ok(delegation)
+}
+
+#[tracing::instrument(
+    skip(store, audit, events),
+    fields(resource_kind = "reverse_zone_delegation")
+)]
+pub async fn delete_reverse_delegation(
+    store: &(dyn ZoneStore + Send + Sync),
+    audit: &(dyn AuditStore + Send + Sync),
+    events: &EventSinkClient,
+    delegation_id: Uuid,
+) -> Result<(), AppError> {
+    store.delete_reverse_zone_delegation(delegation_id).await?;
+
+    let audit_event = CreateHistoryEvent::new(
+        "system",
+        "reverse_zone_delegation",
+        Some(delegation_id),
+        delegation_id.to_string(),
+        "delete",
+        json!({"id": delegation_id.to_string()}),
     );
     super::record_and_emit(audit, events, audit_event).await;
 

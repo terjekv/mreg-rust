@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_mx() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("MX")?,
-        Some(15),
+        Some(DnsTypeCode::new(15)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Multiple,

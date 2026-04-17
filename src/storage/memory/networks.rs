@@ -143,10 +143,7 @@ impl NetworkStore for MemoryStorage {
         let description = command
             .description
             .unwrap_or_else(|| network.description().to_string());
-        let vlan = match command.vlan {
-            Some(v) => v,
-            None => network.vlan(),
-        };
+        let vlan = command.vlan.resolve(network.vlan());
         let dns_delegated = command.dns_delegated.unwrap_or(network.dns_delegated());
         let category = command
             .category

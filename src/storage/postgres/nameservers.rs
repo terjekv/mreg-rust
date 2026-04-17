@@ -80,8 +80,8 @@ impl NameServerStore for PostgresStorage {
         let name = name.as_str().to_string();
         self.database
             .run(move |connection| {
-                if let Some(ref ttl_option) = command.ttl {
-                    let ttl = ttl_option.map(|t| t.as_i32());
+                if command.ttl.is_changed() {
+                    let ttl = command.ttl.into_set().map(|t| t.as_i32());
                     update(nameservers::table.filter(nameservers::name.eq(&name)))
                         .set((
                             nameservers::ttl.eq(ttl),

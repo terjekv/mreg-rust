@@ -87,9 +87,9 @@ impl PostgresStorage {
         let primary_ns = command.primary_ns().as_str().to_string();
         let email = command.email().as_str().to_string();
         let serial_no = command.serial_no().as_i64();
-        let refresh = command.refresh() as i32;
-        let retry = command.retry() as i32;
-        let expire = command.expire() as i32;
+        let refresh = command.refresh().as_i32();
+        let retry = command.retry().as_i32();
+        let expire = command.expire().as_i32();
         let soa_ttl = command.soa_ttl().as_i32();
         let default_ttl = command.default_ttl().as_i32();
         let nameservers = command.nameservers().to_vec();
@@ -187,9 +187,9 @@ impl PostgresStorage {
                 .as_ref()
                 .map(|v| v.as_str().to_string())
                 .unwrap_or_else(|| old_zone.email().as_str().to_string());
-            let new_refresh = command.refresh.unwrap_or(old_zone.refresh()) as i32;
-            let new_retry = command.retry.unwrap_or(old_zone.retry()) as i32;
-            let new_expire = command.expire.unwrap_or(old_zone.expire()) as i32;
+            let new_refresh = command.refresh.unwrap_or(old_zone.refresh()).as_i32();
+            let new_retry = command.retry.unwrap_or(old_zone.retry()).as_i32();
+            let new_expire = command.expire.unwrap_or(old_zone.expire()).as_i32();
             let new_soa_ttl = command.soa_ttl.unwrap_or(old_zone.soa_ttl()).as_i32();
             let new_default_ttl = command
                 .default_ttl
@@ -197,7 +197,10 @@ impl PostgresStorage {
                 .as_i32();
 
             // Bump serial
-            let current_serial = SerialNumber::new(old_serial as u64)?;
+            let current_serial = SerialNumber::new(
+                u64::try_from(old_serial)
+                    .map_err(|_| AppError::internal("invalid serial number in database"))?,
+            )?;
             let next_serial = current_serial.next_rfc1912(Utc::now().date_naive())?;
 
             // Update the zone row
@@ -285,7 +288,10 @@ impl PostgresStorage {
                 .optional()?
                 .ok_or_else(|| AppError::not_found("forward zone not found"))?;
 
-            let current_serial = SerialNumber::new(row.serial_no() as u64)?;
+            let current_serial = SerialNumber::new(
+                u64::try_from(row.serial_no())
+                    .map_err(|_| AppError::internal("invalid serial number in database"))?,
+            )?;
             let next_serial = current_serial.next_rfc1912(Utc::now().date_naive())?;
 
             update(forward_zones::table.filter(forward_zones::id.eq(zone_id)))

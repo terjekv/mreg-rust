@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{DnsName, Ttl},
+    domain::types::{DnsName, Ttl, UpdateField},
     errors::AppError,
 };
 
@@ -76,10 +76,7 @@ impl CreateNameServer {
 }
 
 /// Partial update for a nameserver.
-///
-/// `None` means "don't change", `Some(None)` means "clear the TTL",
-/// `Some(Some(ttl))` means "set this TTL".
 #[derive(Clone, Debug)]
 pub struct UpdateNameServer {
-    pub ttl: Option<Option<Ttl>>,
+    pub ttl: UpdateField<Ttl>,
 }

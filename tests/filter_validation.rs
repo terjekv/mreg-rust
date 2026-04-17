@@ -10,6 +10,8 @@ use mreg_rust::{
     authz::AuthorizerClient,
     config::{Config, StorageBackendSetting},
     events::EventSinkClient,
+    services::Services,
+    storage::ReadableStorage,
     storage::build_storage,
 };
 use rstest::rstest;
@@ -26,14 +28,14 @@ fn app_state() -> AppState {
     };
     let storage = build_storage(&config).expect("memory storage");
     let authn = AuthnClient::from_config(&config, storage.clone()).expect("authn config");
-    let authz = AuthorizerClient::from_config(&config);
+    let authz = AuthorizerClient::from_config(&config).expect("authz config");
     AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),
-        storage,
+        reader: ReadableStorage::new(storage.clone()),
+        services: Services::new(storage, EventSinkClient::noop()),
         authn,
         authz,
-        events: EventSinkClient::noop(),
     }
 }
 

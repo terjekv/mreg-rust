@@ -16,7 +16,6 @@ use crate::{
         types::{BacnetIdentifier, Hostname},
     },
     errors::AppError,
-    services::bacnet as bacnet_service,
 };
 
 use super::authz::request as authz_request;
@@ -118,7 +117,7 @@ pub(crate) async fn list_bacnet_ids(
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
-    let result = bacnet_service::list_bacnet_ids(state.storage.bacnet(), &page, &filter).await?;
+    let result = state.services.bacnet().list(&page, &filter).await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(result, BacnetResponse::from_domain)))
 }
 
@@ -154,13 +153,11 @@ pub(crate) async fn create_bacnet_id(
         .build(),
     )
     .await?;
-    let item = bacnet_service::create_bacnet_id(
-        state.storage.bacnet(),
-        state.storage.audit(),
-        &state.events,
-        request.into_command()?,
-    )
-    .await?;
+    let item = state
+        .services
+        .bacnet()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(BacnetResponse::from_domain(&item)))
 }
 
@@ -193,7 +190,7 @@ pub(crate) async fn get_bacnet_id(
         .build(),
     )
     .await?;
-    let item = bacnet_service::get_bacnet_id(state.storage.bacnet(), bacnet_id).await?;
+    let item = state.services.bacnet().get(bacnet_id).await?;
     Ok(HttpResponse::Ok().json(BacnetResponse::from_domain(&item)))
 }
 
@@ -226,12 +223,6 @@ pub(crate) async fn delete_bacnet_id(
         .build(),
     )
     .await?;
-    bacnet_service::delete_bacnet_id(
-        state.storage.bacnet(),
-        state.storage.audit(),
-        &state.events,
-        bacnet_id,
-    )
-    .await?;
+    state.services.bacnet().delete(bacnet_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }

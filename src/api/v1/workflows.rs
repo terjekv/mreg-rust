@@ -1,4 +1,4 @@
-use actix_web::{HttpRequest, HttpResponse, post, web};
+use actix_web::{HttpRequest, HttpResponse, get, post, web};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
@@ -9,13 +9,14 @@ use crate::{
     authz::{self, AttrValue, require_permission},
     domain::{
         exports::{CreateExportRun, CreateExportTemplate},
-        imports::{CreateImportBatch, ImportBatch, ImportItem},
+        imports::{CreateImportBatch, ImportBatch, ImportItem, ImportKind, ImportOperation},
+        pagination::PageRequest,
         tasks::TaskEnvelope,
     },
     errors::AppError,
-    services::{exports as export_service, imports as import_service, tasks as task_service},
 };
 
+use super::SystemListResponse;
 use super::authz::request as authz_request;
 
 /// Task execution result.
@@ -30,10 +31,154 @@ pub struct TaskRunResponse {
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(create_import)
+    cfg.service(tasks)
+        .service(imports)
+        .service(export_templates)
+        .service(export_runs)
+        .service(create_import)
         .service(create_export_template)
         .service(create_export_run)
         .service(run_next_task);
+}
+
+/// List tasks
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflows/tasks",
+    responses(
+        (status = 200, description = "List of tasks", body = SystemListResponse)
+    ),
+    tag = "Workflows"
+)]
+#[get("/workflows/tasks")]
+pub(crate) async fn tasks(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
+    require_permission(
+        &state.authz,
+        authz_request(
+            &req,
+            authz::actions::task::LIST,
+            authz::actions::resource_kinds::TASK,
+            "*",
+        )
+        .build(),
+    )
+    .await?;
+    let page = state.services.tasks().list(&PageRequest::default()).await?;
+    Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
+        page,
+        state.reader.backend_kind(),
+    )))
+}
+
+/// List imports
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflows/imports",
+    responses(
+        (status = 200, description = "List of import batches", body = SystemListResponse)
+    ),
+    tag = "Workflows"
+)]
+#[get("/workflows/imports")]
+pub(crate) async fn imports(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
+    require_permission(
+        &state.authz,
+        authz_request(
+            &req,
+            authz::actions::import_batch::LIST,
+            authz::actions::resource_kinds::IMPORT_BATCH,
+            "*",
+        )
+        .build(),
+    )
+    .await?;
+    let page = state
+        .services
+        .imports()
+        .list(&PageRequest::default())
+        .await?;
+    Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
+        page,
+        state.reader.backend_kind(),
+    )))
+}
+
+/// List export templates
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflows/export-templates",
+    responses(
+        (status = 200, description = "List of export templates", body = SystemListResponse)
+    ),
+    tag = "Workflows"
+)]
+#[get("/workflows/export-templates")]
+pub(crate) async fn export_templates(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
+    require_permission(
+        &state.authz,
+        authz_request(
+            &req,
+            authz::actions::export_template::LIST,
+            authz::actions::resource_kinds::EXPORT_TEMPLATE,
+            "*",
+        )
+        .build(),
+    )
+    .await?;
+    let page = state
+        .services
+        .exports()
+        .list_templates(&PageRequest::default())
+        .await?;
+    Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
+        page,
+        state.reader.backend_kind(),
+    )))
+}
+
+/// List export runs
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflows/export-runs",
+    responses(
+        (status = 200, description = "List of export runs", body = SystemListResponse)
+    ),
+    tag = "Workflows"
+)]
+#[get("/workflows/export-runs")]
+pub(crate) async fn export_runs(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
+    require_permission(
+        &state.authz,
+        authz_request(
+            &req,
+            authz::actions::export_run::LIST,
+            authz::actions::resource_kinds::EXPORT_RUN,
+            "*",
+        )
+        .build(),
+    )
+    .await?;
+    let page = state
+        .services
+        .exports()
+        .list_runs(&PageRequest::default())
+        .await?;
+    Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
+        page,
+        state.reader.backend_kind(),
+    )))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -46,8 +191,8 @@ pub struct CreateImportRequest {
 pub struct CreateImportItemRequest {
     #[serde(rename = "ref")]
     reference: String,
-    kind: String,
-    operation: String,
+    kind: ImportKind,
+    operation: ImportOperation,
     #[serde(default)]
     #[schema(value_type = Object)]
     attributes: Value,
@@ -150,7 +295,11 @@ pub(crate) async fn create_import(
         .build(),
     )
     .await?;
-    let summary = import_service::create(state.storage.imports(), request.into_command()?).await?;
+    let summary = state
+        .services
+        .imports()
+        .create(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(summary))
 }
 
@@ -185,8 +334,11 @@ pub(crate) async fn create_export_template(
         .build(),
     )
     .await?;
-    let template =
-        export_service::create_template(state.storage.exports(), request.into_command()?).await?;
+    let template = state
+        .services
+        .exports()
+        .create_template(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(template))
 }
 
@@ -223,7 +375,11 @@ pub(crate) async fn create_export_run(
         authz = authz.attr("requested_by", AttrValue::String(requested_by.clone()));
     }
     require_permission(&state.authz, authz.build()).await?;
-    let run = export_service::create_run(state.storage.exports(), request.into_command()?).await?;
+    let run = state
+        .services
+        .exports()
+        .create_run(request.into_command()?)
+        .await?;
     Ok(HttpResponse::Created().json(run))
 }
 
@@ -252,7 +408,7 @@ pub(crate) async fn run_next_task(
         .build(),
     )
     .await?;
-    let Some(task) = task_service::claim_next(state.storage.tasks()).await? else {
+    let Some(task) = state.services.tasks().claim_next().await? else {
         return Ok(HttpResponse::Ok().json(json!({ "task": Value::Null })));
     };
 
@@ -260,9 +416,11 @@ pub(crate) async fn run_next_task(
         "import_batch" => execute_import_task(&req, &state, &task).await?,
         "export_run" => execute_export_task(&req, &state, &task).await?,
         _ => {
-            let completed =
-                task_service::complete(state.storage.tasks(), task.id(), json!({"status":"noop"}))
-                    .await?;
+            let completed = state
+                .services
+                .tasks()
+                .complete(task.id(), json!({"status":"noop"}))
+                .await?;
             return Ok(HttpResponse::Ok().json(json!({
                 "task": completed,
                 "workflow_result": Value::Null,
@@ -270,8 +428,11 @@ pub(crate) async fn run_next_task(
         }
     };
 
-    let task =
-        task_service::complete(state.storage.tasks(), task.id(), workflow_result.clone()).await?;
+    let task = state
+        .services
+        .tasks()
+        .complete(task.id(), workflow_result.clone())
+        .await?;
     Ok(HttpResponse::Ok().json(json!({
         "task": task,
         "workflow_result": workflow_result,
@@ -299,14 +460,22 @@ async fn execute_import_task(
     )
     .await
     {
-        let _ = task_service::fail(state.storage.tasks(), task.id(), error.to_string()).await;
+        let _ = state
+            .services
+            .tasks()
+            .fail(task.id(), error.to_string())
+            .await;
         return Err(error);
     }
     let import_id = parse_task_uuid(task.payload(), "import_id")?;
-    match import_service::run(state.storage.imports(), import_id).await {
+    match state.services.imports().run(import_id).await {
         Ok(summary) => serde_json::to_value(summary).map_err(AppError::internal),
         Err(error) => {
-            let _ = task_service::fail(state.storage.tasks(), task.id(), error.to_string()).await;
+            let _ = state
+                .services
+                .tasks()
+                .fail(task.id(), error.to_string())
+                .await;
             Err(error)
         }
     }
@@ -333,14 +502,22 @@ async fn execute_export_task(
     )
     .await
     {
-        let _ = task_service::fail(state.storage.tasks(), task.id(), error.to_string()).await;
+        let _ = state
+            .services
+            .tasks()
+            .fail(task.id(), error.to_string())
+            .await;
         return Err(error);
     }
     let run_id = parse_task_uuid(task.payload(), "run_id")?;
-    match export_service::run_export(state.storage.exports(), run_id).await {
+    match state.services.exports().run_export(run_id).await {
         Ok(run) => serde_json::to_value(run).map_err(AppError::internal),
         Err(error) => {
-            let _ = task_service::fail(state.storage.tasks(), task.id(), error.to_string()).await;
+            let _ = state
+                .services
+                .tasks()
+                .fail(task.id(), error.to_string())
+                .await;
             Err(error)
         }
     }

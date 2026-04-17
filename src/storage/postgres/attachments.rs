@@ -177,23 +177,71 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         command: CreateHostAttachment,
     ) -> Result<HostAttachment, AppError> {
-        let attachment = Self::find_or_create_attachment(
-            connection,
-            command.host_name(),
-            command.network(),
-            command.mac_address(),
-        )?;
-        if command.comment().is_some() {
-            return Self::update_attachment_tx(
-                connection,
-                attachment.id(),
-                UpdateHostAttachment {
-                    mac_address: None,
-                    comment: Some(command.comment().map(str::to_string)),
-                },
-            );
+        let host_id = hosts::table
+            .filter(hosts::name.eq(command.host_name().as_str()))
+            .select(hosts::id)
+            .first::<Uuid>(connection)
+            .optional()?
+            .ok_or_else(|| {
+                AppError::not_found(format!(
+                    "host '{}' was not found",
+                    command.host_name().as_str()
+                ))
+            })?;
+        let network = Self::query_network_by_cidr(connection, command.network())?;
+        let existing = if let Some(mac_address) = command.mac_address() {
+            sql_query(
+                "SELECT a.id, ''::text AS name
+                 FROM host_attachments a
+                 WHERE a.host_id = $1 AND a.network_id = $2 AND a.mac_address = $3",
+            )
+            .bind::<SqlUuid, _>(host_id)
+            .bind::<SqlUuid, _>(network.id())
+            .bind::<Text, _>(mac_address.as_str())
+            .get_result::<super::helpers::NameAndIdRow>(connection)
+            .optional()?
+            .map(|row| row.id)
+        } else {
+            sql_query(
+                "SELECT a.id, ''::text AS name
+                 FROM host_attachments a
+                 WHERE a.host_id = $1 AND a.network_id = $2 AND a.mac_address IS NULL
+                 ORDER BY a.created_at
+                 LIMIT 1",
+            )
+            .bind::<SqlUuid, _>(host_id)
+            .bind::<SqlUuid, _>(network.id())
+            .get_result::<super::helpers::NameAndIdRow>(connection)
+            .optional()?
+            .map(|row| row.id)
+        };
+        if existing.is_some() {
+            return Err(AppError::conflict("host attachment already exists"));
         }
-        Ok(attachment)
+
+        let row = sql_query(
+            "INSERT INTO host_attachments (host_id, network_id, mac_address, comment)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id,
+                       host_id,
+                       $5::text AS host_name,
+                       network_id,
+                       $6::text AS network_cidr,
+                       mac_address,
+                       comment,
+                       created_at,
+                       updated_at",
+        )
+        .bind::<SqlUuid, _>(host_id)
+        .bind::<SqlUuid, _>(network.id())
+        .bind::<Nullable<Text>, _>(command.mac_address().map(|value| value.as_str()))
+        .bind::<Nullable<Text>, _>(command.comment())
+        .bind::<Text, _>(command.host_name().as_str())
+        .bind::<Text, _>(network.cidr().as_str())
+        .get_result::<HostAttachmentRow>(connection)
+        .map_err(map_unique("host attachment already exists"))?;
+
+        row.into_domain()
     }
 
     pub(super) fn list_attachment_dhcp_identifiers_tx(
@@ -268,7 +316,7 @@ impl PostgresStorage {
             DhcpIdentifierKind::DuidRaw => "duid_raw",
         })
         .bind::<Text, _>(command.value())
-        .bind::<Integer, _>(command.priority())
+        .bind::<Integer, _>(command.priority().as_i32())
         .get_result::<AttachmentDhcpIdentifierRow>(connection)
         .map_err(map_unique("attachment DHCP identifier already exists"))?
         .into_domain()
@@ -668,14 +716,11 @@ impl PostgresStorage {
         command: UpdateHostAttachment,
     ) -> Result<HostAttachment, AppError> {
         let old = Self::query_attachment_by_id(connection, attachment_id)?;
-        let mac_address = match command.mac_address {
-            Some(value) => value.map(|mac| mac.as_str().to_string()),
-            None => old.mac_address().map(|mac| mac.as_str().to_string()),
-        };
-        let comment = match command.comment {
-            Some(value) => value,
-            None => old.comment().map(str::to_string),
-        };
+        let mac_address: Option<String> = command
+            .mac_address
+            .map(|mac| mac.as_str().to_string())
+            .resolve(old.mac_address().map(|mac| mac.as_str().to_string()));
+        let comment: Option<String> = command.comment.resolve(old.comment().map(str::to_string));
         sql_query(
             "UPDATE host_attachments
              SET mac_address = $1, comment = $2, updated_at = now()

@@ -24,9 +24,9 @@ use crate::{
         },
         tasks::{TaskEnvelope, TaskStatus},
         types::{
-            CidrValue, CommunityName, DnsName, EmailAddressValue, Hostname, IpAddressValue,
-            LabelName, MacAddressValue, NetworkPolicyName, RecordTypeName, SerialNumber, Ttl,
-            ZoneName,
+            CidrValue, CommunityName, DhcpPriority, DnsName, DnsTypeCode, EmailAddressValue,
+            Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyName,
+            RecordTypeName, ReservedCount, SerialNumber, SoaSeconds, Ttl, VlanId, ZoneName,
         },
         zone::{ForwardZone, ForwardZoneDelegation, ReverseZone, ReverseZoneDelegation},
     },
@@ -69,7 +69,15 @@ pub struct NameServerRow {
 
 impl NameServerRow {
     pub fn into_domain(self) -> Result<NameServer, AppError> {
-        let ttl = self.ttl.map(|value| Ttl::new(value as u32)).transpose()?;
+        let ttl = self
+            .ttl
+            .map(|value| {
+                Ttl::new(
+                    u32::try_from(value)
+                        .map_err(|_| AppError::internal("invalid TTL value in database"))?,
+                )
+            })
+            .transpose()?;
         NameServer::restore(
             self.id,
             DnsName::new(self.name)?,
@@ -117,13 +125,31 @@ impl ForwardZoneRow {
             DnsName::new(self.primary_ns)?,
             nameservers,
             EmailAddressValue::new(self.email)?,
-            SerialNumber::new(self.serial_no as u64)?,
+            SerialNumber::new(
+                u64::try_from(self.serial_no)
+                    .map_err(|_| AppError::internal("invalid serial number in database"))?,
+            )?,
             self.serial_no_updated_at,
-            self.refresh as u32,
-            self.retry as u32,
-            self.expire as u32,
-            Ttl::new(self.soa_ttl as u32)?,
-            Ttl::new(self.default_ttl as u32)?,
+            SoaSeconds::new(
+                u32::try_from(self.refresh)
+                    .map_err(|_| AppError::internal("invalid refresh value in database"))?,
+            )?,
+            SoaSeconds::new(
+                u32::try_from(self.retry)
+                    .map_err(|_| AppError::internal("invalid retry value in database"))?,
+            )?,
+            SoaSeconds::new(
+                u32::try_from(self.expire)
+                    .map_err(|_| AppError::internal("invalid expire value in database"))?,
+            )?,
+            Ttl::new(
+                u32::try_from(self.soa_ttl)
+                    .map_err(|_| AppError::internal("invalid soa_ttl value in database"))?,
+            )?,
+            Ttl::new(
+                u32::try_from(self.default_ttl)
+                    .map_err(|_| AppError::internal("invalid default_ttl value in database"))?,
+            )?,
             self.created_at,
             self.updated_at,
         )
@@ -183,13 +209,31 @@ impl ReverseZoneRow {
             DnsName::new(self.primary_ns)?,
             nameservers,
             EmailAddressValue::new(self.email)?,
-            SerialNumber::new(self.serial_no as u64)?,
+            SerialNumber::new(
+                u64::try_from(self.serial_no)
+                    .map_err(|_| AppError::internal("invalid serial number in database"))?,
+            )?,
             self.serial_no_updated_at,
-            self.refresh as u32,
-            self.retry as u32,
-            self.expire as u32,
-            Ttl::new(self.soa_ttl as u32)?,
-            Ttl::new(self.default_ttl as u32)?,
+            SoaSeconds::new(
+                u32::try_from(self.refresh)
+                    .map_err(|_| AppError::internal("invalid refresh value in database"))?,
+            )?,
+            SoaSeconds::new(
+                u32::try_from(self.retry)
+                    .map_err(|_| AppError::internal("invalid retry value in database"))?,
+            )?,
+            SoaSeconds::new(
+                u32::try_from(self.expire)
+                    .map_err(|_| AppError::internal("invalid expire value in database"))?,
+            )?,
+            Ttl::new(
+                u32::try_from(self.soa_ttl)
+                    .map_err(|_| AppError::internal("invalid soa_ttl value in database"))?,
+            )?,
+            Ttl::new(
+                u32::try_from(self.default_ttl)
+                    .map_err(|_| AppError::internal("invalid default_ttl value in database"))?,
+            )?,
             self.created_at,
             self.updated_at,
         )
@@ -228,12 +272,24 @@ impl NetworkRow {
             self.id,
             CidrValue::new(self.network)?,
             self.description,
-            self.vlan.map(|v| v as u32),
+            self.vlan
+                .map(|v| {
+                    let v: u32 = v.try_into().map_err(|_| {
+                        AppError::internal(format!("invalid vlan value in database: {v}"))
+                    })?;
+                    VlanId::new(v)
+                })
+                .transpose()?,
             self.dns_delegated,
             self.category,
             self.location,
             self.frozen,
-            self.reserved as u32,
+            ReservedCount::new(u32::try_from(self.reserved).map_err(|_| {
+                AppError::internal(format!(
+                    "invalid reserved count in database: {}",
+                    self.reserved
+                ))
+            })?)?,
             self.created_at,
             self.updated_at,
         )
@@ -296,7 +352,14 @@ impl HostRow {
             self.id,
             Hostname::new(self.name)?,
             self.zone_name.map(ZoneName::new).transpose()?,
-            self.ttl.map(|value| Ttl::new(value as u32)).transpose()?,
+            self.ttl
+                .map(|value| {
+                    Ttl::new(
+                        u32::try_from(value)
+                            .map_err(|_| AppError::internal("invalid TTL value in database"))?,
+                    )
+                })
+                .transpose()?,
             self.comment,
             self.created_at,
             self.updated_at,
@@ -443,7 +506,7 @@ impl AttachmentDhcpIdentifierRow {
                 _ => return Err(AppError::internal("invalid stored dhcp identifier kind")),
             },
             self.value,
-            self.priority,
+            DhcpPriority::new(self.priority),
             self.created_at,
             self.updated_at,
         )
@@ -709,7 +772,7 @@ impl RecordTypeRow {
         Ok(RecordTypeDefinition::restore(
             self.id,
             RecordTypeName::new(self.name)?,
-            self.dns_type,
+            self.dns_type.map(DnsTypeCode::new).transpose()?,
             record_type_schema_from_parts(
                 &self.owner_kind,
                 &self.cardinality,
@@ -767,7 +830,14 @@ impl RrsetRow {
             self.anchor_id,
             self.anchor_name,
             self.zone_id,
-            self.ttl.map(|value| Ttl::new(value as u32)).transpose()?,
+            self.ttl
+                .map(|value| {
+                    Ttl::new(
+                        u32::try_from(value)
+                            .map_err(|_| AppError::internal("invalid TTL value in database"))?,
+                    )
+                })
+                .transpose()?,
             self.created_at,
             self.updated_at,
         ))
@@ -820,7 +890,14 @@ impl RecordRow {
             self.anchor_id,
             DnsName::new(self.owner_name)?,
             self.zone_id,
-            self.ttl.map(|value| Ttl::new(value as u32)).transpose()?,
+            self.ttl
+                .map(|value| {
+                    Ttl::new(
+                        u32::try_from(value)
+                            .map_err(|_| AppError::internal("invalid TTL value in database"))?,
+                    )
+                })
+                .transpose()?,
             self.data,
             self.raw_rdata
                 .map(RawRdataValue::from_wire_bytes)

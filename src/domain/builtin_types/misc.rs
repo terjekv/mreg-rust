@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_loc() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("LOC")?,
-        Some(29),
+        Some(DnsTypeCode::new(29)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Single,
@@ -83,7 +83,7 @@ pub(super) fn builtin_loc() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_uri() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("URI")?,
-        Some(256),
+        Some(DnsTypeCode::new(256)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,

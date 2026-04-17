@@ -155,7 +155,10 @@ impl EventSinkClient {
 
         let inner: Arc<dyn EventSink> = match sinks.len() {
             0 => Arc::new(NoopSink),
-            1 => sinks.into_iter().next().unwrap(),
+            1 => sinks
+                .into_iter()
+                .next()
+                .expect("len==1 guarantees at least one sink"),
             _ => Arc::new(CompositeSink::new(sinks)),
         };
 

@@ -14,10 +14,9 @@ use crate::{
             DhcpIdentifierKind, HostAttachment, UpdateHostAttachment,
         },
         host::AssignIpAddress,
-        types::{CidrValue, Hostname, IpAddressValue, MacAddressValue},
+        types::{CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressValue, UpdateField},
     },
     errors::AppError,
-    services::{attachments as attachment_service, hosts as host_service},
 };
 
 use super::authz::request as authz_request;
@@ -86,7 +85,7 @@ impl AttachmentDhcpIdentifierResponse {
             family: value.family().as_u8(),
             kind: kind.to_string(),
             value: value.value().to_string(),
-            priority: value.priority(),
+            priority: value.priority().as_i32(),
             created_at: value.created_at(),
             updated_at: value.updated_at(),
         }
@@ -143,19 +142,18 @@ impl CreateHostAttachmentRequest {
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateHostAttachmentRequest {
+    #[serde(default)]
     #[schema(value_type = Option<String>)]
-    mac_address: Option<Option<String>>,
+    mac_address: UpdateField<String>,
+    #[serde(default)]
     #[schema(value_type = Option<String>)]
-    comment: Option<Option<String>>,
+    comment: UpdateField<String>,
 }
 
 impl UpdateHostAttachmentRequest {
     fn into_command(self) -> Result<UpdateHostAttachment, AppError> {
         Ok(UpdateHostAttachment {
-            mac_address: self
-                .mac_address
-                .map(|opt| opt.map(MacAddressValue::new).transpose())
-                .transpose()?,
+            mac_address: self.mac_address.try_map(MacAddressValue::new)?,
             comment: self.comment,
         })
     }
@@ -194,7 +192,13 @@ impl CreateAttachmentDhcpIdentifierRequest {
                 ));
             }
         };
-        CreateAttachmentDhcpIdentifier::new(attachment_id, family, kind, self.value, self.priority)
+        CreateAttachmentDhcpIdentifier::new(
+            attachment_id,
+            family,
+            kind,
+            self.value,
+            DhcpPriority::new(self.priority),
+        )
     }
 }
 
@@ -221,12 +225,14 @@ async fn ip_page_for_attachment<'a>(
     state: &'a AppState,
     attachment: &'a HostAttachment,
 ) -> Result<Vec<IpAddressResponse>, AppError> {
-    let page = host_service::list_host_ip_addresses(
-        state.storage.hosts(),
-        attachment.host_name(),
-        &crate::domain::pagination::PageRequest::all(),
-    )
-    .await?;
+    let page = state
+        .services
+        .hosts()
+        .list_host_ip_addresses(
+            attachment.host_name(),
+            &crate::domain::pagination::PageRequest::all(),
+        )
+        .await?;
     Ok(page
         .items
         .into_iter()
@@ -271,7 +277,7 @@ pub(crate) async fn list_host_attachments(
     )
     .await?;
     let items = state
-        .storage
+        .services
         .attachments()
         .list_attachments_for_host(&host_name)
         .await?;
@@ -306,13 +312,11 @@ pub(crate) async fn create_host_attachment(
         .build(),
     )
     .await?;
-    let attachment = attachment_service::create_attachment(
-        state.storage.attachments(),
-        payload.into_inner().into_command(host_name)?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let attachment = state
+        .services
+        .attachments()
+        .create_attachment(payload.into_inner().into_command(host_name)?)
+        .await?;
     Ok(HttpResponse::Created().json(HostAttachmentResponse::from_domain(&attachment)))
 }
 
@@ -335,13 +339,13 @@ pub(crate) async fn get_attachment(
     )
     .await?;
     let attachment = state
-        .storage
+        .services
         .attachments()
         .get_attachment(attachment_id)
         .await?;
     let ip_addresses = ip_page_for_attachment(state.get_ref(), &attachment).await?;
     let dhcp_identifiers = state
-        .storage
+        .services
         .attachments()
         .list_attachment_dhcp_identifiers(attachment_id)
         .await?
@@ -349,7 +353,7 @@ pub(crate) async fn get_attachment(
         .map(AttachmentDhcpIdentifierResponse::from_domain)
         .collect();
     let prefix_reservations = state
-        .storage
+        .services
         .attachments()
         .list_attachment_prefix_reservations(attachment_id)
         .await?
@@ -383,14 +387,11 @@ pub(crate) async fn update_attachment(
         .build(),
     )
     .await?;
-    let attachment = attachment_service::update_attachment(
-        state.storage.attachments(),
-        attachment_id,
-        payload.into_inner().into_command()?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let attachment = state
+        .services
+        .attachments()
+        .update_attachment(attachment_id, payload.into_inner().into_command()?)
+        .await?;
     Ok(HttpResponse::Ok().json(HostAttachmentResponse::from_domain(&attachment)))
 }
 
@@ -412,13 +413,11 @@ pub(crate) async fn delete_attachment(
         .build(),
     )
     .await?;
-    attachment_service::delete_attachment(
-        state.storage.attachments(),
-        attachment_id,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    state
+        .services
+        .attachments()
+        .delete_attachment(attachment_id)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -430,7 +429,7 @@ pub(crate) async fn assign_ip_to_attachment(
     payload: web::Json<CreateAttachmentIpAddressRequest>,
 ) -> Result<HttpResponse, AppError> {
     let attachment = state
-        .storage
+        .services
         .attachments()
         .get_attachment(path.into_inner())
         .await?;
@@ -459,18 +458,16 @@ pub(crate) async fn assign_ip_to_attachment(
     )
     .await?;
     let request = payload.into_inner();
-    let assignment = host_service::assign_ip_address(
-        state.storage.hosts(),
-        AssignIpAddress::new(
+    let assignment = state
+        .services
+        .hosts()
+        .assign_ip_address(AssignIpAddress::new(
             attachment.host_name().clone(),
             request.address.map(IpAddressValue::new).transpose()?,
             Some(attachment.network_cidr().clone()),
             attachment.mac_address().cloned(),
-        )?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+        )?)
+        .await?;
     Ok(HttpResponse::Created().json(IpAddressResponse::from_domain(&assignment)))
 }
 
@@ -493,13 +490,11 @@ pub(crate) async fn create_attachment_dhcp_identifier(
         .build(),
     )
     .await?;
-    let item = attachment_service::create_attachment_dhcp_identifier(
-        state.storage.attachments(),
-        payload.into_inner().into_command(attachment_id)?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let item = state
+        .services
+        .attachments()
+        .create_attachment_dhcp_identifier(payload.into_inner().into_command(attachment_id)?)
+        .await?;
     Ok(HttpResponse::Created().json(AttachmentDhcpIdentifierResponse::from_domain(&item)))
 }
 
@@ -521,14 +516,11 @@ pub(crate) async fn delete_attachment_dhcp_identifier(
         .build(),
     )
     .await?;
-    attachment_service::delete_attachment_dhcp_identifier(
-        state.storage.attachments(),
-        attachment_id,
-        identifier_id,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    state
+        .services
+        .attachments()
+        .delete_attachment_dhcp_identifier(attachment_id, identifier_id)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -551,13 +543,11 @@ pub(crate) async fn create_attachment_prefix_reservation(
         .build(),
     )
     .await?;
-    let item = attachment_service::create_attachment_prefix_reservation(
-        state.storage.attachments(),
-        payload.into_inner().into_command(attachment_id)?,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    let item = state
+        .services
+        .attachments()
+        .create_attachment_prefix_reservation(payload.into_inner().into_command(attachment_id)?)
+        .await?;
     Ok(HttpResponse::Created().json(AttachmentPrefixReservationResponse::from_domain(&item)))
 }
 
@@ -579,13 +569,10 @@ pub(crate) async fn delete_attachment_prefix_reservation(
         .build(),
     )
     .await?;
-    attachment_service::delete_attachment_prefix_reservation(
-        state.storage.attachments(),
-        attachment_id,
-        reservation_id,
-        state.storage.audit(),
-        &state.events,
-    )
-    .await?;
+    state
+        .services
+        .attachments()
+        .delete_attachment_prefix_reservation(attachment_id, reservation_id)
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }

@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{CidrValue, Hostname, IpAddressValue, MacAddressValue, Ttl, ZoneName},
+    domain::types::{
+        CidrValue, Hostname, IpAddressValue, MacAddressValue, Ttl, UpdateField, ZoneName,
+    },
     errors::AppError,
 };
 
@@ -418,13 +420,13 @@ mod tests {
 #[derive(Clone, Debug)]
 pub struct UpdateHost {
     pub name: Option<Hostname>,
-    pub ttl: Option<Option<Ttl>>,
+    pub ttl: UpdateField<Ttl>,
     pub comment: Option<String>,
-    pub zone: Option<Option<ZoneName>>,
+    pub zone: UpdateField<ZoneName>,
 }
 
 /// Command to update an IP address assignment (currently just MAC address).
 #[derive(Clone, Debug)]
 pub struct UpdateIpAddress {
-    pub mac_address: Option<Option<MacAddressValue>>,
+    pub mac_address: UpdateField<MacAddressValue>,
 }

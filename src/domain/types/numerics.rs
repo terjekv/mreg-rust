@@ -75,7 +75,14 @@ impl SerialNumber {
     /// less than or equal to the current serial (e.g. clock skew), adds 1 to
     /// the current serial instead.
     pub fn next_rfc1912(&self, today: chrono::NaiveDate) -> Result<Self, AppError> {
-        let prefix = today.format("%Y%m%d").to_string().parse::<u64>().unwrap() * 10_000;
+        let prefix = today
+            .format("%Y%m%d")
+            .to_string()
+            .parse::<u64>()
+            .map_err(|e| {
+                AppError::internal(format!("failed to parse date as serial prefix: {e}"))
+            })?
+            * 10_000;
         let next = if self.0 >= prefix && self.0 < prefix + 9999 {
             self.0 + 1
         } else if prefix > self.0 {
@@ -104,6 +111,89 @@ impl<'de> Deserialize<'de> for SerialNumber {
     {
         let raw = u64::deserialize(deserializer)?;
         SerialNumber::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// SOA timing parameter (refresh, retry, expire) in seconds.
+/// Stored as u32 internally, fits in an i32 for PostgreSQL compatibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SoaSeconds(u32);
+
+impl SoaSeconds {
+    pub fn new(value: u32) -> Result<Self, AppError> {
+        if value > i32::MAX as u32 {
+            return Err(AppError::validation(
+                "SOA seconds value exceeds maximum (must fit in i32)",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.0 as i32
+    }
+}
+
+impl Serialize for SoaSeconds {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SoaSeconds {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = u32::deserialize(deserializer)?;
+        SoaSeconds::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// IEEE 802.1Q VLAN identifier (0-4094).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VlanId(u32);
+
+impl VlanId {
+    pub fn new(value: u32) -> Result<Self, AppError> {
+        if value > 4094 {
+            return Err(AppError::validation("VLAN ID must be between 0 and 4094"));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.0 as i32
+    }
+}
+
+impl Serialize for VlanId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for VlanId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = u32::deserialize(deserializer)?;
+        VlanId::new(raw).map_err(serde::de::Error::custom)
     }
 }
 
@@ -144,5 +234,131 @@ impl<'de> Deserialize<'de> for BacnetIdentifier {
     {
         let raw = u32::deserialize(deserializer)?;
         BacnetIdentifier::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Reserved address count at the start of a network.
+/// Stored as u32 internally, fits in an i32 for PostgreSQL compatibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReservedCount(u32);
+
+impl ReservedCount {
+    pub fn new(value: u32) -> Result<Self, AppError> {
+        if value > i32::MAX as u32 {
+            return Err(AppError::validation(
+                "reserved count exceeds maximum (must fit in i32)",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.0 as i32
+    }
+}
+
+impl Serialize for ReservedCount {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReservedCount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = u32::deserialize(deserializer)?;
+        ReservedCount::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// DNS record type code (0-65535).
+/// Stored as u16 internally; accepts i32 on construction for PostgreSQL compatibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DnsTypeCode(u16);
+
+impl DnsTypeCode {
+    pub fn new(value: i32) -> Result<Self, AppError> {
+        if !(0..=65535).contains(&value) {
+            return Err(AppError::validation(
+                "DNS type code must be between 0 and 65535",
+            ));
+        }
+        Ok(Self(value as u16))
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.0
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.0 as i32
+    }
+}
+
+impl Serialize for DnsTypeCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u16(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for DnsTypeCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = i32::deserialize(deserializer)?;
+        DnsTypeCode::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::fmt::Display for DnsTypeCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// DHCP server priority value.
+/// Any i32 is valid; no range restriction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DhcpPriority(i32);
+
+impl DhcpPriority {
+    pub fn new(value: i32) -> Self {
+        Self(value)
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.0
+    }
+}
+
+impl Serialize for DhcpPriority {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_i32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for DhcpPriority {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = i32::deserialize(deserializer)?;
+        Ok(DhcpPriority::new(raw))
     }
 }

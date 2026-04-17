@@ -8,12 +8,12 @@ use crate::{
     errors::AppError,
 };
 
-use crate::domain::types::RecordTypeName;
+use crate::domain::types::{DnsTypeCode, RecordTypeName};
 
 pub(super) fn builtin_a() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("A")?,
-        Some(1),
+        Some(DnsTypeCode::new(1)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -45,7 +45,7 @@ pub(super) fn builtin_a() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_aaaa() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("AAAA")?,
-        Some(28),
+        Some(DnsTypeCode::new(28)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
             RecordCardinality::Multiple,
@@ -77,7 +77,7 @@ pub(super) fn builtin_aaaa() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_ns() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("NS")?,
-        Some(2),
+        Some(DnsTypeCode::new(2)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ForwardZone,
             RecordCardinality::Multiple,
@@ -109,7 +109,7 @@ pub(super) fn builtin_ns() -> Result<CreateRecordTypeDefinition, AppError> {
 pub(super) fn builtin_ptr() -> Result<CreateRecordTypeDefinition, AppError> {
     Ok(CreateRecordTypeDefinition::new(
         RecordTypeName::new("PTR")?,
-        Some(12),
+        Some(DnsTypeCode::new(12)?),
         RecordTypeSchema::new(
             RecordOwnerKind::ReverseZone,
             RecordCardinality::Multiple,
