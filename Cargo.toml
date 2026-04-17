@@ -1,0 +1,64 @@
+[package]
+name = "mreg-rust"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["rustls"]
+rustls = ["actix-web/rustls-0_23", "dep:rustls", "dep:rustls-pemfile"]
+openssl = ["actix-web/openssl", "dep:openssl"]
+amqp = ["dep:lapin"]
+redis = ["dep:redis"]
+ldap = ["dep:ldap3"]
+
+[dependencies]
+actix-web = "4.11.0"
+rustls = { version = "0.23", optional = true }
+rustls-pemfile = { version = "2", optional = true }
+openssl = { version = "0.10", optional = true }
+async-trait = "0.1.89"
+argon2 = "0.5.3"
+chrono = { version = "0.4.42", features = ["serde"] }
+diesel = { version = "2.2.4", features = ["postgres", "r2d2", "chrono", "uuid", "serde_json"] }
+diesel_migrations = "2.2.0"
+email_address = "0.2.9"
+ipnet = { version = "2.11.0", features = ["serde"] }
+macaddr = "1.0.1"
+minijinja = { version = "2.12.0", features = ["loader", "json"] }
+reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+thiserror = "2.0.17"
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "sync"] }
+treetop-client = { git = "https://github.com/terjekv/treetop-client", rev = "075ba3e26b07ef601fe2d3e167a905fdb65241d8" }
+tracing = "0.1.41"
+tracing-actix-web = "0.7"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
+hickory-proto = "0.24"
+utoipa = { version = "5", features = ["actix_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+lapin = { version = "2", optional = true }
+redis = { version = "0.27", features = ["tokio-comp", "streams"], optional = true }
+jsonwebtoken = "9.3.1"
+ldap3 = { version = "0.12.1", optional = true, default-features = false, features = ["tls-rustls-ring"] }
+rand = "0.8"
+
+[dev-dependencies]
+actix-http = "3"
+rstest = "0.25"
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+iai-callgrind = "0.16.1"
+
+[[bench]]
+name = "inventory_operations_criterion"
+harness = false
+
+[[bench]]
+name = "record_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "authz_request_build_callgrind"
+harness = false

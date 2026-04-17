@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mreg
+          POSTGRES_PASSWORD: mreg
+          POSTGRES_DB: mreg
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U mreg -d mreg"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MREG_TEST_DATABASE_URL: postgres://mreg:mreg@localhost:5433/mreg_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create test database
+        env:
+          PGPASSWORD: mreg
+        run: psql -h localhost -U mreg -d mreg -c "CREATE DATABASE mreg_test"
+
+      - name: Run full test suite
+        run: cargo test
+
+      - name: Lint with clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Compile benchmark targets
+        run: cargo bench --no-run

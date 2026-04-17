@@ -1,0 +1,24 @@
+name: PR Benchmarks
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-bench-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    uses: terjekv/github-action-iai-callgrind/.github/workflows/rust-pr-bench.yml@v2
+    with:
+      backend: all
+      auto_discover: true
+      criterion_cli_args: "--noplot --sample-size 80 --measurement-time 6"
+      criterion_statistic: median
+      regression_threshold_pct_iai_callgrind: 3
+      regression_threshold_pct_criterion: 8
+      fail_on_regression: true

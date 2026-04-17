@@ -1,0 +1,136 @@
+use async_trait::async_trait;
+use diesel::{
+    ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, RunQueryDsl, SelectableHelper,
+    delete, insert_into, update,
+};
+
+use crate::{
+    db::{models::NameServerRow, schema::nameservers},
+    domain::{
+        nameserver::{CreateNameServer, NameServer, UpdateNameServer},
+        pagination::{Page, PageRequest},
+        types::DnsName,
+    },
+    errors::AppError,
+    storage::NameServerStore,
+};
+
+use super::PostgresStorage;
+use super::helpers::{map_unique, vec_to_page};
+
+impl PostgresStorage {
+    pub(super) fn query_nameservers(
+        connection: &mut PgConnection,
+    ) -> Result<Vec<NameServer>, AppError> {
+        let rows = nameservers::table
+            .order(nameservers::name.asc())
+            .load::<NameServerRow>(connection)?;
+        rows.into_iter().map(NameServerRow::into_domain).collect()
+    }
+}
+
+#[async_trait]
+impl NameServerStore for PostgresStorage {
+    async fn list_nameservers(&self, page: &PageRequest) -> Result<Page<NameServer>, AppError> {
+        let page = page.clone();
+        self.database
+            .run(move |c| {
+                let items = Self::query_nameservers(c)?;
+                Ok(vec_to_page(items, &page))
+            })
+            .await
+    }
+
+    async fn create_nameserver(&self, command: CreateNameServer) -> Result<NameServer, AppError> {
+        let name = command.name().as_str().to_string();
+        let ttl = command.ttl().map(|value| value.as_i32());
+        self.database
+            .run(move |connection| {
+                insert_into(nameservers::table)
+                    .values((nameservers::name.eq(&name), nameservers::ttl.eq(ttl)))
+                    .returning(NameServerRow::as_returning())
+                    .get_result(connection)
+                    .map_err(map_unique("nameserver already exists"))?
+                    .into_domain()
+            })
+            .await
+    }
+
+    async fn get_nameserver_by_name(&self, name: &DnsName) -> Result<NameServer, AppError> {
+        let name = name.as_str().to_string();
+        self.database
+            .run(move |connection| {
+                nameservers::table
+                    .filter(nameservers::name.eq(&name))
+                    .first::<NameServerRow>(connection)
+                    .optional()?
+                    .ok_or_else(|| {
+                        AppError::not_found(format!("nameserver '{}' was not found", name))
+                    })?
+                    .into_domain()
+            })
+            .await
+    }
+
+    async fn update_nameserver(
+        &self,
+        name: &DnsName,
+        command: UpdateNameServer,
+    ) -> Result<NameServer, AppError> {
+        let name = name.as_str().to_string();
+        self.database
+            .run(move |connection| {
+                if let Some(ref ttl_option) = command.ttl {
+                    let ttl = ttl_option.map(|t| t.as_i32());
+                    update(nameservers::table.filter(nameservers::name.eq(&name)))
+                        .set((
+                            nameservers::ttl.eq(ttl),
+                            nameservers::updated_at.eq(diesel::dsl::now),
+                        ))
+                        .returning(NameServerRow::as_returning())
+                        .get_result::<NameServerRow>(connection)
+                        .optional()?
+                        .ok_or_else(|| {
+                            AppError::not_found(format!("nameserver '{}' was not found", name))
+                        })?
+                        .into_domain()
+                } else {
+                    nameservers::table
+                        .filter(nameservers::name.eq(&name))
+                        .first::<NameServerRow>(connection)
+                        .optional()?
+                        .ok_or_else(|| {
+                            AppError::not_found(format!("nameserver '{}' was not found", name))
+                        })?
+                        .into_domain()
+                }
+            })
+            .await
+    }
+
+    async fn delete_nameserver(&self, name: &DnsName) -> Result<(), AppError> {
+        let name = name.as_str().to_string();
+        self.database
+            .run(move |connection| {
+                let deleted = delete(nameservers::table.filter(nameservers::name.eq(&name)))
+                    .execute(connection)
+                    .map_err(|error| match error {
+                        diesel::result::Error::DatabaseError(
+                            diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                            _,
+                        ) => {
+                            AppError::conflict("nameserver is still referenced by another resource")
+                        }
+                        other => AppError::internal(other),
+                    })?;
+                if deleted == 0 {
+                    return Err(AppError::not_found(format!(
+                        "nameserver '{}' was not found",
+                        name
+                    )));
+                }
+                Ok(())
+            })
+            .await
+    }
+}

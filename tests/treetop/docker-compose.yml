@@ -1,0 +1,22 @@
+services:
+  policy-host:
+    image: svenstaro/miniserve
+    ports:
+      - "18080:8080"
+    volumes:
+      - .:/data:ro
+    command: ["/data", "--port", "8080"]
+
+  treetop-rest:
+    image: ghcr.io/terjekv/treetop-rest:latest
+    platform: linux/amd64
+    depends_on:
+      - policy-host
+    ports:
+      - "9999:9999"
+    environment:
+      TREETOP_LISTEN: 0.0.0.0
+      TREETOP_PORT: 9999
+      TREETOP_POLICY_URL: http://policy-host:8080/mreg.cedar
+      TREETOP_LABELS_URL: http://policy-host:8080/labels.json
+      TREETOP_CLIENT_ALLOWLIST: "*"

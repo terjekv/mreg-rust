@@ -1,0 +1,37 @@
+{
+  "scopes": [
+    {
+      "name": "local",
+      "kind": "local",
+      "users": [
+        {
+          "username": "admin",
+          "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$uXH8gV1Qm7F6mX0YVtUdwX2hPq4mB5Cw2c4P8lYf9jM",
+          "groups": ["ops", "net"]
+        }
+      ]
+    },
+    {
+      "name": "ldap-primary",
+      "kind": "ldap",
+      "url": "ldaps://ldap.example.org",
+      "timeout_ms": 5000,
+      "user_search_base": "ou=people,dc=example,dc=org",
+      "user_search_filter": "(uid={username})",
+      "group_search_base": "ou=groups,dc=example,dc=org",
+      "group_search_filter": "(member={user_dn})"
+    },
+    {
+      "name": "remote-sso",
+      "kind": "remote",
+      "login_url": "https://auth.example.org/api/login",
+      "timeout_ms": 5000,
+      "default_service_name": "mreg",
+      "jwt_issuer": "auth.example.org",
+      "jwt_audience": "mreg-rust",
+      "jwt_hmac_secret": "change-me",
+      "username_claim": "sub",
+      "groups_claim": "groups"
+    }
+  ]
+}
