@@ -206,6 +206,11 @@ impl BacnetIdentifier {
         if value == 0 {
             return Err(AppError::validation("bacnet identifier must be positive"));
         }
+        if value > i32::MAX as u32 {
+            return Err(AppError::validation(
+                "bacnet identifier exceeds maximum (must fit in i32)",
+            ));
+        }
         Ok(Self(value))
     }
 
@@ -214,7 +219,7 @@ impl BacnetIdentifier {
     }
 
     pub fn as_i32(&self) -> i32 {
-        self.0 as i32
+        i32::try_from(self.0).expect("validated bacnet identifier must fit in i32")
     }
 }
 

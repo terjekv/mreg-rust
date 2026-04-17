@@ -4,6 +4,8 @@ This document describes how mreg-rust authorizes requests after authentication h
 
 Authentication answers "who is the caller?". Authorization answers "may that caller perform this action on this resource?". The authentication layer is documented in [authentication.md](authentication.md).
 
+For the full request pipeline and module layout, see [architecture.md](architecture.md).
+
 ## Overview
 
 The request flow is:
@@ -39,6 +41,16 @@ Implementation:
 
 - principal extraction: [src/authz/mod.rs](../src/authz/mod.rs)
 - authn middleware: [src/middleware/authn.rs](../src/middleware/authn.rs)
+
+In `auth_mode=scoped`, the principal is namespace-aware both internally and at the Treetop boundary:
+
+- principal id: `admin`
+- principal namespace: `["mreg", "local"]`
+- principal key: `mreg::local::admin`
+- group id: `ops`
+- group namespace: `["mreg", "local"]`
+
+Authorization should key on namespace plus id, not on a string-encoded `scope:username` identifier.
 
 ## Action and resource model
 
@@ -118,6 +130,7 @@ This is intended for admin or other explicitly authorized operators.
 
 ## Reference material
 
+- Architecture: [architecture.md](architecture.md)
 - Authentication: [authentication.md](authentication.md)
 - Configuration: [configuration.md](configuration.md)
 - Action matrix: [authz-action-matrix.md](authz-action-matrix.md)

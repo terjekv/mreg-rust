@@ -93,12 +93,24 @@ pub struct Principal {
     pub groups: Vec<Group>,
 }
 
+impl Principal {
+    pub fn key(&self) -> String {
+        identity_key(&self.namespace, &self.id)
+    }
+}
+
 /// Named group that a principal may belong to.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Group {
     pub id: String,
     #[serde(default)]
     pub namespace: Vec<String>,
+}
+
+impl Group {
+    pub fn key(&self) -> String {
+        identity_key(&self.namespace, &self.id)
+    }
 }
 
 /// Action being authorized (for example `host.create` or `host.update.zone`).
@@ -271,14 +283,14 @@ pub async fn require_permissions(
     }
 
     for (request, decision) in requests.into_iter().zip(decisions) {
-        let principal_id = request.principal.id;
+        let principal_key = request.principal.key();
         let action = request.action.id;
         let resource_kind = request.resource.kind;
         let resource_id = request.resource.id;
 
         if matches!(decision, AuthorizationDecision::Deny) {
             tracing::warn!(
-                principal = %principal_id,
+                principal = %principal_key,
                 %action,
                 %resource_kind,
                 %resource_id,
@@ -292,7 +304,7 @@ pub async fn require_permissions(
         }
 
         tracing::debug!(
-            principal = %principal_id,
+            principal = %principal_key,
             %action,
             %resource_kind,
             %resource_id,
@@ -389,6 +401,19 @@ fn authorization_request_to_treetop(request: AuthorizationRequest) -> TreetopReq
     )
 }
 
+pub const IDENTITY_NAMESPACE_ROOT: &str = "mreg";
+
+pub fn scoped_identity_namespace(scope: &str) -> Vec<String> {
+    vec![IDENTITY_NAMESPACE_ROOT.to_string(), scope.to_string()]
+}
+
+pub fn identity_key(namespace: &[String], id: &str) -> String {
+    if namespace.is_empty() {
+        return id.to_string();
+    }
+    format!("{}::{id}", namespace.join("::"))
+}
+
 fn principal_to_treetop_user(principal: Principal) -> TreetopUser {
     let groups = principal
         .groups
@@ -464,6 +489,40 @@ mod tests {
         assert_eq!(
             request.resource.attrs.get("new_zone"),
             Some(&AttrValue::String("lab.example.org".to_string()))
+        );
+    }
+
+    #[test]
+    fn identity_key_uses_namespace_components() {
+        let principal = Principal {
+            id: "admin".to_string(),
+            namespace: vec!["mreg".to_string(), "local".to_string()],
+            groups: vec![Group {
+                id: "ops".to_string(),
+                namespace: vec!["mreg".to_string(), "local".to_string()],
+            }],
+        };
+
+        assert_eq!(principal.key(), "mreg::local::admin");
+        assert_eq!(principal.groups[0].key(), "mreg::local::ops");
+    }
+
+    #[test]
+    fn identity_key_without_namespace_is_raw_id() {
+        let principal = Principal {
+            id: "alice".to_string(),
+            namespace: Vec::new(),
+            groups: Vec::new(),
+        };
+
+        assert_eq!(principal.key(), "alice");
+    }
+
+    #[test]
+    fn scoped_identity_namespace_uses_mreg_root() {
+        assert_eq!(
+            scoped_identity_namespace("ldap_team1"),
+            vec!["mreg".to_string(), "ldap_team1".to_string()]
         );
     }
 

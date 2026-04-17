@@ -101,6 +101,11 @@ mod tests {
     }
 
     #[test]
+    fn bacnet_identifier_rejects_values_above_i32_max() {
+        assert!(BacnetIdentifier::new(i32::MAX as u32 + 1).is_err());
+    }
+
+    #[test]
     fn serial_next_rfc1912_increments_within_day() {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 30).unwrap();
         let serial = SerialNumber::new(202603300000).expect("serial");

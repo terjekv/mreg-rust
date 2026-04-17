@@ -4,6 +4,8 @@ This document describes how mreg-rust authenticates requests and how that differ
 
 Authentication answers "who is the caller?". Authorization answers "may that caller perform this action?". mreg-rust has an explicit authentication layer in front of the existing authorization flow. Authorization is documented separately in [authorization.md](authorization.md).
 
+For the full request pipeline and module layout, see [architecture.md](architecture.md).
+
 ## Overview
 
 The request flow is:
@@ -58,8 +60,9 @@ All authenticated sessions use the same mreg-issued bearer token format, regardl
 
 Important behavior:
 
-- canonical principal IDs are scope-qualified, for example `local:admin`
-- canonical group IDs are also scope-qualified, for example `local:ops`
+- authenticated principals are namespace-aware, for example `id="admin", namespace=["mreg","local"]`
+- authenticated groups are also namespace-aware, for example `id="ops", namespace=["mreg","local"]`
+- a stable serialized principal key is derived from that identity, for example `mreg::local::admin`
 - `X-Mreg-User` and `X-Mreg-Groups` are ignored for identity resolution
 - protected endpoints require `Authorization: Bearer <token>`
 
@@ -117,14 +120,22 @@ Important behavior:
 
 In `scoped` mode:
 
-- canonical principal ID: `scope:username`
-- canonical group ID: `scope:group`
+Each successful login resolves to:
+
+- principal id: raw username
+- principal namespace: `["mreg", scope]`
+- group ids: raw group names
+- group namespace: `["mreg", scope]`
+- principal key: serialized namespace plus id, for example `mreg::local::admin`
+- group key: serialized namespace plus id, for example `mreg::local::ops`
+
+The login input still uses `scope:username`, but that is only the login syntax. It is not the stored authenticated identity.
 
 Examples:
 
-- `local:admin`
-- `ldap-primary:bob`
-- `remote-sso:ops-admins`
+- login input: `local:admin`
+- authenticated principal: `id="admin", namespace=["mreg","local"]`
+- principal key: `mreg::local::admin`
 
 This avoids collisions between identities coming from different backends.
 
@@ -160,9 +171,22 @@ Success response:
   "token_type": "Bearer",
   "expires_at": "2026-04-16T14:00:00Z",
   "principal": {
-    "id": "local:admin",
+    "id": "admin",
+    "namespace": ["mreg", "local"],
+    "key": "mreg::local::admin",
     "username": "admin",
-    "groups": ["local:ops", "local:net"]
+    "groups": [
+      {
+        "id": "ops",
+        "namespace": ["mreg", "local"],
+        "key": "mreg::local::ops"
+      },
+      {
+        "id": "net",
+        "namespace": ["mreg", "local"],
+        "key": "mreg::local::net"
+      }
+    ]
   },
   "auth_scope": "local",
   "auth_provider_kind": "local"
@@ -181,9 +205,10 @@ Returns the resolved principal for the current request.
 
 In `scoped` mode, the response includes:
 
-- canonical principal
+- namespace-aware principal
+- stable principal key
 - raw username
-- canonical groups
+- namespace-aware groups
 - `auth_scope`
 - `auth_provider_kind`
 - token expiry
@@ -206,7 +231,7 @@ Request body:
 
 ```json
 {
-  "principal_id": "local:admin"
+  "principal_key": "mreg::local::admin"
 }
 ```
 
@@ -300,4 +325,11 @@ Single-token logout and `logout_all` are supported through a revocation store.
   - the upstream service authenticates credentials
   - mreg-rust validates the returned upstream JWT
   - mreg-rust issues the request bearer token
+- JWT `sub` and auth-session revocation use the derived principal key such as `mreg::local::admin`
 - Authentication and authorization are configured independently. You can run `scoped` authentication together with Treetop authorization or with the current development authorization bypass.
+
+## Related documents
+
+- [architecture.md](architecture.md)
+- [authorization.md](authorization.md)
+- [configuration.md](configuration.md)

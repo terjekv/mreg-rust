@@ -2,65 +2,317 @@
 
 ## Goal
 
-`mreg-rust` is a fresh Rust implementation of the core `mreg` DNS and network inventory API.
-The service uses `Actix Web` for HTTP, a storage facade for persistence access, `Diesel` with PostgreSQL
-for the primary production adapter, `MiniJinja` for export templating, `utoipa` for OpenAPI documentation,
-and `treetop-rest` for policy evaluation.
+`mreg-rust` is the Rust implementation of the `mreg` DNS and network inventory service. The application is structured around a narrow request pipeline:
+
+1. HTTP and middleware
+2. authentication
+3. authorization
+4. domain validation
+5. service-layer orchestration
+6. storage-backed transactions
+7. audit and event emission
+
+The design is intentionally pragmatic:
+
+- Actix Web handles HTTP, middleware, and application wiring
+- domain types own validation and normalization
+- services provide one place for application use cases and audit/event wiring
+- storage traits isolate persistence concerns and backend-specific query logic
+- PostgreSQL is the canonical production backend
+- Treetop is the external authorization engine
 
 ## System Boundaries
 
-- This service owns domain data, validation, transactions, import/export workflows, and audit history.
-- `treetop-rest` owns authorization policy evaluation.
-- PostgreSQL is the canonical system of record for production.
-- Background work is executed by database-backed workers using row locking.
-- The rest of the application talks to storage through subsystem traits instead of raw database calls.
-- Cascading side-effects (record cleanup, serial bumps, A/AAAA/PTR auto-creation) are handled atomically inside the storage layer, not orchestrated by the service layer.
+This service owns:
+
+- HTTP API behavior under `/api/v1`
+- authentication and local bearer-token issuance/validation
+- domain validation and normalization
+- persistence and transactional side-effects
+- import/export workflows
+- task queue state
+- audit history
+- domain event emission
+
+This service does not own:
+
+- external policy decisions when Treetop is configured
+- external identity systems used by scoped auth backends such as LDAP or remote SSO
+- live DHCP lease state
+
+## Architectural Layers
+
+### HTTP and middleware
+
+The HTTP surface is built with Actix Web.
+
+Key responsibilities:
+
+- route registration
+- request parsing
+- OpenAPI generation
+- request ID and tracing setup
+- authentication middleware
+
+Relevant modules:
+
+- `src/api/`
+- `src/middleware/`
+- `src/lib.rs`
+
+### Authentication
+
+Authentication resolves the caller into a canonical `PrincipalContext` before handlers execute protected operations.
+
+Current model:
+
+- `auth_mode=none`
+  - trusts `X-Mreg-User` and `X-Mreg-Groups`
+  - intended for tests and trusted local development only
+- `auth_mode=scoped`
+  - authenticates through one configured auth scope
+  - supports `local`, `ldap`, and `remote` scope backends
+  - always issues and validates mreg-local bearer tokens
+
+Important implementation points:
+
+- `middleware::Authn` enforces bearer authentication for protected endpoints
+- resolved principals are attached to request extensions
+- handlers and the authorization layer consume the resolved principal, not raw headers
+
+Relevant modules:
+
+- `src/authn/`
+- `src/middleware/authn.rs`
+
+See [authentication.md](authentication.md) for the full flow.
+
+### Authorization
+
+Authorization happens after authentication has resolved the caller.
+
+Current model:
+
+- if `MREG_TREETOP_URL` is set, authorization is delegated to Treetop
+- if no Treetop URL is configured and `MREG_ALLOW_DEV_AUTHZ_BYPASS=true`, all actions are allowed
+- otherwise requests are denied
+
+Handlers build explicit authorization requests using:
+
+- principal
+- action
+- resource kind
+- resource id
+- resource attrs
+
+Relevant modules:
+
+- `src/authz/`
+- `src/api/v1/authz.rs`
+
+See [authorization.md](authorization.md) and [authz-action-matrix.md](authz-action-matrix.md).
+
+### Domain layer
+
+The domain layer is transport-agnostic. It owns:
+
+- value objects and parsing
+- validation rules
+- filter types
+- pagination and sorting contracts
+- command and response-neutral aggregate types
+
+Examples:
+
+- DNS names, TTLs, CIDRs, MAC addresses
+- import/export command envelopes
+- host attachments and DHCP identifiers
+
+Relevant module:
+
+- `src/domain/`
+
+### Service layer
+
+The service layer is intentionally thin, but it is still a real boundary.
+
+It owns:
+
+- application use-case composition
+- audit-event recording
+- domain event emission
+- keeping handlers away from write-capable storage traits
+
+Handlers should read and write domain data through `Services`, not by reaching directly into backend-specific storage.
+
+Relevant module:
+
+- `src/services/`
+
+### Storage layer
+
+The storage layer is the persistence boundary. It is split into capability-oriented traits rather than a single generic repository.
+
+It owns:
+
+- transactional persistence
+- backend-specific query logic
+- list/filter/sort execution
+- cascading side-effects
+- task queue persistence
+- import/export persistence
+- auth-session revocation state
+
+Current backends:
+
+- `memory`
+  - fast test/development backend
+  - implemented under `src/storage/memory/`
+- `postgres`
+  - canonical production backend
+  - implemented under `src/storage/postgres/`
+
+`ReadableStorage` is intentionally narrow. It is used for backend diagnostics such as health and capabilities, not general domain reads.
+
+Relevant modules:
+
+- `src/storage/`
+- `src/db/`
+
+See [storage-layer.md](storage-layer.md) for the detailed storage model.
+
+### Audit and events
+
+Mutations generate audit history and may emit domain events.
+
+Current model:
+
+- services record history through the `AuditStore`
+- services emit domain events through `EventSinkClient`
+- audit persistence failure is logged, not silently swallowed
+- event delivery supports multiple sinks
+
+Relevant modules:
+
+- `src/audit/`
+- `src/events/`
+
+### Workers and tasks
+
+Long-running or asynchronous workflows are represented as tasks stored in the database/backend and processed by workers.
+
+Current model:
+
+- tasks are created and persisted through the task store
+- PostgreSQL uses `FOR UPDATE SKIP LOCKED` semantics for safe concurrent claiming
+- workers operate on persisted task state rather than in-memory queues
+
+Relevant modules:
+
+- `src/tasks/`
+- `src/workers/`
+- `src/storage/tasks.rs`
+
+## Runtime Request Flow
+
+For a typical protected request:
+
+1. Actix receives the HTTP request.
+2. request ID and root-span middleware attach tracing context.
+3. authn middleware checks whether the path is exempt.
+4. if protected, authn resolves the principal from a bearer token or, in `none` mode, from trusted headers.
+5. the handler parses JSON/query/path input into domain commands and value objects.
+6. the handler builds one or more authorization requests.
+7. authorization is evaluated through Treetop, bypass mode, or deny mode.
+8. the handler calls the appropriate service.
+9. the service calls the storage facade.
+10. the active backend performs the mutation or read, including transactional side-effects.
+11. the service records audit history and emits any domain events.
+12. the handler returns the HTTP response.
+
+## Domain Boundaries in the API
+
+The current `/api/v1` surface is grouped by domain:
+
+- `dns`
+  - nameservers
+  - forward/reverse zones
+  - delegations
+  - records and RRsets
+  - PTR overrides
+- `inventory`
+  - hosts
+  - attachments
+  - IP addresses
+  - networks
+  - labels
+  - host contacts
+  - host groups
+  - BACnet assignments
+- `policy`
+  - network policies
+  - communities
+  - attachment-community assignments
+  - host-policy atoms and roles
+- `auth`
+  - login
+  - me
+  - logout
+  - logout-all
+- `system`
+  - health
+  - version
+  - status
+  - history
+- `workflows`
+  - imports
+  - exports
+  - tasks
+
+This grouping is organizational and API-facing. It is not a microservice split.
 
 ## Top-Level Modules
 
-- `api`: HTTP handlers, route composition, OpenAPI spec generation (utoipa), and Swagger UI.
-- `domain`: transport-agnostic domain types, validation contracts, filters, and pagination types.
-- `services`: thin application use cases forwarding typed commands to storage traits.
-- `storage`: backend-neutral storage facade, runtime backend selection, and trait definitions.
-  - `storage::memory`: in-memory backend for tests and lightweight development.
-  - `storage::postgres`: PostgreSQL backend split into per-store modules (labels, nameservers, zones, hosts, networks, records, ancillary, tasks, imports, exports, audit, helpers).
-- `db`: Diesel connection pool, generated schema (`schema.rs`), row types (`models.rs`), and migration runner.
-- `authz`: adapter for `treetop-rest` request/response mapping with principal extraction and permission checking.
-- `audit`: history event types and audit trail capture.
+- `api`
+  - route composition, handlers, OpenAPI metadata
+- `authn`
+  - scoped login backends, local JWT issuance/validation, principal resolution
+- `authz`
+  - Treetop request building and permission checks
+- `domain`
+  - value objects, commands, filters, pagination, import/export types
+- `services`
+  - use-case facade with audit/event wiring
+- `storage`
+  - trait-based persistence facade and runtime backend selection
+- `db`
+  - PostgreSQL connection pool, migrations, generated schema
+- `events`
+  - domain event sinks and emission
+- `audit`
+  - audit/history event types
+- `middleware`
+  - authn, request ID, tracing span integration
+- `tasks`
+  - task-domain types
+- `workers`
+  - background task execution
 
-## Runtime Flow
+## Backend Strategy
 
-1. HTTP request enters `api`.
-2. Request context is normalized into domain input.
-3. Strings and primitives are converted into typed value objects and command types.
-4. If required, resource facts are assembled and sent to `authz`.
-5. Domain services call the `storage` facade rather than `Diesel` directly.
-6. The active storage backend performs persistence operations with atomic cascading.
-7. Mutating operations emit audit history events within the same storage transaction.
-8. Long-running work is represented as a `task` and processed asynchronously.
+PostgreSQL is the authoritative production target.
 
-## Storage Principles
+That has a few consequences:
 
-- Prefer first-class typed storage for hosts, networks, IP addresses, zones, and delegations.
-- Use capability-oriented traits instead of generic CRUD repositories.
-- Handle cascading side-effects atomically within storage methods (e.g., host deletion cascades to records, IP assignment creates A/AAAA and PTR records, zone serial bumps on any record mutation).
-- Keep PostgreSQL-native optimizations in the PostgreSQL adapter.
-- Use the in-memory backend for targeted tests and lightweight development, not as a semantic substitute for PostgreSQL.
-- Preserve enough permission-relevant facts in the domain model for external policy checks.
-- Keep core invariants in opaque value objects with private fields and explicit constructors.
-- All list operations support cursor-based pagination with configurable sorting and entity-specific filtering at the storage layer.
+- some semantics are intentionally PostgreSQL-first
+- memory is used for speed and ergonomics in tests, not as a perfect semantic twin
+- dual-backend tests cover the shared contract
+- PostgreSQL-specific tests cover transactionality, query behavior, and performance-sensitive paths
 
-## API Surface
+## Related Documents
 
-- REST endpoints under `/api/v1/` with JSON request/response bodies.
-- OpenAPI 3.x spec auto-generated via `utoipa` and served at `/api-docs/openapi.json`.
-- Swagger UI at `/swagger-ui/`.
-- Consistent paginated response shape: `{ items, total, next_cursor }`.
-- Entity-specific query parameters for filtering and sorting.
-
-## Compatibility Strategy
-
-- Preserve the main conceptual nouns and workflows from upstream `mreg`.
-- Maintain a semantically compatible `/api/v1` surface.
-- Favor Rust-native internal structure over Django model mirroring.
-- Defer legacy import tooling until the fresh-install MVP is stable.
+- [authentication.md](authentication.md)
+- [authorization.md](authorization.md)
+- [storage-layer.md](storage-layer.md)
+- [configuration.md](configuration.md)
+- [domain-catalog.md](domain-catalog.md)

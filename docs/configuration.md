@@ -96,10 +96,13 @@ Supported scope kinds:
 
 Each scope has a unique startup-defined `name`. Clients log in with `username` in `scope:username` form, for example `local:admin` or `ldap-primary:bob`.
 
-Canonical identity is scope-qualified:
+Authenticated identity is namespace-aware:
 
-- principal IDs are `scope:username`
-- group IDs are `scope:group`
+- principal id is the raw username
+- principal namespace is `["mreg", scope]`
+- group ids are raw group names
+- group namespace is `["mreg", scope]`
+- the stable serialized principal key is `mreg::<scope>::<username>`
 
 Example scope registry:
 

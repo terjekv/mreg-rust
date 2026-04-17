@@ -28,7 +28,7 @@ impl RootSpanBuilder for MregRootSpan {
         let principal = request
             .extensions()
             .get::<PrincipalContext>()
-            .map(|context| context.principal.id.clone())
+            .map(|context| context.principal.key())
             .or_else(|| {
                 request
                     .headers()

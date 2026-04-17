@@ -135,7 +135,7 @@ impl TestCtx {
     }
 
     pub fn bacnet_id(&self, slot: u32) -> u32 {
-        (((run_nonce() as u32) << 16) | ((self.id as u32) << 8)).saturating_add(slot.max(1))
+        (((run_nonce() as u32) << 8) | ((self.id as u32) & 0xff)).saturating_add(slot.max(1))
     }
 
     pub async fn get_status(&self, uri: &str) -> StatusCode {

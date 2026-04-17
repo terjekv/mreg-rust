@@ -211,7 +211,7 @@ The existing mreg-cli will not work directly against mreg-rust due to different 
 
 Old mreg used Django REST framework token auth. mreg-rust now supports:
 - `none`: trusted `X-Mreg-User` and `X-Mreg-Groups` headers
-- `scoped`: named `local`, `ldap`, or `remote` auth scopes with login as `scope:username` and mreg-issued JWT access tokens
+- `scoped`: named `local`, `ldap`, or `remote` auth scopes with login as `scope:username` and mreg-issued JWT access tokens for namespace-aware principals
 
 Authorization is still delegated to Treetop (or bypassed in dev mode). See [authentication.md](authentication.md) for the operational details.
 

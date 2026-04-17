@@ -11,7 +11,7 @@ The original [mreg](https://github.com/unioslo/mreg) is a Django REST framework 
 - **Type safety.** Python's dynamic types let invalid data slip through to the database. DNS names, CIDRs, serial numbers, and TTLs deserve compile-time enforcement.
 - **Tight coupling.** Django model serializers mix persistence, validation, and HTTP concerns in one layer. Adding a new record type means touching models, serializers, views, and URL configs.
 - **Seperation of concerns.** Django mreg has only limited support for multi-step operations that must succeed or fail atomically (e.g., creating a host with multiple IPs). This new implementation provides a storage trait layer with pluggable backends, allowing for atomic transactions across multiple entities and operations at the trait boudary layer.
-- **Async work.** Background tasks (zone exports, reports, bulk imports) do not exist in Django mreg, and would probably end up hacing to  rely on Celery, adding operational complexity due to python threading and process management. mreg-rust has a built-in task queue management through the pluggable storage backends.
+- **Async work.** Background tasks (zone exports, reports, bulk imports) do not exist in Django mreg, and would probably end up having to rely on Celery, adding operational complexity due to python threading and process management. mreg-rust has a built-in task queue management through the pluggable storage backends.
 
 mreg-rust is not a line-by-line port. It preserves the domain concepts and API semantics but redesigns the internals from scratch.
 
@@ -192,7 +192,7 @@ Django mreg uses Django REST framework token authentication.
 mreg-rust supports two modes:
 
 - **`none`** -- identity trusted from `X-Mreg-User`/`X-Mreg-Groups` headers (dev/test)
-- **`scoped`** -- login with `scope:username` against configured backends (local users with Argon2id, LDAP bind, or remote JWT delegation), receiving an mreg-issued JWT
+- **`scoped`** -- login with `scope:username` against configured backends (local users with Argon2id, LDAP bind, or remote JWT delegation), receiving an mreg-issued JWT with a namespace-aware principal such as `["mreg","local"] + "admin"`
 
 Authorization is still delegated to Treetop for policy evaluation, same as in Django mreg.
 

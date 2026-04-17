@@ -194,8 +194,16 @@ async fn none_mode_keeps_header_based_identity_and_disables_login() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["principal"]["id"], "alice");
+    assert_eq!(body["principal"]["namespace"], json!([]));
+    assert_eq!(body["principal"]["key"], "alice");
     assert_eq!(body["principal"]["username"], "alice");
-    assert_eq!(body["principal"]["groups"], json!(["ops", "net"]));
+    assert_eq!(
+        body["principal"]["groups"],
+        json!([
+            {"id":"ops","namespace":[],"key":"ops"},
+            {"id":"net","namespace":[],"key":"net"}
+        ])
+    );
     assert!(body["auth_scope"].is_null());
     assert!(body["auth_provider_kind"].is_null());
 
@@ -212,7 +220,7 @@ async fn none_mode_keeps_header_based_identity_and_disables_login() {
 }
 
 #[actix_web::test]
-async fn local_scope_login_issues_prefixed_identity() {
+async fn local_scope_login_issues_namespaced_identity() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
@@ -229,11 +237,16 @@ async fn local_scope_login_issues_prefixed_identity() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let access_token = body["access_token"].as_str().expect("token").to_string();
-    assert_eq!(body["principal"]["id"], "local:admin");
+    assert_eq!(body["principal"]["id"], "admin");
+    assert_eq!(body["principal"]["namespace"], json!(["mreg", "local"]));
+    assert_eq!(body["principal"]["key"], "mreg::local::admin");
     assert_eq!(body["principal"]["username"], "admin");
     assert_eq!(
         body["principal"]["groups"],
-        json!(["local:admins", "local:ops"])
+        json!([
+            {"id":"admins","namespace":["mreg","local"],"key":"mreg::local::admins"},
+            {"id":"ops","namespace":["mreg","local"],"key":"mreg::local::ops"}
+        ])
     );
     assert_eq!(body["auth_scope"], "local");
     assert_eq!(body["auth_provider_kind"], "local");
@@ -247,7 +260,9 @@ async fn local_scope_login_issues_prefixed_identity() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["principal"]["id"], "local:admin");
+    assert_eq!(body["principal"]["id"], "admin");
+    assert_eq!(body["principal"]["namespace"], json!(["mreg", "local"]));
+    assert_eq!(body["principal"]["key"], "mreg::local::admin");
     assert_eq!(body["principal"]["username"], "admin");
     assert_eq!(body["auth_scope"], "local");
     assert_eq!(body["auth_provider_kind"], "local");
@@ -286,11 +301,19 @@ async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
     assert_eq!(status, StatusCode::OK);
     let access_token = body["access_token"].as_str().expect("token").to_string();
     assert_ne!(access_token, upstream_token);
-    assert_eq!(body["principal"]["id"], "remote-sso:alice");
+    assert_eq!(body["principal"]["id"], "alice");
+    assert_eq!(
+        body["principal"]["namespace"],
+        json!(["mreg", "remote-sso"])
+    );
+    assert_eq!(body["principal"]["key"], "mreg::remote-sso::alice");
     assert_eq!(body["principal"]["username"], "alice");
     assert_eq!(
         body["principal"]["groups"],
-        json!(["remote-sso:ops", "remote-sso:net"])
+        json!([
+            {"id":"ops","namespace":["mreg","remote-sso"],"key":"mreg::remote-sso::ops"},
+            {"id":"net","namespace":["mreg","remote-sso"],"key":"mreg::remote-sso::net"}
+        ])
     );
     assert_eq!(body["auth_scope"], "remote-sso");
     assert_eq!(body["auth_provider_kind"], "remote");
@@ -304,7 +327,12 @@ async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["principal"]["id"], "remote-sso:alice");
+    assert_eq!(body["principal"]["id"], "alice");
+    assert_eq!(
+        body["principal"]["namespace"],
+        json!(["mreg", "remote-sso"])
+    );
+    assert_eq!(body["principal"]["key"], "mreg::remote-sso::alice");
     assert_eq!(body["principal"]["username"], "alice");
     assert_eq!(body["auth_scope"], "remote-sso");
     assert_eq!(body["auth_provider_kind"], "remote");
@@ -360,7 +388,12 @@ async fn scoped_mode_requires_bearer_and_ignores_identity_headers() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["principal"]["id"], "remote-sso:alice");
+    assert_eq!(body["principal"]["id"], "alice");
+    assert_eq!(
+        body["principal"]["namespace"],
+        json!(["mreg", "remote-sso"])
+    );
+    assert_eq!(body["principal"]["key"], "mreg::remote-sso::alice");
 }
 
 #[actix_web::test]
@@ -509,7 +542,7 @@ async fn logout_all_revokes_existing_tokens_for_the_principal() {
         test::TestRequest::post()
             .uri("/auth/logout-all")
             .insert_header(("Authorization", format!("Bearer {access_token}")))
-            .set_json(json!({"principal_id":"local:admin"}))
+            .set_json(json!({"principal_key":"mreg::local::admin"}))
             .to_request(),
         state.clone(),
     )
@@ -553,7 +586,7 @@ async fn logout_all_requires_authorization() {
         test::TestRequest::post()
             .uri("/auth/logout-all")
             .insert_header(("Authorization", format!("Bearer {access_token}")))
-            .set_json(json!({"principal_id":"local:admin"}))
+            .set_json(json!({"principal_key":"mreg::local::admin"}))
             .to_request(),
         state,
     )

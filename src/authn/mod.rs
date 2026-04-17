@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    authz::{Group, Principal},
+    authz::{Group, Principal, scoped_identity_namespace},
     config::{AuthMode, AuthScopeBackendConfig, AuthScopeKind, Config},
     errors::AppError,
     storage::DynStorage,
@@ -341,7 +341,7 @@ impl AuthnClient {
         if let Some(revoked_before) = self
             .storage
             .auth_sessions()
-            .principal_revoked_before(&context.principal.id)
+            .principal_revoked_before(&context.principal.key())
             .await?
         {
             let issued_at = context.issued_at.ok_or_else(|| {
@@ -365,18 +365,18 @@ impl AuthnClient {
             .auth_sessions()
             .revoke_token(
                 token_fingerprint,
-                context.principal.id.clone(),
+                context.principal.key(),
                 context.expires_at,
             )
             .await
     }
 
-    pub async fn logout_all_for_principal(&self, principal_id: &str) -> Result<(), AppError> {
+    pub async fn logout_all_for_principal(&self, principal_key: &str) -> Result<(), AppError> {
         // iat is stored at millisecond precision, so revoked_before with full nanosecond
         // precision correctly distinguishes tokens issued before vs after logout_all.
         self.storage
             .auth_sessions()
-            .revoke_all_for_principal(principal_id.to_string(), Utc::now())
+            .revoke_all_for_principal(principal_key.to_string(), Utc::now())
             .await
     }
 }
@@ -399,22 +399,19 @@ fn canonical_principal(
     identity: &AuthenticatedIdentity,
 ) -> Principal {
     let _ = scope_kind;
+    let namespace = scoped_identity_namespace(scope_name);
     Principal {
-        id: canonicalize_scoped_value(scope_name, &identity.username),
-        namespace: Vec::new(),
+        id: identity.username.clone(),
+        namespace: namespace.clone(),
         groups: identity
             .groups
             .iter()
             .map(|group| Group {
-                id: canonicalize_scoped_value(scope_name, group),
-                namespace: Vec::new(),
+                id: group.clone(),
+                namespace: namespace.clone(),
             })
             .collect(),
     }
-}
-
-fn canonicalize_scoped_value(scope_name: &str, value: &str) -> String {
-    format!("{}:{}", scope_name.trim(), value.trim())
 }
 
 fn validate_backend_identity_component(value: &str, label: &str) -> Result<(), AppError> {
@@ -513,11 +510,29 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_scoped_value_trims_both_sides() {
-        assert_eq!(
-            canonicalize_scoped_value(" local ", " alice "),
-            "local:alice"
+    fn canonical_principal_uses_namespace_aware_identity() {
+        let principal = canonical_principal(
+            "local",
+            &AuthScopeKind::Local,
+            &AuthenticatedIdentity {
+                username: "alice".to_string(),
+                groups: vec!["ops".to_string()],
+                max_expires_at: None,
+            },
         );
+
+        assert_eq!(principal.id, "alice");
+        assert_eq!(
+            principal.namespace,
+            vec!["mreg".to_string(), "local".to_string()]
+        );
+        assert_eq!(principal.key(), "mreg::local::alice");
+        assert_eq!(principal.groups[0].id, "ops");
+        assert_eq!(
+            principal.groups[0].namespace,
+            vec!["mreg".to_string(), "local".to_string()]
+        );
+        assert_eq!(principal.groups[0].key(), "mreg::local::ops");
     }
 
     #[test]

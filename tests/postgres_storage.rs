@@ -1121,7 +1121,7 @@ async fn postgres_import_rolls_back_extended_legacy_batch_on_late_failure()
         .run_import_batch(summary.id())
         .await
         .expect_err("late invalid item should fail the import");
-    assert!(error.to_string().contains("label"));
+    assert!(error.to_string().contains("role-label-invalid"));
 
     let imports = storage
         .imports()
@@ -1756,12 +1756,12 @@ async fn postgres_revoked_token_persists_across_fresh_contexts()
     };
 
     let fingerprint = ctx.name("revoked-token");
-    let principal_id = format!("local:{}", ctx.name("principal"));
+    let principal_key = format!("mreg::local::{}", ctx.name("principal"));
     let expires_at = Utc::now() + Duration::hours(1);
 
     ctx.storage()
         .auth_sessions()
-        .revoke_token(fingerprint.clone(), principal_id.clone(), expires_at)
+        .revoke_token(fingerprint.clone(), principal_key.clone(), expires_at)
         .await?;
 
     let fresh = postgres_ctx("postgres_revoked_token_persists_across_fresh_contexts-fresh")
@@ -1786,12 +1786,12 @@ async fn postgres_logout_all_cutoff_persists_across_fresh_contexts()
         return Ok(());
     };
 
-    let principal_id = format!("local:{}", ctx.name("principal"));
+    let principal_key = format!("mreg::local::{}", ctx.name("principal"));
     let cutoff = Utc::now();
 
     ctx.storage()
         .auth_sessions()
-        .revoke_all_for_principal(principal_id.clone(), cutoff)
+        .revoke_all_for_principal(principal_key.clone(), cutoff)
         .await?;
 
     let fresh = postgres_ctx("postgres_logout_all_cutoff_persists_across_fresh_contexts-fresh")
@@ -1800,7 +1800,7 @@ async fn postgres_logout_all_cutoff_persists_across_fresh_contexts()
     let stored = fresh
         .storage()
         .auth_sessions()
-        .principal_revoked_before(&principal_id)
+        .principal_revoked_before(&principal_key)
         .await?;
     assert!(stored.is_some());
     assert!(stored.expect("revocation cutoff") >= cutoff);
@@ -1902,7 +1902,9 @@ async fn postgres_host_filter_and_sort_use_sql() -> Result<(), Box<dyn std::erro
 
     let body = ctx
         .get_json(
-            "/inventory/hosts?comment__contains=sql-cluster&sort_by=comment&sort_dir=desc&limit=10",
+            &format!(
+                "/inventory/hosts?zone={zone}&comment__contains=sql-cluster&sort_by=comment&sort_dir=desc&limit=10"
+            ),
         )
         .await;
     let names: Vec<&str> = body["items"]
@@ -1919,7 +1921,9 @@ async fn postgres_host_filter_and_sort_use_sql() -> Result<(), Box<dyn std::erro
         .expect("fresh postgres context");
     let body = fresh
         .get_json(
-            "/inventory/hosts?comment__contains=sql-cluster&sort_by=comment&sort_dir=desc&limit=10",
+            &format!(
+                "/inventory/hosts?zone={zone}&comment__contains=sql-cluster&sort_by=comment&sort_dir=desc&limit=10"
+            ),
         )
         .await;
     let names: Vec<&str> = body["items"]
@@ -1943,10 +1947,13 @@ async fn postgres_network_filter_and_sort_use_sql() -> Result<(), Box<dyn std::e
     let cidr_a = ctx.cidr(51);
     let cidr_b = ctx.cidr(52);
     let cidr_other = ctx.cidr(53);
+    let prod_alpha = format!("{} prod alpha", ctx.namespace());
+    let prod_omega = format!("{} prod omega", ctx.namespace());
+    let guest_access = format!("{} guest access", ctx.namespace());
     for (cidr, description) in [
-        (&cidr_a, "prod alpha"),
-        (&cidr_b, "prod omega"),
-        (&cidr_other, "guest access"),
+        (&cidr_a, prod_alpha.as_str()),
+        (&cidr_b, prod_omega.as_str()),
+        (&cidr_other, guest_access.as_str()),
     ] {
         let status = ctx
             .post(
@@ -1959,7 +1966,10 @@ async fn postgres_network_filter_and_sort_use_sql() -> Result<(), Box<dyn std::e
 
     let body = ctx
         .get_json(
-            "/inventory/networks?description__contains=prod&sort_by=description&sort_dir=desc&limit=10",
+            &format!(
+                "/inventory/networks?description__contains={}&sort_by=description&sort_dir=desc&limit=10",
+                ctx.namespace()
+            ),
         )
         .await;
     let cidrs: Vec<&str> = body["items"]
@@ -1976,7 +1986,10 @@ async fn postgres_network_filter_and_sort_use_sql() -> Result<(), Box<dyn std::e
         .expect("fresh postgres context");
     let body = fresh
         .get_json(
-            "/inventory/networks?description__contains=prod&sort_by=description&sort_dir=desc&limit=10",
+            &format!(
+                "/inventory/networks?description__contains={}&sort_by=description&sort_dir=desc&limit=10",
+                ctx.namespace()
+            ),
         )
         .await;
     let cidrs: Vec<&str> = body["items"]
@@ -2423,7 +2436,8 @@ async fn postgres_builtin_bootstrap_is_idempotent_across_fresh_contexts()
 async fn postgres_auth_login_and_me_work_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-login";
-    let principal_id = format!("{scope}:admin");
+    let login_username = format!("{scope}:admin");
+    let principal_key = format!("mreg::{scope}::admin");
     let Some(state_a) = postgres_scoped_auth_state(scope, true) else {
         eprintln!(
             "{}",
@@ -2437,7 +2451,7 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
     let (status, body) = call_auth_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":principal_id,"password":"secret"}))
+            .set_json(json!({"username":login_username,"password":"secret"}))
             .to_request(),
         state_a.clone(),
     )
@@ -2457,7 +2471,9 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["principal"]["id"], principal_id);
+    assert_eq!(body["principal"]["id"], "admin");
+    assert_eq!(body["principal"]["namespace"], json!(["mreg", scope]));
+    assert_eq!(body["principal"]["key"], principal_key);
 
     let fresh = postgres_scoped_auth_state(scope, true).expect("fresh postgres auth state");
     let (status, body) = call_auth_json(
@@ -2469,7 +2485,9 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["principal"]["id"], principal_id);
+    assert_eq!(body["principal"]["id"], "admin");
+    assert_eq!(body["principal"]["namespace"], json!(["mreg", scope]));
+    assert_eq!(body["principal"]["key"], principal_key);
 
     Ok(())
 }
@@ -2478,7 +2496,7 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
 async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-logout";
-    let principal_id = format!("{scope}:admin");
+    let login_username = format!("{scope}:admin");
     let Some(state_a) = postgres_scoped_auth_state(scope, true) else {
         eprintln!(
             "{}",
@@ -2492,7 +2510,7 @@ async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
     let (status, body) = call_auth_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":principal_id,"password":"secret"}))
+            .set_json(json!({"username":login_username,"password":"secret"}))
             .to_request(),
         state_a.clone(),
     )
@@ -2533,7 +2551,8 @@ async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
 async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-logout-all";
-    let principal_id = format!("{scope}:admin");
+    let login_username = format!("{scope}:admin");
+    let principal_key = format!("mreg::{scope}::admin");
     let Some(state_a) = postgres_scoped_auth_state(scope, true) else {
         eprintln!(
             "{}",
@@ -2547,7 +2566,7 @@ async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
     let (status, body) = call_auth_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":principal_id,"password":"secret"}))
+            .set_json(json!({"username":login_username,"password":"secret"}))
             .to_request(),
         state_a.clone(),
     )
@@ -2562,7 +2581,7 @@ async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
         test::TestRequest::post()
             .uri("/auth/logout-all")
             .insert_header(("Authorization", format!("Bearer {access_token}")))
-            .set_json(json!({ "principal_id": principal_id }))
+            .set_json(json!({ "principal_key": principal_key }))
             .to_request(),
         state_a,
     )

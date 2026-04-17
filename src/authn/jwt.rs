@@ -17,10 +17,18 @@ use crate::{
 use super::{AuthenticatedIdentity, PrincipalContext};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalJwtGroupClaim {
+    pub id: String,
+    pub namespace: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalJwtClaims {
     pub sub: String,
+    pub principal_id: String,
+    pub principal_namespace: Vec<String>,
     pub username: String,
-    pub groups: Vec<String>,
+    pub groups: Vec<LocalJwtGroupClaim>,
     pub auth_scope: String,
     pub auth_provider_kind: String,
     pub iat: i64,
@@ -61,12 +69,17 @@ impl LocalJwtIssuer {
             _ => local_expires_at,
         };
         let claims = LocalJwtClaims {
-            sub: principal.id.clone(),
+            sub: principal.key(),
+            principal_id: principal.id.clone(),
+            principal_namespace: principal.namespace.clone(),
             username: raw_username.to_string(),
             groups: principal
                 .groups
                 .iter()
-                .map(|group| group.id.clone())
+                .map(|group| LocalJwtGroupClaim {
+                    id: group.id.clone(),
+                    namespace: group.namespace.clone(),
+                })
                 .collect(),
             auth_scope: auth_scope.to_string(),
             auth_provider_kind: auth_provider_kind.to_string(),
@@ -109,20 +122,26 @@ impl LocalJwtValidator {
             .ok_or_else(|| AppError::unauthorized("invalid token expiry"))?;
         let issued_at = DateTime::from_timestamp_millis(data.claims.iat)
             .ok_or_else(|| AppError::unauthorized("invalid token issue time"))?;
+        let principal = Principal {
+            id: data.claims.principal_id,
+            namespace: data.claims.principal_namespace,
+            groups: data
+                .claims
+                .groups
+                .into_iter()
+                .map(|group| Group {
+                    id: group.id,
+                    namespace: group.namespace,
+                })
+                .collect(),
+        };
+        if data.claims.sub != principal.key() {
+            return Err(AppError::unauthorized(
+                "token subject does not match principal identity",
+            ));
+        }
         Ok(PrincipalContext::scoped(
-            Principal {
-                id: data.claims.sub,
-                namespace: Vec::new(),
-                groups: data
-                    .claims
-                    .groups
-                    .into_iter()
-                    .map(|id| Group {
-                        id,
-                        namespace: Vec::new(),
-                    })
-                    .collect(),
-            },
+            principal,
             data.claims.username,
             data.claims.auth_scope,
             data.claims.auth_provider_kind,
@@ -407,11 +426,11 @@ mod tests {
     #[test]
     fn local_token_round_trip() {
         let principal = Principal {
-            id: "local:alice".to_string(),
-            namespace: Vec::new(),
+            id: "alice".to_string(),
+            namespace: vec!["mreg".to_string(), "local".to_string()],
             groups: vec![Group {
-                id: "local:ops".to_string(),
-                namespace: Vec::new(),
+                id: "ops".to_string(),
+                namespace: vec!["mreg".to_string(), "local".to_string()],
             }],
         };
         let issuer = LocalJwtIssuer::new("secret", "mreg-rust", 300);
@@ -420,18 +439,25 @@ mod tests {
             .expect("issue token");
         let validator = LocalJwtValidator::new("secret", "mreg-rust");
         let context = validator.validate(&token).expect("validate token");
-        assert_eq!(context.principal.id, "local:alice");
+        assert_eq!(context.principal.id, "alice");
+        assert_eq!(
+            context.principal.namespace,
+            vec!["mreg".to_string(), "local".to_string()]
+        );
+        assert_eq!(context.principal.key(), "mreg::local::alice");
         assert_eq!(context.username, "alice");
         assert_eq!(context.auth_scope.as_deref(), Some("local"));
         assert_eq!(context.auth_provider_kind.as_deref(), Some("local"));
         assert_eq!(context.principal.groups.len(), 1);
+        assert_eq!(context.principal.groups[0].id, "ops");
+        assert_eq!(context.principal.groups[0].key(), "mreg::local::ops");
     }
 
     #[test]
     fn local_token_rejects_wrong_secret() {
         let principal = Principal {
-            id: "local:alice".to_string(),
-            namespace: Vec::new(),
+            id: "alice".to_string(),
+            namespace: vec!["mreg".to_string(), "local".to_string()],
             groups: Vec::new(),
         };
         let issuer = LocalJwtIssuer::new("secret", "mreg-rust", 300);
@@ -445,8 +471,8 @@ mod tests {
     #[test]
     fn local_token_rejects_wrong_issuer() {
         let principal = Principal {
-            id: "local:alice".to_string(),
-            namespace: Vec::new(),
+            id: "alice".to_string(),
+            namespace: vec!["mreg".to_string(), "local".to_string()],
             groups: Vec::new(),
         };
         let issuer = LocalJwtIssuer::new("secret", "mreg-rust", 300);
@@ -463,8 +489,8 @@ mod tests {
     #[test]
     fn local_token_rejects_expired() {
         let principal = Principal {
-            id: "local:alice".to_string(),
-            namespace: Vec::new(),
+            id: "alice".to_string(),
+            namespace: vec!["mreg".to_string(), "local".to_string()],
             groups: Vec::new(),
         };
         // Issue a valid token, then force expiry by setting max_expires_at in the past

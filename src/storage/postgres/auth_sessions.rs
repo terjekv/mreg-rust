@@ -62,6 +62,10 @@ impl AuthSessionStore for PostgresStorage {
         principal_id: String,
         revoked_before: DateTime<Utc>,
     ) -> Result<(), AppError> {
+        // PostgreSQL TIMESTAMPTZ has microsecond precision. Truncate nanoseconds before
+        // storing so that a read-back of the stored value equals the value we wrote.
+        let revoked_before = DateTime::from_timestamp_micros(revoked_before.timestamp_micros())
+            .unwrap_or(revoked_before);
         self.database
             .run(move |connection| {
                 let existing = principal_token_revocations::table

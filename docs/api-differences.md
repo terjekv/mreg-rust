@@ -149,7 +149,7 @@ See [pagination-sort-filter.md](pagination-sort-filter.md) for the full operator
 **mreg-rust**: Configurable authentication with two modes:
 
 - `none`: trust `X-Mreg-User` and `X-Mreg-Groups` headers
-- `scoped`: login as `scope:username` against configured `local`, `ldap`, or `remote` scopes, always returning an mreg-issued JWT
+- `scoped`: login as `scope:username` against configured `local`, `ldap`, or `remote` scopes, always returning an mreg-issued JWT for a namespace-aware principal
 
 Authorization is still delegated to Treetop or the current development bypass/deny behavior. See [authentication.md](authentication.md) for the full flow.
 

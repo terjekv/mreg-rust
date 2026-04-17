@@ -86,10 +86,19 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct GroupResponse {
+    pub id: String,
+    pub namespace: Vec<String>,
+    pub key: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PrincipalResponse {
     pub id: String,
+    pub namespace: Vec<String>,
+    pub key: String,
     pub username: String,
-    pub groups: Vec<String>,
+    pub groups: Vec<GroupResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -112,7 +121,8 @@ pub struct MeResponse {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LogoutAllRequest {
-    pub principal_id: String,
+    #[serde(alias = "principal_id")]
+    pub principal_key: String,
 }
 
 /// Login and obtain a bearer token.
@@ -228,14 +238,14 @@ pub(crate) async fn logout_all(
             &req,
             actions::auth_session::LOGOUT_ALL,
             actions::resource_kinds::AUTH_SESSION,
-            &body.principal_id,
+            &body.principal_key,
         )
         .build(),
     )
     .await?;
     state
         .authn
-        .logout_all_for_principal(&body.principal_id)
+        .logout_all_for_principal(&body.principal_key)
         .await?;
     Ok(HttpResponse::NoContent().finish())
 }
@@ -262,11 +272,17 @@ fn current_principal_context(
 fn principal_response(principal: &crate::authz::Principal, username: &str) -> PrincipalResponse {
     PrincipalResponse {
         id: principal.id.clone(),
+        namespace: principal.namespace.clone(),
+        key: principal.key(),
         username: username.to_string(),
         groups: principal
             .groups
             .iter()
-            .map(|group| group.id.clone())
+            .map(|group| GroupResponse {
+                id: group.id.clone(),
+                namespace: group.namespace.clone(),
+                key: group.key(),
+            })
             .collect(),
     }
 }
