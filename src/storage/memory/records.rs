@@ -345,11 +345,16 @@ impl RecordStore for MemoryStorage {
             .filter(|record| filter.matches(record))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |record, field| match field {
-            "owner_name" => record.owner_name().to_string(),
-            "created_at" => record.created_at().to_rfc3339(),
-            _ => record.type_name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["owner_name", "created_at"],
+            |record, field| match field {
+                "owner_name" => record.owner_name().to_string(),
+                "created_at" => record.created_at().to_rfc3339(),
+                _ => record.type_name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

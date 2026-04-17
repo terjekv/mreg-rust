@@ -1,4 +1,5 @@
-use actix_web::{HttpRequest, HttpResponse, get, post, web};
+use actix_governor::KeyExtractor;
+use actix_web::{HttpRequest, HttpResponse, dev::ServiceRequest, get, post, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -10,11 +11,70 @@ use crate::{
     errors::AppError,
 };
 
-pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(login)
-        .service(me)
-        .service(logout)
-        .service(logout_all);
+/// Rate-limit key extractor for the login endpoint.
+///
+/// When `trust_proxy_headers` is true (enabled by MREG_AUTH_LOGIN_TRUST_PROXY_HEADERS),
+/// the extractor reads the client IP from X-Forwarded-For then X-Real-IP, falling
+/// back to peer_addr. Only enable this behind a trusted reverse proxy that strips
+/// and rebuilds these headers; leaving it off when not behind such a proxy prevents
+/// clients from spoofing headers to bypass the rate limit.
+///
+/// When false (the default), only peer_addr is used — safe in all deployments but
+/// means all clients behind the same proxy share one rate-limit bucket.
+#[derive(Clone, Debug)]
+struct LoginRateLimitExtractor {
+    trust_proxy_headers: bool,
+}
+
+impl KeyExtractor for LoginRateLimitExtractor {
+    type Key = String;
+    type KeyExtractionError = std::convert::Infallible;
+
+    fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
+        if self.trust_proxy_headers {
+            if let Some(forwarded_for) = req.headers().get("X-Forwarded-For") {
+                if let Ok(ip_str) = forwarded_for.to_str() {
+                    if let Some(ip) = ip_str.split(',').next().map(str::trim) {
+                        return Ok(ip.to_string());
+                    }
+                }
+            }
+            if let Some(real_ip) = req.headers().get("X-Real-IP") {
+                if let Ok(ip_str) = real_ip.to_str() {
+                    return Ok(ip_str.trim().to_string());
+                }
+            }
+        }
+        if let Some(addr) = req.peer_addr() {
+            return Ok(addr.ip().to_string());
+        }
+        Ok("unknown".to_string())
+    }
+}
+
+pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
+    use actix_governor::{Governor, GovernorConfigBuilder};
+
+    // Rate-limit the login endpoint: 5 req burst, then 1 req/s sustained (200 ms/token).
+    // web::resource is used instead of web::scope("") to avoid the empty scope acting as
+    // a catch-all that would block other routes from being matched.
+    let login_conf = GovernorConfigBuilder::default()
+        .key_extractor(LoginRateLimitExtractor {
+            trust_proxy_headers,
+        })
+        .milliseconds_per_request(200)
+        .burst_size(5)
+        .finish()
+        .expect("valid rate limit configuration");
+
+    cfg.service(
+        web::resource("/auth/login")
+            .wrap(Governor::new(&login_conf))
+            .route(web::post().to(login_handler)),
+    )
+    .service(me)
+    .service(logout)
+    .service(logout_all);
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -69,6 +129,14 @@ pub struct LogoutAllRequest {
 )]
 #[post("/auth/login")]
 pub(crate) async fn login(
+    state: web::Data<AppState>,
+    body: web::Json<LoginRequest>,
+) -> Result<HttpResponse, AppError> {
+    login_handler(state, body).await
+}
+
+/// Login handler used by the rate-limited web::resource route.
+async fn login_handler(
     state: web::Data<AppState>,
     body: web::Json<LoginRequest>,
 ) -> Result<HttpResponse, AppError> {

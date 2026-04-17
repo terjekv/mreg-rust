@@ -48,7 +48,13 @@ impl SystemListResponse {
             items: page
                 .items
                 .iter()
-                .map(|item| serde_json::to_value(item).unwrap_or_default())
+                .filter_map(|item| {
+                    serde_json::to_value(item)
+                        .map_err(|e| {
+                            tracing::error!(error = %e, "failed to serialize audit record — dropping item from response")
+                        })
+                        .ok()
+                })
                 .collect(),
             total: page.total,
             next_cursor: page.next_cursor,
@@ -57,10 +63,10 @@ impl SystemListResponse {
     }
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig) {
+pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
     cfg.configure(system::configure)
         .configure(dns::configure)
-        .configure(auth::configure)
+        .configure(|cfg| auth::configure(cfg, trust_proxy_headers))
         .configure(attachment_community_assignments::configure)
         .configure(attachments::configure)
         .configure(bacnet_ids::configure)
@@ -136,7 +142,7 @@ mod tests {
             App::new()
                 .app_data(web::Data::new(state))
                 .app_data(crate::api::json_config(json_limit))
-                .configure(super::configure),
+                .configure(|cfg| super::configure(cfg, false)),
         )
         .await;
 
@@ -159,7 +165,7 @@ mod tests {
             App::new()
                 .app_data(web::Data::new(state))
                 .app_data(crate::api::json_config(json_limit))
-                .configure(super::configure),
+                .configure(|cfg| super::configure(cfg, false)),
         )
         .await;
 
@@ -180,7 +186,7 @@ mod tests {
             App::new()
                 .app_data(web::Data::new(state))
                 .app_data(crate::api::json_config(json_limit))
-                .configure(super::configure),
+                .configure(|cfg| super::configure(cfg, false)),
         )
         .await;
 
@@ -203,7 +209,7 @@ mod tests {
             App::new()
                 .app_data(web::Data::new(state))
                 .app_data(crate::api::json_config(json_limit))
-                .configure(super::configure),
+                .configure(|cfg| super::configure(cfg, false)),
         )
         .await;
 

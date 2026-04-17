@@ -14,7 +14,7 @@ use crate::{
         types::{CidrValue, CommunityName, NetworkPolicyName},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page},
+    storage::postgres::helpers::{map_unique, rows_to_page, run_count_query, run_dynamic_query},
     storage::{CommunityStore, postgres::PostgresStorage},
 };
 
@@ -72,30 +72,40 @@ pub(super) fn list(
         format!(" WHERE {}", clauses.join(" AND "))
     };
     let order_col = match page.sort_by() {
+        Some("name") => "c.name::text",
         Some("policy_name") => "np.name::text",
         Some("created_at") => "c.created_at",
-        _ => "c.name::text",
+        None => "c.name::text",
+        Some(other) => {
+            return Err(AppError::validation(format!(
+                "unsupported sort_by field for communities: {other}"
+            )));
+        }
     };
     let order_dir = match page.sort_direction() {
         crate::domain::pagination::SortDirection::Asc => "ASC",
         crate::domain::pagination::SortDirection::Desc => "DESC",
     };
-    let query_str = format!("{base}{where_str} ORDER BY {order_col} {order_dir}, c.id");
+    let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
+    let total = run_count_query(connection, &count_sql, &values)?;
+
+    let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+        format!(" LIMIT {}", page.limit() + 1)
+    } else {
+        String::new()
+    };
+    let query_str =
+        format!("{base}{where_str} ORDER BY {order_col} {order_dir}, c.id{limit_clause}");
 
     let rows = run_dynamic_query::<CommunityRow>(connection, &query_str, &values)?;
 
-    let all: Vec<Community> = rows
+    let items: Vec<Community> = rows
         .into_iter()
         .map(row_to_community)
         .collect::<Result<Vec<_>, AppError>>()?;
 
-    // Apply special filters (network, search) in Rust
-    let items: Vec<Community> = all
-        .into_iter()
-        .filter(|community| filter.matches(community))
-        .collect();
-
-    Ok(vec_to_page(items, page))
+    // sql_conditions() handles all filter fields; no Rust-side filter needed.
+    Ok(rows_to_page(items, page, total))
 }
 
 pub(in crate::storage::postgres) fn create(

@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use diesel::{
     Connection, OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Nullable, Text, Timestamptz, Uuid as SqlUuid},
+    sql_types::{Array, Nullable, Text, Timestamptz, Uuid as SqlUuid},
 };
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
@@ -38,6 +39,14 @@ struct JunctionHostNameRow {
     host_name: String,
 }
 
+#[derive(QueryableByName)]
+struct ContactHostAssociationRow {
+    #[diesel(sql_type = SqlUuid)]
+    contact_id: Uuid,
+    #[diesel(sql_type = Text)]
+    host_name: String,
+}
+
 fn load_contact_hosts(
     connection: &mut PgConnection,
     contact_id: Uuid,
@@ -55,6 +64,32 @@ fn load_contact_hosts(
     rows.into_iter()
         .map(|row| Hostname::new(row.host_name))
         .collect()
+}
+
+/// Load all host associations for a batch of contact IDs in a single query.
+fn load_contact_hosts_batch(
+    connection: &mut PgConnection,
+    contact_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<Hostname>>, AppError> {
+    if contact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sql_query(
+        "SELECT hch.contact_id, h.name::text AS host_name
+         FROM host_contacts_hosts hch
+         JOIN hosts h ON h.id = hch.host_id
+         WHERE hch.contact_id = ANY($1::uuid[])
+         ORDER BY hch.contact_id, h.name",
+    )
+    .bind::<Array<SqlUuid>, _>(contact_ids)
+    .load::<ContactHostAssociationRow>(connection)?;
+
+    let mut map: HashMap<Uuid, Vec<Hostname>> = HashMap::new();
+    for row in rows {
+        let hostname = Hostname::new(row.host_name)?;
+        map.entry(row.contact_id).or_default().push(hostname);
+    }
+    Ok(map)
 }
 
 fn build_host_contact(
@@ -91,9 +126,23 @@ pub(super) fn list(
 
     let rows = run_dynamic_query::<HostContactRow>(connection, &query_str, &values)?;
 
+    // Batch-load all host associations in a single query instead of N+1.
+    let contact_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let mut hosts_by_contact = load_contact_hosts_batch(connection, &contact_ids)?;
+
     let all: Vec<HostContact> = rows
         .into_iter()
-        .map(|row| build_host_contact(connection, row))
+        .map(|row| {
+            let hosts = hosts_by_contact.remove(&row.id).unwrap_or_default();
+            HostContact::restore(
+                row.id,
+                EmailAddressValue::new(row.email)?,
+                row.display_name,
+                hosts,
+                row.created_at,
+                row.updated_at,
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     // Apply special filters (host, search) in Rust

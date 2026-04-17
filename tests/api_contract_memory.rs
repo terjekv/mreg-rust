@@ -69,7 +69,7 @@ async fn host_contact_contract_shape_is_stable() {
         App::new()
             .app_data(web::Data::new(memory_state()))
             .wrap(mreg_rust::middleware::Authn)
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -134,7 +134,7 @@ async fn policy_mapping_contract_shape_is_stable() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -238,7 +238,7 @@ async fn full_dns_lifecycle_with_auto_records() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -424,7 +424,7 @@ async fn delegation_anchored_record_validates_scope() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -487,7 +487,7 @@ async fn inventory_detail_responses_include_attachment_graph() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -599,7 +599,7 @@ async fn network_detail_reports_full_available_capacity() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -662,7 +662,7 @@ async fn rfc3597_raw_record_round_trip() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -727,7 +727,7 @@ async fn host_list_supports_sort_and_filter() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -860,7 +860,7 @@ async fn wildcard_dns_records_work_as_unanchored_records() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -891,7 +891,7 @@ async fn export_template_list_returns_builtin_templates() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -926,7 +926,7 @@ async fn export_run_lifecycle_and_listing() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -1018,7 +1018,7 @@ async fn import_batch_appears_in_listing() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 

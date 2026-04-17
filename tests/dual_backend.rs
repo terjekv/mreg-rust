@@ -1897,3 +1897,145 @@ dual_backend_test_auto_dhcp!(ip_assign_no_duplicate_dhcp_identifier, |ctx| {
 dual_backend_test_auto_dhcp!(ip_assign_no_auto_dhcp_without_mac, |ctx| {
     ip_assign_no_auto_dhcp_without_mac_scenario(&ctx).await;
 });
+
+// ─── Security & correctness fixes ────────────────────────────────────────────
+
+async fn sort_by_invalid_returns_400_scenario(ctx: &TestCtx) {
+    let status = ctx
+        .get_status("/inventory/hosts?sort_by=nonexistent_column")
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unknown sort_by should return 400"
+    );
+}
+
+dual_backend_test!(sort_by_invalid_returns_400, |ctx| {
+    sort_by_invalid_returns_400_scenario(&ctx).await;
+});
+
+async fn prune_expired_tokens_scenario(ctx: &TestCtx) {
+    use chrono::{Duration, Utc};
+
+    let storage = ctx.storage();
+    let sessions = storage.auth_sessions();
+
+    // Revoke a token that is already expired (expires_at in the past)
+    sessions
+        .revoke_token(
+            "expired-fingerprint-test-1234".to_string(),
+            "test-principal".to_string(),
+            Utc::now() - Duration::seconds(10),
+        )
+        .await
+        .expect("revoke expired token");
+
+    // Revoke a token that is still valid (expires_at in the future)
+    sessions
+        .revoke_token(
+            "valid-fingerprint-test-5678".to_string(),
+            "test-principal".to_string(),
+            Utc::now() + Duration::hours(1),
+        )
+        .await
+        .expect("revoke valid token");
+
+    let pruned = sessions
+        .prune_expired_tokens()
+        .await
+        .expect("prune expired tokens");
+
+    assert!(
+        pruned >= 1,
+        "should have pruned at least 1 expired token, got {pruned}"
+    );
+
+    // The still-valid token should remain
+    let still_revoked = sessions
+        .is_token_revoked("valid-fingerprint-test-5678")
+        .await
+        .expect("check still-valid revoked token");
+    assert!(
+        still_revoked,
+        "non-expired revoked token should still be revoked after pruning"
+    );
+}
+
+dual_backend_test!(prune_expired_tokens, |ctx| {
+    prune_expired_tokens_scenario(&ctx).await;
+});
+
+async fn nameserver_batch_lookup_scenario(ctx: &TestCtx) {
+    let ns_fqdn = ctx.name("batchns1.example.org");
+    let ns2_fqdn = ctx.name("batchns2.example.org");
+    let zone = ctx.name("batchlookup.example.org");
+
+    // Create nameservers (exercises the batch lookup_nameserver_ids path when zone is created)
+    let s = ctx
+        .post("/dns/nameservers", json!({ "name": ns_fqdn }))
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "first nameserver should be created");
+    let s = ctx
+        .post("/dns/nameservers", json!({ "name": ns2_fqdn }))
+        .await;
+    assert_eq!(
+        s,
+        StatusCode::CREATED,
+        "second nameserver should be created"
+    );
+
+    // Create a zone referencing both nameservers
+    let status = ctx
+        .post(
+            "/dns/forward-zones",
+            json!({
+                "name": zone,
+                "primary_ns": ns_fqdn,
+                "email": format!("hostmaster@{zone}"),
+                "nameservers": [ns_fqdn, ns2_fqdn]
+            }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "zone with 2 nameservers should be created"
+    );
+
+    let body = ctx.get_json(&format!("/dns/forward-zones/{zone}")).await;
+    let returned_ns: Vec<&str> = body["nameservers"]
+        .as_array()
+        .expect("nameservers list")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(returned_ns.len(), 2, "both nameservers should be present");
+}
+
+dual_backend_test!(nameserver_batch_lookup, |ctx| {
+    nameserver_batch_lookup_scenario(&ctx).await;
+});
+
+async fn pagination_limit_scenario(ctx: &TestCtx) {
+    // Create 12 labels — more than the default page size of 10 in tests
+    for i in 0..12 {
+        let name = ctx.name(&format!("paglabel{i:02}"));
+        ctx.post(
+            "/inventory/labels",
+            json!({ "name": name, "description": "pagination test" }),
+        )
+        .await;
+    }
+
+    // Fetch with limit=5 — should return exactly 5 items and a next_cursor
+    let body = ctx.get_json("/inventory/labels?limit=5").await;
+    let items = body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 5, "should return exactly 5 items");
+    let total = body["total"].as_u64().unwrap_or(0);
+    assert!(total >= 12, "total should reflect all labels, got {total}");
+}
+
+dual_backend_test!(pagination_limit, |ctx| {
+    pagination_limit_scenario(&ctx).await;
+});

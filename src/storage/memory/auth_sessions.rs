@@ -54,4 +54,15 @@ impl AuthSessionStore for MemoryStorage {
         let state = self.state.read().await;
         Ok(state.principal_revoked_before.get(principal_id).copied())
     }
+
+    async fn prune_expired_tokens(&self) -> Result<u64, AppError> {
+        let mut state = self.state.write().await;
+        let now = Utc::now();
+        let before = state.revoked_tokens.len() as u64;
+        state
+            .revoked_tokens
+            .retain(|_, (_, expires_at)| *expires_at >= now);
+        let after = state.revoked_tokens.len() as u64;
+        Ok(before - after)
+    }
 }

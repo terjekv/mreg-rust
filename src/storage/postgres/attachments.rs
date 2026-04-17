@@ -33,7 +33,7 @@ use crate::{
 
 use super::{
     PostgresStorage,
-    helpers::{map_unique, run_dynamic_query, vec_to_page},
+    helpers::{map_unique, rows_to_page, run_count_query, run_dynamic_query, vec_to_page},
 };
 
 impl PostgresStorage {
@@ -536,7 +536,7 @@ impl AttachmentStore for PostgresStorage {
                      FROM host_attachments a
                      JOIN hosts h ON h.id = a.host_id
                      JOIN networks n ON n.id = a.network_id
-                     WHERE n.network = $1::cidr
+                     WHERE $1::cidr >>= n.network
                      ORDER BY h.name, a.mac_address NULLS LAST",
                 )
                 .bind::<Text, _>(network.as_str())
@@ -785,13 +785,28 @@ impl AttachmentCommunityAssignmentStore for PostgresStorage {
                     Some("network") => "n.network::text",
                     Some("policy_name") => "np.name::text",
                     Some("community_name") => "c.name::text",
-                    _ => "h.name::text",
+                    None => "h.name::text",
+                    Some(other) => {
+                        return Err(AppError::validation(format!(
+                            "unsupported sort_by field for attachments: {other}"
+                        )));
+                    }
                 };
                 let order_dir = match page.sort_direction() {
                     crate::domain::pagination::SortDirection::Asc => "ASC",
                     crate::domain::pagination::SortDirection::Desc => "DESC",
                 };
-                query.push_str(&format!(" ORDER BY {order_col} {order_dir}, aca.id"));
+                let count_sql = format!("SELECT COUNT(*) AS count FROM ({query}) AS _c");
+                let total = run_count_query(connection, &count_sql, &values)?;
+
+                let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+                    format!(" LIMIT {}", page.limit() + 1)
+                } else {
+                    String::new()
+                };
+                query.push_str(&format!(
+                    " ORDER BY {order_col} {order_dir}, aca.id{limit_clause}"
+                ));
 
                 let rows = run_dynamic_query::<AttachmentCommunityAssignmentRow>(
                     connection, &query, &values,
@@ -800,7 +815,7 @@ impl AttachmentCommunityAssignmentStore for PostgresStorage {
                     .into_iter()
                     .map(AttachmentCommunityAssignmentRow::into_domain)
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(vec_to_page(items, &page))
+                Ok(rows_to_page(items, &page, total))
             })
             .await
     }

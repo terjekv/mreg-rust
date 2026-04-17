@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, insert_into, update};
+use diesel::{
+    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, delete, insert_into, update,
+};
 
 use crate::{
     db::schema::{principal_token_revocations, revoked_tokens},
@@ -109,6 +111,18 @@ impl AuthSessionStore for PostgresStorage {
                     .first::<DateTime<Utc>>(connection)
                     .optional()
                     .map_err(AppError::from)
+            })
+            .await
+    }
+
+    async fn prune_expired_tokens(&self) -> Result<u64, AppError> {
+        self.database
+            .run(|connection| {
+                let count = delete(
+                    revoked_tokens::table.filter(revoked_tokens::expires_at.lt(diesel::dsl::now)),
+                )
+                .execute(connection)?;
+                Ok(count as u64)
             })
             .await
     }

@@ -532,3 +532,6 @@ CREATE INDEX idx_export_runs_status ON export_runs (status);
 CREATE INDEX idx_history_events_resource ON history_events (resource_kind, resource_id, created_at DESC);
 CREATE INDEX idx_host_policy_atoms_name ON host_policy_atoms (name);
 CREATE INDEX idx_host_policy_roles_name ON host_policy_roles (name);
+CREATE INDEX idx_hosts_zone_id ON hosts (zone_id);
+CREATE INDEX idx_rrsets_zone_id ON rrsets (zone_id);
+CREATE INDEX idx_records_zone_id ON records (zone_id);

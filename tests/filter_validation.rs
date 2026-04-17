@@ -56,7 +56,7 @@ async fn datetime_field_rejects_invalid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -89,7 +89,7 @@ async fn datetime_field_accepts_valid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -122,7 +122,7 @@ async fn enum_field_rejects_invalid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -151,7 +151,7 @@ async fn enum_field_accepts_valid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -189,7 +189,7 @@ async fn every_filterable_endpoint_rejects_unknown_field(#[case] endpoint: &str)
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -223,7 +223,7 @@ async fn every_filterable_endpoint_rejects_unknown_operator(#[case] endpoint: &s
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -271,7 +271,7 @@ async fn numeric_field_rejects_invalid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -304,7 +304,7 @@ async fn numeric_field_accepts_valid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -340,7 +340,7 @@ async fn cidr_field_rejects_invalid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -373,7 +373,7 @@ async fn cidr_field_accepts_valid_operator(#[case] op: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -402,7 +402,7 @@ async fn updated_at_gte_matches_recently_created_host() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -434,7 +434,7 @@ async fn updated_at_gt_future_date_matches_nothing() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -464,7 +464,7 @@ async fn updated_at_rejects_string_operators() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -512,7 +512,7 @@ async fn host_contact_email_icontains_matches() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_contacts!(app);
@@ -533,7 +533,7 @@ async fn host_contact_email_endswith_matches() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_contacts!(app);
@@ -574,7 +574,7 @@ async fn network_policy_name_startswith_matches() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_policies!(app);
@@ -595,7 +595,7 @@ async fn network_policy_description_not_icontains_excludes() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_policies!(app);

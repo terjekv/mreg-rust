@@ -76,11 +76,16 @@ impl CommunityStore for MemoryStorage {
             .filter(|community| filter.matches(community))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |community, field| match field {
-            "policy_name" => community.policy_name().as_str().to_string(),
-            "created_at" => community.created_at().to_rfc3339(),
-            _ => community.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["policy_name", "created_at"],
+            |community, field| match field {
+                "policy_name" => community.policy_name().as_str().to_string(),
+                "created_at" => community.created_at().to_rfc3339(),
+                _ => community.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

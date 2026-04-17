@@ -6,12 +6,12 @@ This document gives a high-level overview of what changed, what improved, and wh
 
 The original [mreg](https://github.com/unioslo/mreg) is a Django REST framework application backed by PostgreSQL. It works, but over time several pain points emerged:
 
-- **Mixing of domains.** MREG conceptually handles DNS (as per RFCs), inventory (hosts, IPs, networks, host groups), DHCP, and more. In Django mreg, these domains are intertwined in models and views both, making it hard to seperate concerns and rules. For example, HINFO is a data field on the host model instead of a first-class DNS record type.
-- **Performance at scale.** Django ORM queries and Python runtime overhead limit throughput for large zone exports and bulk operations.
+- **Mixing of domains.** MREG conceptually handles DNS (as per RFCs), inventory (hosts, IPs, networks, host groups), DHCP, and more. In Django mreg, these domains are intertwined in models and views both, making it hard to seperate concerns and rules.  As one example, HINFO is a data field on the host model instead of a first-class DNS record type.
+- **Performance at scale.** Django ORM queries and Python runtime overhead limit throughput for large zone exports and bulk operations. Scale-out across multiple instances is unfeasible due to ID scheme and database coupling.
 - **Type safety.** Python's dynamic types let invalid data slip through to the database. DNS names, CIDRs, serial numbers, and TTLs deserve compile-time enforcement.
 - **Tight coupling.** Django model serializers mix persistence, validation, and HTTP concerns in one layer. Adding a new record type means touching models, serializers, views, and URL configs.
-- **Testing.** The Django test suite depends on a running PostgreSQL instance for every test. Fast, isolated in-memory testing is not practical.
-- **Async work.** Background tasks (zone exports, bulk imports) would rely on Celery, adding operational complexity.
+- **Seperation of concerns.** Django mreg has only limited support for multi-step operations that must succeed or fail atomically (e.g., creating a host with multiple IPs). This new implementation provides a storage trait layer with pluggable backends, allowing for atomic transactions across multiple entities and operations at the trait boudary layer.
+- **Async work.** Background tasks (zone exports, reports, bulk imports) do not exist in Django mreg, and would probably end up hacing to  rely on Celery, adding operational complexity due to python threading and process management. mreg-rust has a built-in task queue management through the pluggable storage backends.
 
 mreg-rust is not a line-by-line port. It preserves the domain concepts and API semantics but redesigns the internals from scratch.
 
@@ -48,7 +48,7 @@ The storage layer is pluggable at startup (`MREG_STORAGE_BACKEND=auto|memory|pos
 
 Here is a concrete example: creating a label via `POST /inventory/labels`. It uses the DTO (data transfer object) pattern to separate API concerns from domain logic, and the command pattern to encapsulate validated operations.
 
-+**1. API handler** (`src/api/v1/labels.rs`) — Receives the HTTP request, deserializes the JSON body into a `CreateLabelRequest` DTO (a plain serde struct with `name: String, description: String`). Calls `into_command()` which converts the raw strings into validated domain types: `LabelName::new(self.name)?` validates the name (lowercase, no special characters). If validation fails, the handler returns a 400 immediately. The result is a `CreateLabel` command — a domain object that is guaranteed to carry valid data.
+**1. API handler** (`src/api/v1/labels.rs`) — Receives the HTTP request, deserializes the JSON body into a `CreateLabelRequest` DTO (a plain serde struct with `name: String, description: String`). Calls `into_command()` which converts the raw strings into validated domain types: `LabelName::new(self.name)?` validates the name (lowercase, no special characters). If validation fails, the handler returns a 400 immediately. The result is a `CreateLabel` command — a domain object that is guaranteed to carry valid data.
 
 ```rust
 // API DTO → domain command (validation happens here)

@@ -254,9 +254,9 @@ pub fn json_config(limit_bytes: usize) -> web::JsonConfig {
     web::JsonConfig::default().limit(limit_bytes)
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/api/v1").configure(v1::configure))
-        .service(
-            SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", ApiDoc::openapi()),
-        );
+pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
+    cfg.service(
+        web::scope("/api/v1").configure(move |cfg| v1::configure(cfg, trust_proxy_headers)),
+    )
+    .service(SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", ApiDoc::openapi()));
 }

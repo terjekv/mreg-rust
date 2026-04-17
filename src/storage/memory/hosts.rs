@@ -313,12 +313,17 @@ impl HostStore for MemoryStorage {
             .filter(|host| filter.matches(host, &state.ip_addresses))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |host, field| match field {
-            "comment" => host.comment().to_string(),
-            "created_at" => host.created_at().to_rfc3339(),
-            "updated_at" => host.updated_at().to_rfc3339(),
-            _ => host.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["name", "comment", "created_at", "updated_at"],
+            |host, field| match field {
+                "comment" => host.comment().to_string(),
+                "created_at" => host.created_at().to_rfc3339(),
+                "updated_at" => host.updated_at().to_rfc3339(),
+                _ => host.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

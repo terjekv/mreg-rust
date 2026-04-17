@@ -78,11 +78,16 @@ impl PtrOverrideStore for MemoryStorage {
             .filter(|ptr| filter.matches(ptr))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |ptr, field| match field {
-            "address" => ptr.address().as_str(),
-            "created_at" => ptr.created_at().to_rfc3339(),
-            _ => ptr.host_name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["address", "created_at"],
+            |ptr, field| match field {
+                "address" => ptr.address().as_str(),
+                "created_at" => ptr.created_at().to_rfc3339(),
+                _ => ptr.host_name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

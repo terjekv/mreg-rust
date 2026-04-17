@@ -42,11 +42,16 @@ impl LabelStore for MemoryStorage {
     async fn list_labels(&self, page: &PageRequest) -> Result<Page<Label>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<Label> = state.labels.values().cloned().collect();
-        sort_items(&mut items, page, |label, field| match field {
-            "description" => label.description().to_string(),
-            "created_at" => label.created_at().to_rfc3339(),
-            _ => label.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["name", "description", "created_at"],
+            |label, field| match field {
+                "description" => label.description().to_string(),
+                "created_at" => label.created_at().to_rfc3339(),
+                _ => label.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

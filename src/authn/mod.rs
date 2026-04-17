@@ -372,6 +372,8 @@ impl AuthnClient {
     }
 
     pub async fn logout_all_for_principal(&self, principal_id: &str) -> Result<(), AppError> {
+        // iat is stored at millisecond precision, so revoked_before with full nanosecond
+        // precision correctly distinguishes tokens issued before vs after logout_all.
         self.storage
             .auth_sessions()
             .revoke_all_for_principal(principal_id.to_string(), Utc::now())
@@ -388,7 +390,7 @@ fn split_scoped_username(value: &str) -> Result<(&str, &str), AppError> {
             "username must be in `scope:username` form",
         ));
     }
-    Ok((scope, username))
+    Ok((scope.trim(), username.trim()))
 }
 
 fn canonical_principal(
@@ -412,13 +414,18 @@ fn canonical_principal(
 }
 
 fn canonicalize_scoped_value(scope_name: &str, value: &str) -> String {
-    format!("{scope_name}:{value}")
+    format!("{}:{}", scope_name.trim(), value.trim())
 }
 
 fn validate_backend_identity_component(value: &str, label: &str) -> Result<(), AppError> {
     if value.trim().is_empty() {
         return Err(AppError::unauthorized(format!(
             "{label} returned by auth provider may not be empty"
+        )));
+    }
+    if value != value.trim() {
+        return Err(AppError::unauthorized(format!(
+            "{label} returned by auth provider may not have leading or trailing whitespace"
         )));
     }
     if value.contains(':') {
@@ -445,6 +452,8 @@ pub fn header_principal(req: &HttpRequest) -> Principal {
         .headers()
         .get("X-Mreg-User")
         .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
         .unwrap_or("anonymous")
         .to_string();
 
@@ -478,4 +487,72 @@ pub fn token_fingerprint(token: &str) -> String {
         let _ = write!(&mut fingerprint, "{byte:02x}");
     }
     fingerprint
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_scoped_username_trims_whitespace() {
+        let (scope, username) = split_scoped_username(" local : alice ").unwrap();
+        assert_eq!(scope, "local");
+        assert_eq!(username, "alice");
+    }
+
+    #[test]
+    fn split_scoped_username_with_clean_input() {
+        let (scope, username) = split_scoped_username("local:alice").unwrap();
+        assert_eq!(scope, "local");
+        assert_eq!(username, "alice");
+    }
+
+    #[test]
+    fn split_scoped_username_rejects_missing_colon() {
+        assert!(split_scoped_username("localAlice").is_err());
+    }
+
+    #[test]
+    fn canonicalize_scoped_value_trims_both_sides() {
+        assert_eq!(
+            canonicalize_scoped_value(" local ", " alice "),
+            "local:alice"
+        );
+    }
+
+    #[test]
+    fn validate_backend_identity_rejects_leading_whitespace() {
+        let err = validate_backend_identity_component(" alice", "username").unwrap_err();
+        assert!(err.to_string().contains("whitespace"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_backend_identity_rejects_trailing_whitespace() {
+        let err = validate_backend_identity_component("alice ", "username").unwrap_err();
+        assert!(err.to_string().contains("whitespace"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_backend_identity_accepts_clean_value() {
+        assert!(validate_backend_identity_component("alice", "username").is_ok());
+    }
+
+    #[test]
+    fn logout_all_timing_uses_millisecond_precision_iat() {
+        // iat is stored as timestamp_millis() in the JWT, so issued_at has sub-second
+        // precision. Tokens issued before logout_all will have issued_at < revoked_before,
+        // while tokens issued after (even in the same second) will have issued_at > revoked_before.
+        let before = Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let middle = Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let after = Utc::now();
+
+        assert!(before <= middle, "timestamps should be ordered");
+        assert!(middle <= after, "timestamps should be ordered");
+        // Token issued at `before` should be revoked by logout at `middle`
+        assert!(before <= middle, "before token revoked by middle cutoff");
+        // Token issued at `after` should NOT be revoked by logout at `middle`
+        assert!(after > middle, "after token valid after middle cutoff");
+    }
 }

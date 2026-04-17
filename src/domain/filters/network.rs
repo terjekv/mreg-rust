@@ -99,7 +99,7 @@ impl NetworkFilter {
 
     /// Generate SQL WHERE clauses for postgres.
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
-        build_sql_conditions(
+        let (mut clauses, mut values) = build_sql_conditions(
             &[
                 (&self.description, "n.description"),
                 (&self.vlan, "n.vlan"),
@@ -112,7 +112,13 @@ impl NetworkFilter {
             ],
             &self.search,
             &["n.network::text", "n.description"],
-        )
+        );
+        if let Some(ref ip) = self.contains_ip {
+            let idx = values.len() + 1;
+            clauses.push(format!("${idx}::inet <<= n.network"));
+            values.push(ip.as_str().to_string());
+        }
+        (clauses, values)
     }
 
     /// Build a NetworkFilter from a HashMap of query parameters.

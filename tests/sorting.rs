@@ -55,7 +55,7 @@ async fn sort_labels_by_name(#[case] dir: &str, #[case] expected: Vec<&str>) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -90,7 +90,7 @@ async fn sort_hosts_by_name(#[case] dir: &str, #[case] expected: Vec<&str>) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -122,7 +122,7 @@ async fn sort_default_is_ascending_by_name() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 

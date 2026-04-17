@@ -105,12 +105,17 @@ impl NetworkStore for MemoryStorage {
             .filter(|network| filter.matches(network))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |network, field| match field {
-            "description" => network.description().to_string(),
-            "created_at" => network.created_at().to_rfc3339(),
-            "updated_at" => network.updated_at().to_rfc3339(),
-            _ => network.cidr().as_str(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["description", "created_at", "updated_at"],
+            |network, field| match field {
+                "description" => network.description().to_string(),
+                "created_at" => network.created_at().to_rfc3339(),
+                "updated_at" => network.updated_at().to_rfc3339(),
+                _ => network.cidr().as_str(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

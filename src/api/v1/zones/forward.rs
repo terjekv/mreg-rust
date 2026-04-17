@@ -390,7 +390,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(crate::api::v1::configure),
+                .configure(|cfg| crate::api::v1::configure(cfg, false)),
         )
         .await;
 
@@ -433,7 +433,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(crate::api::v1::configure),
+                .configure(|cfg| crate::api::v1::configure(cfg, false)),
         )
         .await;
 

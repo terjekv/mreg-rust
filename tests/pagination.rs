@@ -62,7 +62,7 @@ async fn pagination_limit_and_cursor_presence(
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -96,7 +96,7 @@ async fn pagination_walks_all_items_without_duplicates() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -144,7 +144,7 @@ async fn pagination_empty_collection() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 

@@ -24,4 +24,8 @@ pub trait AuthSessionStore: Send + Sync {
         &self,
         principal_id: &str,
     ) -> Result<Option<DateTime<Utc>>, AppError>;
+
+    /// Delete revoked_tokens rows whose expires_at is in the past.
+    /// Returns the number of rows deleted. Safe to call concurrently.
+    async fn prune_expired_tokens(&self) -> Result<u64, AppError>;
 }

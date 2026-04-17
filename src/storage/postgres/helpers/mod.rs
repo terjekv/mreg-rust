@@ -27,8 +27,8 @@ use crate::errors::AppError;
 // (hosts.rs, records.rs, etc.) continue to compile with the same imports.
 // ---------------------------------------------------------------------------
 
-pub(super) use dynamic_query::run_dynamic_query;
-pub(super) use pagination::{paginate_simple, vec_to_page};
+pub(super) use dynamic_query::{run_count_query, run_dynamic_query};
+pub(super) use pagination::{paginate_simple, rows_to_page, vec_to_page};
 pub(super) use record_types::{IntSentinelRow, record_owner_kind_value, record_type_storage_parts};
 
 // ---------------------------------------------------------------------------

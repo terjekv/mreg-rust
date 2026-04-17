@@ -78,7 +78,7 @@ async fn operator_contains_filters_by_substring() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -100,7 +100,7 @@ async fn operator_icontains_is_case_insensitive() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -122,7 +122,7 @@ async fn operator_not_equals_excludes_match() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -155,7 +155,7 @@ async fn operator_startswith_matches_prefix() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -177,7 +177,7 @@ async fn operator_endswith_matches_suffix() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -199,7 +199,7 @@ async fn operator_in_matches_set() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -223,7 +223,7 @@ async fn operator_multiple_conditions_on_same_field() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -246,7 +246,7 @@ async fn operator_comment_icontains() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -268,7 +268,7 @@ async fn operator_unknown_field_returns_400() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -287,7 +287,7 @@ async fn operator_invalid_operator_returns_400() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -306,7 +306,7 @@ async fn operator_backwards_compatible_bare_equals() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -329,7 +329,7 @@ async fn operator_with_sort_and_pagination() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -360,7 +360,7 @@ async fn operator_is_null_matches_missing_zone() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -383,7 +383,7 @@ async fn operator_not_is_null_matches_hosts_with_zone() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -404,7 +404,7 @@ async fn operator_iequals_exact_case_insensitive() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -426,7 +426,7 @@ async fn operator_not_in_excludes_set() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -451,7 +451,7 @@ async fn operator_iendswith_case_insensitive_suffix() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -472,7 +472,7 @@ async fn operator_not_startswith_excludes_prefix() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -518,7 +518,7 @@ async fn filter_network_by_family(#[case] query: &str, #[case] expected: u64) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_family_networks!(app);
@@ -560,7 +560,7 @@ async fn network_description_istartswith_matches_prefix() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_networks!(app);
@@ -581,7 +581,7 @@ async fn network_description_not_icontains_excludes() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_networks!(app);
@@ -633,7 +633,7 @@ async fn filter_records_by_owner_kind_enum() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_records_with_owner_kinds!(app);
@@ -657,7 +657,7 @@ async fn owner_kind_enum_rejects_contains_operator() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 

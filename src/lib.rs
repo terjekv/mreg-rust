@@ -81,6 +81,19 @@ pub async fn run() -> io::Result<()> {
     let authz = AuthorizerClient::from_config(&config).map_err(to_io_error)?;
     let events = EventSinkClient::from_config(&config);
     let reader = ReadableStorage::new(storage.clone());
+
+    // Background task: prune expired revoked_tokens rows hourly.
+    let prune_storage = storage.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if let Err(e) = prune_storage.auth_sessions().prune_expired_tokens().await {
+                tracing::warn!(error = %e, "failed to prune expired revoked tokens");
+            }
+        }
+    });
+
     let services = Services::new(storage, events.clone());
     let state = AppState {
         config: Arc::new(config),
@@ -141,6 +154,7 @@ pub async fn run() -> io::Result<()> {
         "starting mreg-rust"
     );
 
+    let trust_proxy = state.config.auth_login_trust_proxy_headers;
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_state.clone()))
@@ -148,7 +162,7 @@ pub async fn run() -> io::Result<()> {
             .wrap(TracingLogger::<MregRootSpan>::new())
             .wrap(middleware::Authn)
             .wrap(middleware::RequestId)
-            .configure(api::configure)
+            .configure(move |cfg| api::configure(cfg, trust_proxy))
     })
     .workers(worker_count)
     .bind(bind_addr)?

@@ -21,7 +21,9 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{TextValueRow, map_unique, run_dynamic_query, vec_to_page};
+use super::helpers::{
+    TextValueRow, map_unique, rows_to_page, run_count_query, run_dynamic_query, vec_to_page,
+};
 
 #[derive(diesel::QueryableByName)]
 struct BigIntValueRow {
@@ -217,39 +219,31 @@ impl PostgresStorage {
             .get_result::<UuidRow>(connection)
             .map_err(|_| AppError::not_found("network was not found"))?;
 
-        let allocated = Self::allocated_addresses_in_network(connection, network)?;
+        let allocated: std::collections::HashSet<u128> =
+            Self::allocated_addresses_in_network(connection, network)?
+                .iter()
+                .map(|a| ip_to_u128(a.as_inner()))
+                .collect();
         let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
-        match network.cidr().as_inner() {
-            ipnet::IpNet::V4(_) => {
-                for candidate in first..=last {
-                    let address = IpAddressValue::new(
-                        std::net::Ipv4Addr::from(candidate as u32).to_string(),
-                    )?;
-                    if !allocated.iter().any(|existing| existing == &address)
-                        && Self::ensure_address_usable(connection, network, &address).is_ok()
-                    {
-                        return Ok(address);
-                    }
-                }
-                Err(AppError::conflict(
-                    "network has no remaining allocatable IPv4 addresses",
-                ))
+        for candidate in first..=last {
+            if allocated.contains(&candidate) {
+                continue;
             }
-            ipnet::IpNet::V6(_) => {
-                for candidate in first..=last {
-                    let address =
-                        IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
-                    if !allocated.iter().any(|existing| existing == &address)
-                        && Self::ensure_address_usable(connection, network, &address).is_ok()
-                    {
-                        return Ok(address);
-                    }
+            let address = match network.cidr().as_inner() {
+                ipnet::IpNet::V4(_) => {
+                    IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())?
                 }
-                Err(AppError::conflict(
-                    "network has no remaining allocatable IPv6 addresses",
-                ))
+                ipnet::IpNet::V6(_) => {
+                    IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?
+                }
+            };
+            if Self::ensure_address_usable(connection, network, &address).is_ok() {
+                return Ok(address);
             }
         }
+        Err(AppError::conflict(
+            "network has no remaining allocatable addresses",
+        ))
     }
 
     /// Allocate a random usable address from the network.
@@ -345,13 +339,28 @@ impl NetworkStore for PostgresStorage {
                     Some("description") => "n.description",
                     Some("created_at") => "n.created_at",
                     Some("updated_at") => "n.updated_at",
-                    _ => "n.network::text",
+                    None => "n.network::text",
+                    Some(other) => {
+                        return Err(AppError::validation(format!(
+                            "unsupported sort_by field for networks: {other}"
+                        )));
+                    }
                 };
                 let order_dir = match page.sort_direction() {
                     crate::domain::pagination::SortDirection::Asc => "ASC",
                     crate::domain::pagination::SortDirection::Desc => "DESC",
                 };
-                let query_str = format!("{base}{where_str} ORDER BY {order_col} {order_dir}, n.id");
+                let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
+                let total = run_count_query(c, &count_sql, &values)?;
+
+                let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+                    format!(" LIMIT {}", page.limit() + 1)
+                } else {
+                    String::new()
+                };
+                let query_str = format!(
+                    "{base}{where_str} ORDER BY {order_col} {order_dir}, n.id{limit_clause}"
+                );
 
                 let rows = run_dynamic_query::<NetworkRow>(c, &query_str, &values)?;
                 let all_items: Vec<Network> = rows
@@ -359,20 +368,8 @@ impl NetworkStore for PostgresStorage {
                     .map(NetworkRow::into_domain)
                     .collect::<Result<Vec<_>, _>>()?;
 
-                // Apply special filters (contains_ip) in Rust
-                let items: Vec<Network> = all_items
-                    .into_iter()
-                    .filter(|network| {
-                        if let Some(ref address) = filter.contains_ip
-                            && !network.contains(address)
-                        {
-                            return false;
-                        }
-                        true
-                    })
-                    .collect();
-
-                Ok(vec_to_page(items, &page))
+                // contains_ip is pushed to SQL via sql_conditions(); no Rust-side filter needed.
+                Ok(rows_to_page(all_items, &page, total))
             })
             .await
     }

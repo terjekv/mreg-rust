@@ -167,14 +167,23 @@ pub(super) fn paginate_simple<T>(items: Vec<T>, page: &PageRequest) -> Page<T> {
 pub(super) fn sort_items<T: HasId>(
     items: &mut [T],
     page: &PageRequest,
+    valid_fields: &[&str],
     key_fn: impl Fn(&T, &str) -> String,
-) {
+) -> Result<(), crate::errors::AppError> {
+    if let Some(field) = page.sort_by() {
+        if !valid_fields.contains(&field) {
+            return Err(crate::errors::AppError::validation(format!(
+                "unsupported sort_by field: {field}"
+            )));
+        }
+    }
     let field = page.sort_by().unwrap_or("name");
     let descending = *page.sort_direction() == SortDirection::Desc;
     items.sort_by(|a, b| {
         let cmp = key_fn(a, field).cmp(&key_fn(b, field));
         if descending { cmp.reverse() } else { cmp }
     });
+    Ok(())
 }
 
 #[derive(Clone)]

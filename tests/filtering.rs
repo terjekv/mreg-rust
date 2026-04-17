@@ -79,7 +79,7 @@ async fn filter_hosts_by_zone() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -101,7 +101,7 @@ async fn filter_hosts_by_exact_name() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -127,7 +127,7 @@ async fn filter_hosts_by_search(#[case] query: &str, #[case] expected: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -149,7 +149,7 @@ async fn filter_returns_empty_when_no_match() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     let resp = test::call_service(
@@ -181,7 +181,7 @@ async fn filter_networks_by_family(#[case] family: u8) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     for (cidr, desc) in [("10.0.0.0/24", "v4"), ("fd00::/64", "v6")] {
@@ -216,7 +216,7 @@ async fn filter_networks_by_search(#[case] query: &str, #[case] expected: u64) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     for (cidr, desc) in [
@@ -254,7 +254,7 @@ async fn combined_filter_sort_paginate_walks_filtered_set() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_zoned_hosts!(app);
@@ -300,7 +300,7 @@ async fn combined_sort_paginate_labels() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -346,7 +346,7 @@ async fn combined_filter_paginate_networks() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 
@@ -403,7 +403,7 @@ async fn list_endpoint_returns_page_response_shape(#[case] endpoint: &str) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
 

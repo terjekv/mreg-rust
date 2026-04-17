@@ -100,11 +100,16 @@ impl HostCommunityAssignmentStore for MemoryStorage {
             .filter(|mapping| filter.matches(mapping))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |mapping, field| match field {
-            "community_name" => mapping.community_name().as_str().to_string(),
-            "created_at" => mapping.created_at().to_rfc3339(),
-            _ => mapping.host_name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["community_name", "created_at"],
+            |mapping, field| match field {
+                "community_name" => mapping.community_name().as_str().to_string(),
+                "created_at" => mapping.created_at().to_rfc3339(),
+                _ => mapping.host_name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

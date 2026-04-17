@@ -61,12 +61,17 @@ impl HostContactStore for MemoryStorage {
             .filter(|contact| filter.matches(contact))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |contact, field| match field {
-            "display_name" => contact.display_name().unwrap_or("").to_string(),
-            "created_at" => contact.created_at().to_rfc3339(),
-            "updated_at" => contact.updated_at().to_rfc3339(),
-            _ => contact.email().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["display_name", "created_at", "updated_at"],
+            |contact, field| match field {
+                "display_name" => contact.display_name().unwrap_or("").to_string(),
+                "created_at" => contact.created_at().to_rfc3339(),
+                "updated_at" => contact.updated_at().to_rfc3339(),
+                _ => contact.email().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

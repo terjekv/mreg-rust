@@ -307,15 +307,20 @@ impl AttachmentStore for MemoryStorage {
     async fn list_attachments(&self, page: &PageRequest) -> Result<Page<HostAttachment>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<HostAttachment> = state.host_attachments.values().cloned().collect();
-        sort_items(&mut items, page, |attachment, field| match field {
-            "network" => attachment.network_cidr().as_str(),
-            "mac_address" => attachment
-                .mac_address()
-                .map(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            _ => attachment.host_name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["network", "mac_address"],
+            |attachment, field| match field {
+                "network" => attachment.network_cidr().as_str(),
+                "mac_address" => attachment
+                    .mac_address()
+                    .map(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                _ => attachment.host_name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 
@@ -340,7 +345,11 @@ impl AttachmentStore for MemoryStorage {
         Ok(state
             .host_attachments
             .values()
-            .filter(|attachment| attachment.network_cidr() == network)
+            .filter(|attachment| {
+                network
+                    .as_inner()
+                    .contains(attachment.network_cidr().as_inner())
+            })
             .cloned()
             .collect())
     }
@@ -526,12 +535,17 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
             })
             .cloned()
             .collect();
-        sort_items(&mut items, page, |assignment, field| match field {
-            "network" => assignment.network_cidr().as_str(),
-            "policy_name" => assignment.policy_name().as_str().to_string(),
-            "community_name" => assignment.community_name().as_str().to_string(),
-            _ => assignment.host_name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["network", "policy_name", "community_name"],
+            |assignment, field| match field {
+                "network" => assignment.network_cidr().as_str(),
+                "policy_name" => assignment.policy_name().as_str().to_string(),
+                "community_name" => assignment.community_name().as_str().to_string(),
+                _ => assignment.host_name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

@@ -37,10 +37,12 @@ jobs:
       - name: Create test database
         env:
           PGPASSWORD: mreg
-        run: psql -h localhost -U mreg -d mreg -c "CREATE DATABASE mreg_test"
+        run: psql -h localhost -p 5433 -U mreg -d mreg -c "CREATE DATABASE mreg_test"
 
       - name: Run full test suite
         run: cargo test
+        env:
+          MREG_TEST_DATABASE_URL: postgres://mreg:mreg@localhost:5433/mreg_test
 
       - name: Lint with clippy
         run: cargo clippy --all-targets --all-features -- -D warnings

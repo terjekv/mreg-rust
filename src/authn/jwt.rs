@@ -70,7 +70,11 @@ impl LocalJwtIssuer {
                 .collect(),
             auth_scope: auth_scope.to_string(),
             auth_provider_kind: auth_provider_kind.to_string(),
-            iat: now.timestamp(),
+            // Store iat as milliseconds for sub-second revocation precision.
+            // This is non-standard (RFC 7519 uses seconds) but allows logout_all
+            // to correctly distinguish tokens issued before vs after the cutoff
+            // within the same second boundary.
+            iat: now.timestamp_millis(),
             exp: expires_at.timestamp(),
             iss: self.issuer.clone(),
         };
@@ -103,9 +107,7 @@ impl LocalJwtValidator {
             .timestamp_opt(data.claims.exp, 0)
             .single()
             .ok_or_else(|| AppError::unauthorized("invalid token expiry"))?;
-        let issued_at = Utc
-            .timestamp_opt(data.claims.iat, 0)
-            .single()
+        let issued_at = DateTime::from_timestamp_millis(data.claims.iat)
             .ok_or_else(|| AppError::unauthorized("invalid token issue time"))?;
         Ok(PrincipalContext::scoped(
             Principal {

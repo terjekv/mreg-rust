@@ -112,10 +112,15 @@ impl ZoneStore for MemoryStorage {
     async fn list_forward_zones(&self, page: &PageRequest) -> Result<Page<ForwardZone>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<ForwardZone> = state.forward_zones.values().cloned().collect();
-        sort_items(&mut items, page, |zone, field| match field {
-            "created_at" => zone.created_at().to_rfc3339(),
-            _ => zone.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["created_at"],
+            |zone, field| match field {
+                "created_at" => zone.created_at().to_rfc3339(),
+                _ => zone.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 
@@ -320,10 +325,15 @@ impl ZoneStore for MemoryStorage {
     async fn list_reverse_zones(&self, page: &PageRequest) -> Result<Page<ReverseZone>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<ReverseZone> = state.reverse_zones.values().cloned().collect();
-        sort_items(&mut items, page, |zone, field| match field {
-            "created_at" => zone.created_at().to_rfc3339(),
-            _ => zone.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["created_at"],
+            |zone, field| match field {
+                "created_at" => zone.created_at().to_rfc3339(),
+                _ => zone.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

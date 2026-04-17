@@ -3,8 +3,9 @@ use chrono::{DateTime, Utc};
 use diesel::{
     Connection, ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, QueryableByName,
     RunQueryDsl, sql_query,
-    sql_types::{Text, Timestamptz, Uuid as SqlUuid},
+    sql_types::{Array, Text, Timestamptz, Uuid as SqlUuid},
 };
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
@@ -47,6 +48,30 @@ struct ParentGroupNameRow {
 
 #[derive(QueryableByName)]
 struct OwnerGroupRow {
+    #[diesel(sql_type = Text)]
+    owner_group: String,
+}
+
+#[derive(QueryableByName)]
+struct GroupHostAssociationRow {
+    #[diesel(sql_type = SqlUuid)]
+    group_id: Uuid,
+    #[diesel(sql_type = Text)]
+    host_name: String,
+}
+
+#[derive(QueryableByName)]
+struct GroupParentAssociationRow {
+    #[diesel(sql_type = SqlUuid)]
+    group_id: Uuid,
+    #[diesel(sql_type = Text)]
+    parent_name: String,
+}
+
+#[derive(QueryableByName)]
+struct GroupOwnerAssociationRow {
+    #[diesel(sql_type = SqlUuid)]
+    group_id: Uuid,
     #[diesel(sql_type = Text)]
     owner_group: String,
 }
@@ -107,6 +132,83 @@ fn load_group_owner_groups(
         .collect()
 }
 
+/// Batch-load all host associations for a set of group IDs in a single query.
+fn load_group_hosts_batch(
+    connection: &mut PgConnection,
+    group_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<Hostname>>, AppError> {
+    if group_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sql_query(
+        "SELECT hgh.host_group_id AS group_id, h.name::text AS host_name
+         FROM host_group_hosts hgh
+         JOIN hosts h ON h.id = hgh.host_id
+         WHERE hgh.host_group_id = ANY($1::uuid[])
+         ORDER BY hgh.host_group_id, h.name",
+    )
+    .bind::<Array<SqlUuid>, _>(group_ids)
+    .load::<GroupHostAssociationRow>(connection)?;
+
+    let mut map: HashMap<Uuid, Vec<Hostname>> = HashMap::new();
+    for row in rows {
+        let hostname = Hostname::new(row.host_name)?;
+        map.entry(row.group_id).or_default().push(hostname);
+    }
+    Ok(map)
+}
+
+/// Batch-load all parent group associations for a set of group IDs in a single query.
+fn load_group_parents_batch(
+    connection: &mut PgConnection,
+    group_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<HostGroupName>>, AppError> {
+    if group_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sql_query(
+        "SELECT hgp.host_group_id AS group_id, pg.name::text AS parent_name
+         FROM host_group_parents hgp
+         JOIN host_groups pg ON pg.id = hgp.parent_group_id
+         WHERE hgp.host_group_id = ANY($1::uuid[])
+         ORDER BY hgp.host_group_id, pg.name",
+    )
+    .bind::<Array<SqlUuid>, _>(group_ids)
+    .load::<GroupParentAssociationRow>(connection)?;
+
+    let mut map: HashMap<Uuid, Vec<HostGroupName>> = HashMap::new();
+    for row in rows {
+        let name = HostGroupName::new(row.parent_name)?;
+        map.entry(row.group_id).or_default().push(name);
+    }
+    Ok(map)
+}
+
+/// Batch-load all owner group associations for a set of group IDs in a single query.
+fn load_group_owners_batch(
+    connection: &mut PgConnection,
+    group_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<OwnerGroupName>>, AppError> {
+    if group_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sql_query(
+        "SELECT host_group_id AS group_id, owner_group::text AS owner_group
+         FROM host_group_owner_groups
+         WHERE host_group_id = ANY($1::uuid[])
+         ORDER BY host_group_id, owner_group",
+    )
+    .bind::<Array<SqlUuid>, _>(group_ids)
+    .load::<GroupOwnerAssociationRow>(connection)?;
+
+    let mut map: HashMap<Uuid, Vec<OwnerGroupName>> = HashMap::new();
+    for row in rows {
+        let name = OwnerGroupName::new(row.owner_group)?;
+        map.entry(row.group_id).or_default().push(name);
+    }
+    Ok(map)
+}
+
 fn build_host_group(
     connection: &mut PgConnection,
     row: HostGroupRow,
@@ -145,9 +247,29 @@ pub(super) fn list(
 
     let rows = run_dynamic_query::<HostGroupRow>(connection, &query_str, &values)?;
 
+    // Batch-load all associations in 3 queries instead of N*3 queries.
+    let group_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let mut hosts_by_group = load_group_hosts_batch(connection, &group_ids)?;
+    let mut parents_by_group = load_group_parents_batch(connection, &group_ids)?;
+    let mut owners_by_group = load_group_owners_batch(connection, &group_ids)?;
+
     let all: Vec<HostGroup> = rows
         .into_iter()
-        .map(|row| build_host_group(connection, row))
+        .map(|row| {
+            let hosts = hosts_by_group.remove(&row.id).unwrap_or_default();
+            let parents = parents_by_group.remove(&row.id).unwrap_or_default();
+            let owners = owners_by_group.remove(&row.id).unwrap_or_default();
+            HostGroup::restore(
+                row.id,
+                HostGroupName::new(&row.name)?,
+                row.description,
+                hosts,
+                parents,
+                owners,
+                row.created_at,
+                row.updated_at,
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     // Apply special filters (host, search) in Rust

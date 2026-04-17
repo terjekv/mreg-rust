@@ -106,7 +106,7 @@ async fn valid_record_is_accepted(
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_host_and_zone!(app);
@@ -238,7 +238,7 @@ async fn invalid_record_is_rejected(
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_host_and_zone!(app);
@@ -310,7 +310,7 @@ async fn record_with_empty_data_is_rejected(
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state()))
-            .configure(mreg_rust::api::v1::configure),
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
     )
     .await;
     seed_host_and_zone!(app);

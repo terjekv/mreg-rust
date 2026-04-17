@@ -30,7 +30,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, run_dynamic_query, vec_to_page};
+use super::helpers::{map_unique, rows_to_page, run_count_query, run_dynamic_query, vec_to_page};
 
 /// Resolved values for a host update, computed from the command and the existing host.
 struct ResolvedHostUpdate {
@@ -502,7 +502,7 @@ impl PostgresStorage {
         let record = Self::insert_record(connection, &rrset, rendered, &validated)?;
 
         if let Some(zone_id) = record.zone_id() {
-            Self::bump_zone_serial_tx(connection, zone_id);
+            Self::bump_zone_serial_tx(connection, zone_id)?;
         }
 
         Ok(())
@@ -735,7 +735,7 @@ impl PostgresStorage {
             .set(records::owner_name.eq(new_name))
             .execute(connection)?;
         if let Some(zone_id) = zone_id {
-            Self::bump_zone_serial_tx(connection, zone_id);
+            Self::bump_zone_serial_tx(connection, zone_id)?;
         }
         Ok(())
     }
@@ -766,13 +766,28 @@ impl HostStore for PostgresStorage {
                     Some("comment") => "h.comment",
                     Some("created_at") => "h.created_at",
                     Some("updated_at") => "h.updated_at",
-                    _ => "h.name::text",
+                    Some("name") | None => "h.name::text",
+                    Some(other) => {
+                        return Err(AppError::validation(format!(
+                            "unsupported sort_by field for hosts: {other}"
+                        )));
+                    }
                 };
                 let order_dir = match page.sort_direction() {
                     crate::domain::pagination::SortDirection::Asc => "ASC",
                     crate::domain::pagination::SortDirection::Desc => "DESC",
                 };
-                let query_str = format!("{base}{where_str} ORDER BY {order_col} {order_dir}, h.id");
+                let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
+                let total = run_count_query(c, &count_sql, &values)?;
+
+                let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+                    format!(" LIMIT {}", page.limit() + 1)
+                } else {
+                    String::new()
+                };
+                let query_str = format!(
+                    "{base}{where_str} ORDER BY {order_col} {order_dir}, h.id{limit_clause}"
+                );
 
                 let rows = run_dynamic_query::<HostRow>(c, &query_str, &values)?;
                 let items: Vec<Host> = rows
@@ -780,7 +795,7 @@ impl HostStore for PostgresStorage {
                     .map(|row| row.into_domain())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(vec_to_page(items, &page))
+                Ok(rows_to_page(items, &page, total))
             })
             .await
     }
@@ -941,7 +956,7 @@ impl HostStore for PostgresStorage {
 
                     // Cascade: bump zone serial for the host's zone
                     if let Some(zone_id) = host_zone_id {
-                        Self::bump_zone_serial_tx(connection, zone_id);
+                        Self::bump_zone_serial_tx(connection, zone_id)?;
                     }
 
                     // Delete the host (CASCADE handles ip_addresses via FK)

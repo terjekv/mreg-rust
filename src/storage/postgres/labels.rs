@@ -46,12 +46,19 @@ impl LabelStore for PostgresStorage {
                     (Some("created_at"), _) => labels::table
                         .order(labels::created_at.asc())
                         .load::<LabelRow>(c)?,
-                    (_, SortDirection::Desc) => labels::table
-                        .order(labels::name.desc())
-                        .load::<LabelRow>(c)?,
-                    _ => labels::table
+                    (Some("name"), SortDirection::Desc) | (None, SortDirection::Desc) => {
+                        labels::table
+                            .order(labels::name.desc())
+                            .load::<LabelRow>(c)?
+                    }
+                    (Some("name"), _) | (None, _) => labels::table
                         .order(labels::name.asc())
                         .load::<LabelRow>(c)?,
+                    (Some(other), _) => {
+                        return Err(AppError::validation(format!(
+                            "unsupported sort_by field for labels: {other}"
+                        )));
+                    }
                 };
                 let items = rows
                     .into_iter()

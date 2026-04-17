@@ -74,12 +74,17 @@ impl HostGroupStore for MemoryStorage {
             .filter(|group| filter.matches(group))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |group, field| match field {
-            "description" => group.description().to_string(),
-            "created_at" => group.created_at().to_rfc3339(),
-            "updated_at" => group.updated_at().to_rfc3339(),
-            _ => group.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["description", "created_at", "updated_at"],
+            |group, field| match field {
+                "description" => group.description().to_string(),
+                "created_at" => group.created_at().to_rfc3339(),
+                "updated_at" => group.updated_at().to_rfc3339(),
+                _ => group.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

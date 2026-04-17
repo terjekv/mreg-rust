@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, env, fs, net::SocketAddr};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    net::{IpAddr, SocketAddr},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -110,7 +114,7 @@ pub struct LocalUserConfig {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub listen: String,
+    pub listen: IpAddr,
     pub port: u16,
     pub workers: Option<usize>,
     pub json_logs: bool,
@@ -121,6 +125,8 @@ pub struct Config {
     pub treetop_url: Option<String>,
     pub treetop_timeout_ms: u64,
     pub allow_dev_authz_bypass: bool,
+    pub allow_unsafe_urls: bool,
+    pub auth_login_trust_proxy_headers: bool,
     pub auth_mode: AuthMode,
     pub auth_token_ttl_seconds: u64,
     pub auth_jwt_signing_key: Option<String>,
@@ -140,7 +146,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            listen: "127.0.0.1".to_string(),
+            listen: "127.0.0.1".parse().unwrap(),
             port: 8080,
             workers: None,
             json_logs: false,
@@ -151,6 +157,8 @@ impl Default for Config {
             treetop_url: None,
             treetop_timeout_ms: 1500,
             allow_dev_authz_bypass: false,
+            allow_unsafe_urls: false,
+            auth_login_trust_proxy_headers: false,
             auth_mode: AuthMode::None,
             auth_token_ttl_seconds: 3600,
             auth_jwt_signing_key: None,
@@ -177,8 +185,17 @@ impl Config {
             None => Vec::new(),
         };
 
+        let listen = match env::var("MREG_LISTEN") {
+            Ok(val) => val.parse::<IpAddr>().map_err(|_| {
+                AppError::config(format!(
+                    "MREG_LISTEN must be a valid IP address, got: {val}"
+                ))
+            })?,
+            Err(_) => "127.0.0.1".parse().unwrap(),
+        };
+
         let config = Self {
-            listen: env::var("MREG_LISTEN").unwrap_or_else(|_| "127.0.0.1".to_string()),
+            listen,
             port: parse_or_default("MREG_PORT", 8080)?,
             workers: parse_optional("MREG_WORKERS")?,
             json_logs: parse_bool_or_default("MREG_JSON_LOGS", false)?,
@@ -192,6 +209,11 @@ impl Config {
             treetop_url: env::var("MREG_TREETOP_URL").ok(),
             treetop_timeout_ms: parse_or_default("MREG_TREETOP_TIMEOUT_MS", 1500)?,
             allow_dev_authz_bypass: parse_bool_or_default("MREG_ALLOW_DEV_AUTHZ_BYPASS", false)?,
+            allow_unsafe_urls: parse_bool_or_default("MREG_ALLOW_UNSAFE_URLS", false)?,
+            auth_login_trust_proxy_headers: parse_bool_or_default(
+                "MREG_AUTH_LOGIN_TRUST_PROXY_HEADERS",
+                false,
+            )?,
             auth_mode: parse_auth_mode("MREG_AUTH_MODE")?,
             auth_token_ttl_seconds: parse_or_default("MREG_AUTH_TOKEN_TTL_SECONDS", 3600)?,
             auth_jwt_signing_key: env::var("MREG_AUTH_JWT_SIGNING_KEY").ok(),
@@ -215,9 +237,7 @@ impl Config {
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
-        format!("{}:{}", self.listen, self.port)
-            .parse()
-            .expect("validated listen/port configuration")
+        SocketAddr::new(self.listen, self.port)
     }
 
     pub fn trusts_identity_headers(&self) -> bool {
@@ -226,17 +246,31 @@ impl Config {
 
     fn validate(&self) -> Result<(), AppError> {
         match self.auth_mode {
-            AuthMode::None => Ok(()),
+            AuthMode::None => {}
             AuthMode::Scoped => {
                 require_present("MREG_AUTH_JWT_SIGNING_KEY", &self.auth_jwt_signing_key)?;
+                if let Some(key) = &self.auth_jwt_signing_key {
+                    if key.len() < 32 {
+                        return Err(AppError::config(
+                            "MREG_AUTH_JWT_SIGNING_KEY must be at least 32 bytes (256 bits) for HS256 security",
+                        ));
+                    }
+                }
                 if self.auth_scopes.is_empty() {
                     return Err(AppError::config(
                         "scoped auth requires at least one configured auth scope",
                     ));
                 }
-                validate_scopes(&self.auth_scopes)
+                validate_scopes(&self.auth_scopes, self.allow_unsafe_urls)?;
             }
         }
+        if let Some(url) = &self.treetop_url {
+            validate_external_url(url, "MREG_TREETOP_URL", self.allow_unsafe_urls)?;
+        }
+        if let Some(url) = &self.event_webhook_url {
+            validate_external_url(url, "MREG_EVENT_WEBHOOK_URL", self.allow_unsafe_urls)?;
+        }
+        Ok(())
     }
 }
 
@@ -252,7 +286,20 @@ fn default_forward_groups_claim() -> String {
     "groups".to_string()
 }
 
-fn validate_scopes(scopes: &[AuthScopeConfig]) -> Result<(), AppError> {
+/// Validates that an operator-configured URL uses HTTPS unless MREG_ALLOW_UNSAFE_URLS is set.
+/// Prevents accidental plaintext fetches to sensitive endpoints (JWKS, webhooks, auth).
+fn validate_external_url(url: &str, key: &str, allow_unsafe: bool) -> Result<(), AppError> {
+    let parsed = url::Url::parse(url)
+        .map_err(|_| AppError::config(format!("{key} is not a valid URL: {url}")))?;
+    if !allow_unsafe && parsed.scheme() != "https" {
+        return Err(AppError::config(format!(
+            "{key} must use https (set MREG_ALLOW_UNSAFE_URLS=true to allow http in dev/test)"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_scopes(scopes: &[AuthScopeConfig], allow_unsafe_urls: bool) -> Result<(), AppError> {
     let mut seen_scope_names = BTreeSet::new();
     for scope in scopes {
         if !is_valid_scope_name(&scope.name) {
@@ -314,9 +361,13 @@ fn validate_scopes(scopes: &[AuthScopeConfig]) -> Result<(), AppError> {
                 ..
             } => {
                 require_non_empty("remote.login_url", login_url)?;
+                validate_external_url(login_url, "remote.login_url", allow_unsafe_urls)?;
                 require_non_empty("remote.jwt_issuer", jwt_issuer)?;
                 require_non_empty("remote.username_claim", username_claim)?;
                 require_non_empty("remote.groups_claim", groups_claim)?;
+                if let Some(url) = jwks_url {
+                    validate_external_url(url, "remote.jwks_url", allow_unsafe_urls)?;
+                }
                 let verification_sources = [
                     jwks_url.is_some(),
                     jwt_public_key_pem.is_some(),
@@ -340,6 +391,11 @@ fn validate_scopes(scopes: &[AuthScopeConfig]) -> Result<(), AppError> {
 fn validate_raw_identity_component(value: &str, label: &str) -> Result<(), AppError> {
     if value.trim().is_empty() {
         return Err(AppError::config(format!("{label} may not be empty")));
+    }
+    if value != value.trim() {
+        return Err(AppError::config(format!(
+            "{label} `{value}` may not have leading or trailing whitespace"
+        )));
     }
     if value.contains(':') {
         return Err(AppError::config(format!(
@@ -454,17 +510,32 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    /// A signing key of exactly 32 bytes, valid for HS256.
+    const VALID_SIGNING_KEY: &str = "this_is_exactly_32_bytes_long_!!";
+
     fn temp_json_path(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!("mreg-rust-{name}-{}.json", Uuid::new_v4()));
         path
     }
 
+    fn scoped_config_with_local_scope() -> Config {
+        Config {
+            auth_mode: AuthMode::Scoped,
+            auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
+            auth_scopes: vec![AuthScopeConfig {
+                name: "local".to_string(),
+                backend: AuthScopeBackendConfig::Local { users: Vec::new() },
+            }],
+            ..Config::default()
+        }
+    }
+
     #[test]
     fn scoped_config_rejects_duplicate_scope_names() {
         let config = Config {
             auth_mode: AuthMode::Scoped,
-            auth_jwt_signing_key: Some("secret".to_string()),
+            auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
             auth_scopes: vec![
                 AuthScopeConfig {
                     name: "local".to_string(),
@@ -477,14 +548,18 @@ mod tests {
             ],
             ..Config::default()
         };
-        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate"),
+            "expected duplicate error, got: {err}"
+        );
     }
 
     #[test]
     fn scoped_config_rejects_remote_scope_without_verifier() {
         let config = Config {
             auth_mode: AuthMode::Scoped,
-            auth_jwt_signing_key: Some("secret".to_string()),
+            auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
             auth_scopes: vec![AuthScopeConfig {
                 name: "remote".to_string(),
                 backend: AuthScopeBackendConfig::Remote {
@@ -503,6 +578,135 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn scoped_config_rejects_short_signing_key() {
+        let config = Config {
+            auth_mode: AuthMode::Scoped,
+            auth_jwt_signing_key: Some("tooshort".to_string()),
+            auth_scopes: vec![AuthScopeConfig {
+                name: "local".to_string(),
+                backend: AuthScopeBackendConfig::Local { users: Vec::new() },
+            }],
+            ..Config::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("32 bytes"),
+            "expected key length error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn scoped_config_accepts_32_byte_signing_key() {
+        assert!(scoped_config_with_local_scope().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_external_url_requires_https_by_default() {
+        let err =
+            validate_external_url("http://internal.example/jwks", "test_url", false).unwrap_err();
+        assert!(
+            err.to_string().contains("https"),
+            "expected https error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_external_url_allows_http_when_unsafe_enabled() {
+        assert!(
+            validate_external_url("http://localhost/jwks", "test_url", true).is_ok(),
+            "http should be allowed when allow_unsafe_urls = true"
+        );
+    }
+
+    #[test]
+    fn validate_external_url_accepts_https() {
+        assert!(validate_external_url("https://auth.example/jwks", "test_url", false).is_ok());
+    }
+
+    #[test]
+    fn validate_external_url_rejects_invalid_url() {
+        assert!(validate_external_url("not a url", "test_url", false).is_err());
+    }
+
+    #[test]
+    fn remote_scope_login_url_must_be_https() {
+        let config = Config {
+            auth_mode: AuthMode::Scoped,
+            auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
+            auth_scopes: vec![AuthScopeConfig {
+                name: "remote".to_string(),
+                backend: AuthScopeBackendConfig::Remote {
+                    login_url: "http://auth.example/login".to_string(),
+                    timeout_ms: 5000,
+                    default_service_name: None,
+                    jwt_issuer: "issuer".to_string(),
+                    jwt_audience: None,
+                    jwks_url: None,
+                    jwt_public_key_pem: Some("-----BEGIN PUBLIC KEY-----\n...".to_string()),
+                    jwt_hmac_secret: None,
+                    username_claim: "sub".to_string(),
+                    groups_claim: "groups".to_string(),
+                },
+            }],
+            ..Config::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("https"),
+            "expected https error for login_url, got: {err}"
+        );
+    }
+
+    #[test]
+    fn treetop_url_must_be_https() {
+        let config = Config {
+            treetop_url: Some("http://treetop.internal/api".to_string()),
+            ..Config::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("https"),
+            "expected https error for treetop_url, got: {err}"
+        );
+    }
+
+    #[test]
+    fn webhook_url_must_be_https() {
+        let config = Config {
+            event_webhook_url: Some("http://hooks.example/mreg".to_string()),
+            ..Config::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("https"),
+            "expected https error for event_webhook_url, got: {err}"
+        );
+    }
+
+    #[test]
+    fn local_username_with_whitespace_is_rejected() {
+        let err = validate_raw_identity_component(" alice", "test").unwrap_err();
+        assert!(err.to_string().contains("whitespace"));
+    }
+
+    #[test]
+    fn bind_addr_returns_correct_socket_addr() {
+        let config = Config {
+            listen: "0.0.0.0".parse().unwrap(),
+            port: 9090,
+            ..Config::default()
+        };
+        let addr = config.bind_addr();
+        assert_eq!(addr.port(), 9090);
+        assert_eq!(addr.ip().to_string(), "0.0.0.0");
+    }
+
+    #[test]
+    fn trust_proxy_headers_defaults_to_false() {
+        assert!(!Config::default().auth_login_trust_proxy_headers);
     }
 
     #[test]

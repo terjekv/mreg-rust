@@ -53,12 +53,17 @@ impl NetworkPolicyStore for MemoryStorage {
             .filter(|policy| filter.matches(policy))
             .cloned()
             .collect();
-        sort_items(&mut items, page, |policy, field| match field {
-            "description" => policy.description().to_string(),
-            "created_at" => policy.created_at().to_rfc3339(),
-            "updated_at" => policy.updated_at().to_rfc3339(),
-            _ => policy.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["description", "created_at", "updated_at"],
+            |policy, field| match field {
+                "description" => policy.description().to_string(),
+                "created_at" => policy.created_at().to_rfc3339(),
+                "updated_at" => policy.updated_at().to_rfc3339(),
+                _ => policy.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

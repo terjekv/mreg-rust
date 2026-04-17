@@ -22,11 +22,16 @@ impl HostPolicyStore for MemoryStorage {
     async fn list_atoms(&self, page: &PageRequest) -> Result<Page<HostPolicyAtom>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<HostPolicyAtom> = state.host_policy_atoms.values().cloned().collect();
-        sort_items(&mut items, page, |atom, field| match field {
-            "description" => atom.description().to_string(),
-            "created_at" => atom.created_at().to_rfc3339(),
-            _ => atom.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["description", "created_at"],
+            |atom, field| match field {
+                "description" => atom.description().to_string(),
+                "created_at" => atom.created_at().to_rfc3339(),
+                _ => atom.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 
@@ -122,11 +127,16 @@ impl HostPolicyStore for MemoryStorage {
     async fn list_roles(&self, page: &PageRequest) -> Result<Page<HostPolicyRole>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<HostPolicyRole> = state.host_policy_roles.values().cloned().collect();
-        sort_items(&mut items, page, |role, field| match field {
-            "description" => role.description().to_string(),
-            "created_at" => role.created_at().to_rfc3339(),
-            _ => role.name().as_str().to_string(),
-        });
+        sort_items(
+            &mut items,
+            page,
+            &["description", "created_at"],
+            |role, field| match field {
+                "description" => role.description().to_string(),
+                "created_at" => role.created_at().to_rfc3339(),
+                _ => role.name().as_str().to_string(),
+            },
+        )?;
         paginate_by_cursor(items, page)
     }
 

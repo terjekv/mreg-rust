@@ -415,7 +415,7 @@ impl RecordStore for PostgresStorage {
                     let record = Self::insert_record(connection, &rrset, rendered, &validated)?;
                     // Cascade: bump zone serial
                     if let Some(zone_id) = record.zone_id() {
-                        Self::bump_zone_serial_tx(connection, zone_id);
+                        Self::bump_zone_serial_tx(connection, zone_id)?;
                     }
                     Ok(record)
                 })
@@ -557,7 +557,7 @@ impl RecordStore for PostgresStorage {
 
                     // Cascade: bump zone serial
                     if let Some(zone_id) = record.zone_id() {
-                        Self::bump_zone_serial_tx(connection, zone_id);
+                        Self::bump_zone_serial_tx(connection, zone_id)?;
                     }
                     Ok(record)
                 })
@@ -594,7 +594,7 @@ impl RecordStore for PostgresStorage {
 
                     // Cascade: bump zone serial
                     if let Some(zone_id) = zone_id {
-                        Self::bump_zone_serial_tx(connection, zone_id);
+                        Self::bump_zone_serial_tx(connection, zone_id)?;
                     }
 
                     Ok(())
@@ -676,7 +676,7 @@ impl RecordStore for PostgresStorage {
 
                     // Cascade: bump zone serial
                     if let Some(zone_id) = zone_id {
-                        Self::bump_zone_serial_tx(connection, zone_id);
+                        Self::bump_zone_serial_tx(connection, zone_id)?;
                     }
 
                     Ok(())

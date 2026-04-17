@@ -136,7 +136,7 @@ impl PostgresStorage {
             }
 
             // Bump parent zone serial
-            Self::bump_zone_serial_tx(connection, zone_id);
+            Self::bump_zone_serial_tx(connection, zone_id)?;
 
             row.into_forward_delegation(nameservers)
         })
@@ -174,7 +174,7 @@ impl PostgresStorage {
 
             // Bump parent zone serial
             if let Some(zone_id) = zone_id {
-                Self::bump_zone_serial_tx(connection, zone_id);
+                Self::bump_zone_serial_tx(connection, zone_id)?;
             }
 
             Ok(())
@@ -287,7 +287,7 @@ impl PostgresStorage {
             }
 
             // Bump parent zone serial
-            Self::bump_zone_serial_tx(connection, zone_id);
+            Self::bump_zone_serial_tx(connection, zone_id)?;
 
             row.into_reverse_delegation(nameservers)
         })
@@ -325,7 +325,7 @@ impl PostgresStorage {
 
             // Bump parent zone serial
             if let Some(zone_id) = zone_id {
-                Self::bump_zone_serial_tx(connection, zone_id);
+                Self::bump_zone_serial_tx(connection, zone_id)?;
             }
 
             Ok(())

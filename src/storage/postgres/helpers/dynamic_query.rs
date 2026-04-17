@@ -1,4 +1,26 @@
-use diesel::{PgConnection, QueryableByName, RunQueryDsl, sql_query, sql_types::Text};
+use diesel::{
+    PgConnection, QueryableByName, RunQueryDsl, sql_query,
+    sql_types::{BigInt, Text},
+};
+
+use crate::errors::AppError;
+
+#[derive(QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+/// Execute a dynamically-built COUNT query and return the result.
+pub(in crate::storage::postgres) fn run_count_query(
+    connection: &mut PgConnection,
+    count_sql: &str,
+    values: &[String],
+) -> Result<u64, AppError> {
+    let rows: Vec<CountRow> =
+        run_dynamic_query(connection, count_sql, values).map_err(AppError::from)?;
+    Ok(rows.first().map(|r| r.count.max(0) as u64).unwrap_or(0))
+}
 
 /// Generates match arms for binding N text parameters to a `sql_query`.
 ///

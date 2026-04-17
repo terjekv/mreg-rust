@@ -42,10 +42,10 @@ impl NameServerStore for MemoryStorage {
     async fn list_nameservers(&self, page: &PageRequest) -> Result<Page<NameServer>, AppError> {
         let state = self.state.read().await;
         let mut items: Vec<NameServer> = state.nameservers.values().cloned().collect();
-        sort_items(&mut items, page, |ns, field| match field {
+        sort_items(&mut items, page, &["created_at"], |ns, field| match field {
             "created_at" => ns.created_at().to_rfc3339(),
             _ => ns.name().as_str().to_string(),
-        });
+        })?;
         paginate_by_cursor(items, page)
     }
 
