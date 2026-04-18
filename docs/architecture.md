@@ -213,6 +213,9 @@ Relevant modules:
 - `src/workers/`
 - `src/storage/tasks.rs`
 
+See [task-system.md](task-system.md) for the operational task lifecycle,
+worker execution model, and endpoint semantics.
+
 ## Runtime Request Flow
 
 For a typical protected request:

@@ -183,7 +183,14 @@ Exports run asynchronously via the task queue. Results are stored and retrievabl
 
 ### Imports
 
-Django mreg imports data via per-endpoint API calls. mreg-rust adds a bulk import endpoint (`POST /workflows/imports`) that accepts a mixed-entity JSON batch with forward references, validates all items, and commits or rolls back atomically. See [import-format.md](import-format.md) for the JSON schema and examples.
+Django mreg imports data via per-endpoint API calls. mreg-rust adds a staged
+bulk import endpoint (`POST /workflows/imports`) that accepts a mixed-entity
+JSON batch with forward references. Batches are executed by workers via
+`POST /workflows/tasks/run-next`, then committed atomically or rolled back on
+failure.
+
+See [import-format.md](import-format.md) for the JSON contract and examples,
+including execution flow and ordering constraints.
 
 ## Authentication
 

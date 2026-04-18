@@ -447,6 +447,9 @@ Run statuses: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
 If rendering fails, the task is marked `failed` with the error message, and the
 error is returned to the caller.
 
+See [task-system.md](task-system.md) for shared task queue behavior and
+`run-next` worker semantics across workflows.
+
 ## Authorization
 
 The following authorization actions apply to export operations:

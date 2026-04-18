@@ -56,6 +56,13 @@ POST /api/v1/workflows/imports
 }
 ```
 
+Note that this call stages a batch and creates a queued import task. Execution
+happens when a worker runs `POST /api/v1/workflows/tasks/run-next`.
+
+For full execution lifecycle, status semantics, and reference ordering rules,
+see [import-format.md](import-format.md) (`Execution Model`, `Status Lifecycle`,
+and `Ordering Requirement`).
+
 ### What migrates automatically
 
 When you assign an IP address to a host:
