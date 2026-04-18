@@ -169,7 +169,7 @@ mreg-rust introduces a full DHCP data model:
 - **DHCP identifiers** per attachment: IPv4 `client_id` or IPv6 DUID (LLT, EN, LL, UUID, raw), with priority ordering
 - **Prefix reservations** for DHCPv6-PD
 - **Auto-creation** of identifiers from MAC when IPs are assigned (configurable via `MREG_DHCP_AUTO_V4_CLIENT_ID` and `MREG_DHCP_AUTO_V6_DUID_LL`)
-- **Built-in export templates** for Kea DHCPv4/v6, ISC DHCPd, and BIND zone files
+- **Built-in export templates** for Kea DHCPv4/v6 and ISC DHCPd files, both full configs and host snippets.
 
 See [dhcp-and-attachments.md](dhcp-and-attachments.md) for the full workflow.
 
@@ -177,7 +177,7 @@ See [dhcp-and-attachments.md](dhcp-and-attachments.md) for the full workflow.
 
 ### Exports
 
-Django mreg uses custom Python scripts for zone file generation. mreg-rust uses MiniJinja templates with a well-defined context (zones, hosts, records, DHCP data). Nine built-in templates cover BIND zone files and Kea/ISC DHCP configs. Custom templates can be registered at runtime.
+Django mreg uses custom Python scripts for zone file generation. mreg-rust uses MiniJinja templates with a well-defined context (zones, hosts, records, DHCP data). Nine built-in templates cover BIND zone files and Kea/ISC DHCP configs. Custom templates can be registered at runtime. See [export-templating.md](export-templating.md) for details.
 
 Exports run asynchronously via the task queue. Results are stored and retrievable.
 
