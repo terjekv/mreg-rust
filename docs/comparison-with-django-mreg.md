@@ -113,7 +113,7 @@ Django mreg creates a host entity named `*.example.org`. mreg-rust represents wi
 
 ### UUIDs everywhere
 
-All entity identifiers are UUIDs. Zone and host lookups still use natural keys (name, CIDR) in API paths. mreg-rust is consistent in using UUIDs for all internal references, never using mutable fields as identifiers for endpoints. This simplifies both the data model and the API design, avoiding issues with renaming and ensuring stable references across the system.
+mreg-rust uses UUIDs for internal references and for some API endpoints, but it still uses natural keys in many public paths where those identifiers are the operational lookup users care about. For example, hosts, zones, nameservers, labels, and networks are addressed by name or CIDR in API paths, while records, rrsets, attachments, communities, and attachment-community assignments use UUID-based endpoints. The model is therefore mixed by design: stable UUIDs for internal relationships and mutation-safe references, natural keys where they are the primary operational identity.
 
 At scale, UUIDs will also allow for sharding and distributed storage if needed, without coupling the data model to a specific database schema or relying on auto-incrementing integers.
 
