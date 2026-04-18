@@ -6,7 +6,7 @@ This document gives a high-level overview of what changed, what improved, and wh
 
 The original [mreg](https://github.com/unioslo/mreg) is a Django REST framework application backed by PostgreSQL. It works, but over time several pain points emerged:
 
-- **Mixing of domains.** MREG conceptually handles DNS (as per RFCs), inventory (hosts, IPs, networks, host groups), DHCP, and more. In Django mreg, these domains are intertwined in models and views both, making it hard to seperate concerns and rules.  As one example, HINFO is a data field on the host model instead of a first-class DNS record type.
+- **Mixing of domains.** MREG conceptually handles DNS (as per RFCs), inventory (hosts, IPs, networks, host groups), DHCP, and more. In Django mreg, these domains are intertwined in models and views both, making it hard to seperate concerns and rules.  As one example, HINFO is a data field on the host model instead of a first-class DNS record type, and A/AAAA records are implicit in IP assignments rather than explicit entities.
 - **Performance at scale.** Django ORM queries and Python runtime overhead limit throughput for large zone exports and bulk operations. Scale-out across multiple instances is unfeasible due to ID scheme and database coupling.
 - **Type safety.** Python's dynamic types let invalid data slip through to the database. DNS names, CIDRs, serial numbers, and TTLs deserve compile-time enforcement.
 - **Tight coupling.** Django model serializers mix persistence, validation, and HTTP concerns in one layer. Adding a new record type means touching models, serializers, views, and URL configs.
@@ -103,9 +103,9 @@ mreg-rust has a single `POST /dns/records` endpoint that accepts a `type_name` f
 
 Django mreg models hosts, networks, and IP addresses as part of the DNS data model. mreg-rust treats them as inventory entities separate from DNS records. This allows for clearer separation of concerns and more flexible relationships (e.g. a host can have multiple IPs across different zones without being tied to a specific DNS record).
 
-### HINFO is a record, not a host field
+### HINFO and implicity A/AAAA records are DNS, not host-bound
 
-Django mreg stores HINFO as a field on the host model. mreg-rust treats it as a standard DNS record anchored to the host, just like MX or TXT.
+Django mreg stores HINFO as a field on the host model. A/AAAA records are implicit in IP assignments rather than explicit entities. mreg-rust makes a clear distinction between inventory and DNS, causing HINFO and A/AAAA records to be treated as standard DNS records anchored to the host, just like MX, TXT or any other resource record.
 
 ### Wildcards are records, not hosts
 
