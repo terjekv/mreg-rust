@@ -2,12 +2,12 @@ use actix_web::{HttpRequest, HttpResponse, delete, post, web};
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::types::HostPolicyName,
     errors::AppError,
 };
 
-use crate::api::v1::authz::request as authz_request;
+use crate::api::v1::authz::{request as authz_request, require};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(add_atom_to_role)
@@ -46,16 +46,15 @@ pub(crate) async fn add_atom_to_role(
     let (role_name, atom_name) = path.into_inner();
     let role_name = HostPolicyName::new(role_name)?;
     let atom_name = HostPolicyName::new(atom_name)?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::ATOM_ATTACH,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("atom", AttrValue::String(atom_name.as_str().to_string()))
-        .build(),
+        .attr("atom", AttrValue::String(atom_name.as_str().to_string())),
     )
     .await?;
     state
@@ -89,16 +88,15 @@ pub(crate) async fn remove_atom_from_role(
     let (role_name, atom_name) = path.into_inner();
     let role_name = HostPolicyName::new(role_name)?;
     let atom_name = HostPolicyName::new(atom_name)?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::ATOM_DETACH,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("atom", AttrValue::String(atom_name.as_str().to_string()))
-        .build(),
+        .attr("atom", AttrValue::String(atom_name.as_str().to_string())),
     )
     .await?;
     state
@@ -132,16 +130,15 @@ pub(crate) async fn add_host_to_role(
 ) -> Result<HttpResponse, AppError> {
     let (role_name, host_name) = path.into_inner();
     let role_name = HostPolicyName::new(role_name)?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::HOST_ATTACH,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("host", AttrValue::String(host_name.clone()))
-        .build(),
+        .attr("host", AttrValue::String(host_name.clone())),
     )
     .await?;
     state
@@ -174,16 +171,15 @@ pub(crate) async fn remove_host_from_role(
 ) -> Result<HttpResponse, AppError> {
     let (role_name, host_name) = path.into_inner();
     let role_name = HostPolicyName::new(role_name)?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::HOST_DETACH,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("host", AttrValue::String(host_name.clone()))
-        .build(),
+        .attr("host", AttrValue::String(host_name.clone())),
     )
     .await?;
     state
@@ -217,16 +213,15 @@ pub(crate) async fn add_label_to_role(
 ) -> Result<HttpResponse, AppError> {
     let (role_name, label_name) = path.into_inner();
     let role_name = HostPolicyName::new(role_name)?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::LABEL_ATTACH,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("label", AttrValue::String(label_name.clone()))
-        .build(),
+        .attr("label", AttrValue::String(label_name.clone())),
     )
     .await?;
     state
@@ -259,16 +254,15 @@ pub(crate) async fn remove_label_from_role(
 ) -> Result<HttpResponse, AppError> {
     let (role_name, label_name) = path.into_inner();
     let role_name = HostPolicyName::new(role_name)?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::LABEL_DETACH,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("label", AttrValue::String(label_name.clone()))
-        .build(),
+        .attr("label", AttrValue::String(label_name.clone())),
     )
     .await?;
     state

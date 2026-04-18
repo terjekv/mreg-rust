@@ -299,28 +299,34 @@ pub(in crate::storage::postgres) fn create(
 
         let group_id = row.id;
 
-        // Link hosts
-        for host_name in command.hosts() {
-            let host_id = PostgresStorage::resolve_host_id(connection, host_name)?;
-            sql_query(
-                "INSERT INTO host_group_hosts (host_group_id, host_id)
-                 VALUES ($1, $2)",
-            )
-            .bind::<SqlUuid, _>(group_id)
-            .bind::<SqlUuid, _>(host_id)
-            .execute(connection)?;
+        let hosts = command.hosts();
+        if !hosts.is_empty() {
+            let host_ids = PostgresStorage::resolve_host_ids(connection, hosts)?;
+            for host_name in hosts {
+                let host_id = host_ids[host_name];
+                sql_query(
+                    "INSERT INTO host_group_hosts (host_group_id, host_id)
+                     VALUES ($1, $2)",
+                )
+                .bind::<SqlUuid, _>(group_id)
+                .bind::<SqlUuid, _>(host_id)
+                .execute(connection)?;
+            }
         }
 
-        // Link parent groups
-        for parent_name in command.parent_groups() {
-            let parent_id = PostgresStorage::resolve_host_group_id(connection, parent_name)?;
-            sql_query(
-                "INSERT INTO host_group_parents (host_group_id, parent_group_id)
-                 VALUES ($1, $2)",
-            )
-            .bind::<SqlUuid, _>(group_id)
-            .bind::<SqlUuid, _>(parent_id)
-            .execute(connection)?;
+        let parents = command.parent_groups();
+        if !parents.is_empty() {
+            let parent_ids = PostgresStorage::resolve_host_group_ids(connection, parents)?;
+            for parent_name in parents {
+                let parent_id = parent_ids[parent_name];
+                sql_query(
+                    "INSERT INTO host_group_parents (host_group_id, parent_group_id)
+                     VALUES ($1, $2)",
+                )
+                .bind::<SqlUuid, _>(group_id)
+                .bind::<SqlUuid, _>(parent_id)
+                .execute(connection)?;
+            }
         }
 
         // Link owner groups

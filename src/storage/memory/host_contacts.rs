@@ -13,7 +13,7 @@ use crate::{
     storage::HostContactStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_host_contact_in_state(
     state: &mut MemoryState,
@@ -55,14 +55,14 @@ impl HostContactStore for MemoryStorage {
         filter: &HostContactFilter,
     ) -> Result<Page<HostContact>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<HostContact> = state
+        let items: Vec<HostContact> = state
             .host_contacts
             .values()
             .filter(|contact| filter.matches(contact))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["display_name", "created_at", "updated_at"],
             |contact, field| match field {
@@ -71,8 +71,7 @@ impl HostContactStore for MemoryStorage {
                 "updated_at" => contact.updated_at().to_rfc3339(),
                 _ => contact.email().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_host_contact(

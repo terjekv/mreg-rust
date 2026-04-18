@@ -12,7 +12,7 @@ use crate::{
     storage::LabelStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_label_in_state(
     state: &mut MemoryState,
@@ -41,9 +41,9 @@ pub(super) fn create_label_in_state(
 impl LabelStore for MemoryStorage {
     async fn list_labels(&self, page: &PageRequest) -> Result<Page<Label>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<Label> = state.labels.values().cloned().collect();
-        sort_items(
-            &mut items,
+        let items: Vec<Label> = state.labels.values().cloned().collect();
+        sort_and_paginate(
+            items,
             page,
             &["name", "description", "created_at"],
             |label, field| match field {
@@ -51,8 +51,7 @@ impl LabelStore for MemoryStorage {
                 "created_at" => label.created_at().to_rfc3339(),
                 _ => label.name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_label(&self, command: CreateLabel) -> Result<Label, AppError> {

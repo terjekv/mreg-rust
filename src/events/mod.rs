@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::audit::{CreateHistoryEvent, HistoryEvent};
+use crate::audit::HistoryEvent;
 use crate::config::Config;
 
 /// Domain event emitted to external sinks after a successful mutation.
@@ -41,21 +41,6 @@ impl From<&HistoryEvent> for DomainEvent {
             action: event.action().to_string(),
             data: event.data().clone(),
             timestamp: event.created_at(),
-        }
-    }
-}
-
-impl From<&CreateHistoryEvent> for DomainEvent {
-    fn from(event: &CreateHistoryEvent) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            actor: event.actor().to_string(),
-            resource_kind: event.resource_kind().to_string(),
-            resource_id: event.resource_id(),
-            resource_name: event.resource_name().to_string(),
-            action: event.action().to_string(),
-            data: event.data().clone(),
-            timestamp: Utc::now(),
         }
     }
 }
@@ -120,6 +105,12 @@ impl EventSinkClient {
         Self {
             inner: Arc::new(NoopSink),
         }
+    }
+
+    /// Wrap a caller-supplied sink. Intended for tests that need to inspect
+    /// emitted events.
+    pub fn with_sink(inner: Arc<dyn EventSink>) -> Self {
+        Self { inner }
     }
 
     /// Build an event sink client from configuration.

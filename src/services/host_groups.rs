@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::HostGroupFilter,
         host_group::{CreateHostGroup, HostGroup},
@@ -31,15 +31,16 @@ pub async fn create_host_group(
 ) -> Result<HostGroup, AppError> {
     let group = store.create_host_group(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_group",
+        actions::CREATE,
         Some(group.id()),
         group.name().as_str(),
-        "create",
         json!({"name": group.name().as_str(), "description": group.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(group)
 }
@@ -62,15 +63,16 @@ pub async fn delete_host_group(
     let old = store.get_host_group_by_name(name).await?;
     store.delete_host_group(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_group",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str(), "description": old.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

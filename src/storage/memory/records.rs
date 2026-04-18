@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    MemoryState, MemoryStorage, bump_zone_serial_in_state, paginate_by_cursor, sort_items,
+    MemoryState, MemoryStorage, bump_zone_serial_in_state, paginate_by_cursor, sort_and_paginate,
 };
 
 pub(super) fn create_record_in_state(
@@ -339,14 +339,14 @@ impl RecordStore for MemoryStorage {
         filter: &RecordFilter,
     ) -> Result<Page<RecordInstance>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<RecordInstance> = state
+        let items: Vec<RecordInstance> = state
             .records
             .iter()
             .filter(|record| filter.matches(record))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["owner_name", "created_at"],
             |record, field| match field {
@@ -354,8 +354,7 @@ impl RecordStore for MemoryStorage {
                 "created_at" => record.created_at().to_rfc3339(),
                 _ => record.type_name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_record_type(

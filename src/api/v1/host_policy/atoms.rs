@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         host_policy::{CreateHostPolicyAtom, HostPolicyAtom, UpdateHostPolicyAtom},
         pagination::{PageRequest, PageResponse},
@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::request as authz_request;
+use crate::api::v1::authz::{request as authz_request, require};
 
 crate::page_response!(
     AtomPageResponse,
@@ -99,15 +99,14 @@ pub(crate) async fn list_atoms(
     state: web::Data<AppState>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::atom::LIST,
             authz::actions::resource_kinds::HOST_POLICY_ATOM,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -137,8 +136,8 @@ pub(crate) async fn create_atom(
     payload: web::Json<CreateAtomRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::atom::CREATE,
@@ -148,8 +147,7 @@ pub(crate) async fn create_atom(
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let atom = state
@@ -178,15 +176,14 @@ pub(crate) async fn get_atom(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = HostPolicyName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::atom::GET,
             authz::actions::resource_kinds::HOST_POLICY_ATOM,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let atom = state.services.host_policy().get_atom(&name).await?;
@@ -223,7 +220,7 @@ pub(crate) async fn update_atom(
     if let Some(description) = &request.description {
         authz = authz.attr("new_description", AttrValue::String(description.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let command = UpdateHostPolicyAtom {
         description: request.description,
     };
@@ -254,15 +251,14 @@ pub(crate) async fn delete_atom(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = HostPolicyName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::atom::DELETE,
             authz::actions::resource_kinds::HOST_POLICY_ATOM,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.host_policy().delete_atom(&name).await?;

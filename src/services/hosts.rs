@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::HostFilter,
         host::{
@@ -34,15 +34,16 @@ pub async fn create(
 ) -> Result<Host, AppError> {
     let host = store.create_host(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host",
+        actions::CREATE,
         Some(host.id()),
         host.name().as_str(),
-        "create",
         json!({"name": host.name().as_str(), "comment": host.comment()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(host)
 }
@@ -71,18 +72,19 @@ pub async fn update(
     let old = store.get_host_by_name(name).await?;
     let new = store.update_host(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({
             "old": {"name": old.name().as_str(), "comment": old.comment()},
             "new": {"name": new.name().as_str(), "comment": new.comment()}
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -97,15 +99,16 @@ pub async fn delete(
     let old = store.get_host_by_name(name).await?;
     store.delete_host(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -136,15 +139,16 @@ pub async fn assign_ip_address(
 ) -> Result<IpAddressAssignment, AppError> {
     let assignment = store.assign_ip_address(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "ip_address",
+        actions::CREATE,
         Some(assignment.id()),
         assignment.address().as_str(),
-        "create",
         json!({"host_id": assignment.host_id(), "address": assignment.address().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(assignment)
 }
@@ -163,18 +167,19 @@ pub async fn update_ip_address(
     let updated = store.update_ip_address(address, command).await?;
     let new_mac = updated.mac_address().map(|m| m.as_str());
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "ip_address",
+        actions::UPDATE,
         Some(updated.id()),
         updated.address().as_str(),
-        "update",
         json!({
             "old": {"mac_address": old_mac},
             "new": {"mac_address": new_mac}
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(updated)
 }
@@ -188,15 +193,16 @@ pub async fn unassign_ip_address(
 ) -> Result<(), AppError> {
     let old = store.unassign_ip_address(address).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "ip_address",
+        actions::DELETE,
         Some(old.id()),
         old.address().as_str(),
-        "delete",
         json!({"address": old.address().as_str(), "host_id": old.host_id()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

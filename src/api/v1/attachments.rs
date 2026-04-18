@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         attachment::{
             AttachmentDhcpIdentifier, AttachmentPrefixReservation, CreateAttachmentDhcpIdentifier,
@@ -19,7 +19,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 use super::hosts::IpAddressResponse;
 
 crate::page_response!(
@@ -261,8 +261,8 @@ pub(crate) async fn list_host_attachments(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let host_name = Hostname::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_attachment::LIST,
@@ -272,8 +272,7 @@ pub(crate) async fn list_host_attachments(
         .attr(
             "host_name",
             AttrValue::String(host_name.as_str().to_string()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let items = state
@@ -297,8 +296,8 @@ pub(crate) async fn create_host_attachment(
     payload: web::Json<CreateHostAttachmentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let host_name = Hostname::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_attachment::CREATE,
@@ -308,8 +307,7 @@ pub(crate) async fn create_host_attachment(
         .attr(
             "host_name",
             AttrValue::String(host_name.as_str().to_string()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let attachment = state
@@ -327,15 +325,14 @@ pub(crate) async fn get_attachment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let attachment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_attachment::GET,
             authz::actions::resource_kinds::HOST_ATTACHMENT,
             attachment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let attachment = state
@@ -376,15 +373,14 @@ pub(crate) async fn update_attachment(
     payload: web::Json<UpdateHostAttachmentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let attachment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_attachment::UPDATE,
             authz::actions::resource_kinds::HOST_ATTACHMENT,
             attachment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let attachment = state
@@ -402,15 +398,14 @@ pub(crate) async fn delete_attachment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let attachment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_attachment::DELETE,
             authz::actions::resource_kinds::HOST_ATTACHMENT,
             attachment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state
@@ -434,8 +429,8 @@ pub(crate) async fn assign_ip_to_attachment(
         .get_attachment(path.into_inner())
         .await?;
     let manual = payload.address.is_some();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             if manual {
@@ -453,8 +448,7 @@ pub(crate) async fn assign_ip_to_attachment(
         .attr(
             "network",
             AttrValue::String(attachment.network_cidr().as_str()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let request = payload.into_inner();
@@ -479,15 +473,14 @@ pub(crate) async fn create_attachment_dhcp_identifier(
     payload: web::Json<CreateAttachmentDhcpIdentifierRequest>,
 ) -> Result<HttpResponse, AppError> {
     let attachment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_dhcp_identifier::CREATE,
             authz::actions::resource_kinds::ATTACHMENT_DHCP_IDENTIFIER,
             attachment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state
@@ -505,15 +498,14 @@ pub(crate) async fn delete_attachment_dhcp_identifier(
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, AppError> {
     let (attachment_id, identifier_id) = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_dhcp_identifier::DELETE,
             authz::actions::resource_kinds::ATTACHMENT_DHCP_IDENTIFIER,
             identifier_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state
@@ -532,15 +524,14 @@ pub(crate) async fn create_attachment_prefix_reservation(
     payload: web::Json<CreateAttachmentPrefixReservationRequest>,
 ) -> Result<HttpResponse, AppError> {
     let attachment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_prefix_reservation::CREATE,
             authz::actions::resource_kinds::ATTACHMENT_PREFIX_RESERVATION,
             attachment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state
@@ -558,15 +549,14 @@ pub(crate) async fn delete_attachment_prefix_reservation(
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, AppError> {
     let (attachment_id, reservation_id) = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_prefix_reservation::DELETE,
             authz::actions::resource_kinds::ATTACHMENT_PREFIX_RESERVATION,
             reservation_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state

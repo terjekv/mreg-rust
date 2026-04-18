@@ -17,7 +17,7 @@ use crate::{
     storage::NetworkStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_and_paginate};
 
 pub(super) fn create_network_in_state(
     state: &mut MemoryState,
@@ -99,14 +99,14 @@ impl NetworkStore for MemoryStorage {
         filter: &NetworkFilter,
     ) -> Result<Page<Network>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<Network> = state
+        let items: Vec<Network> = state
             .networks
             .values()
             .filter(|network| filter.matches(network))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["description", "created_at", "updated_at"],
             |network, field| match field {
@@ -115,8 +115,7 @@ impl NetworkStore for MemoryStorage {
                 "updated_at" => network.updated_at().to_rfc3339(),
                 _ => network.cidr().as_str(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_network(&self, command: CreateNetwork) -> Result<Network, AppError> {

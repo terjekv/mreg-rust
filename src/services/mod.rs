@@ -81,9 +81,10 @@ use crate::{
     },
 };
 
-/// Record an audit event and emit a domain event. If the audit store fails,
-/// logs a warning with the action, resource kind, and resource name so the
-/// failure is diagnosable without reconstructing context from parent spans.
+/// Record an audit event and, on success, emit a domain event mirroring the
+/// persisted row. Audit is the source of truth (see `docs/event-system.md`):
+/// if persistence fails, no event is emitted, so external sinks never see a
+/// mutation that has no audit record to reconcile against.
 pub async fn record_and_emit(
     audit: &(dyn AuditStore + Send + Sync),
     events: &EventSinkClient,
@@ -92,19 +93,167 @@ pub async fn record_and_emit(
     let resource_kind = event.resource_kind().to_string();
     let resource_name = event.resource_name().to_string();
     let action = event.action().to_string();
-    let domain_event = DomainEvent::from(&event);
 
-    if let Err(error) = audit.record_event(event).await {
-        tracing::warn!(
+    match audit.record_event(event).await {
+        Ok(history) => events.emit(&DomainEvent::from(&history)).await,
+        Err(error) => tracing::warn!(
             %resource_kind,
             %resource_name,
             %action,
             %error,
-            "failed to record audit event"
-        );
+            "failed to record audit event; skipping event emission"
+        ),
+    }
+}
+
+/// Build a `CreateHistoryEvent` with the canonical `actor::SYSTEM` actor and
+/// hand it to `record_and_emit`. Replaces the repeated `CreateHistoryEvent::new(
+/// "system", ...)` + `record_and_emit(...)` pair across service mutations.
+pub async fn audit_mutation(
+    audit: &(dyn AuditStore + Send + Sync),
+    events: &EventSinkClient,
+    resource_kind: &str,
+    action: &str,
+    resource_id: Option<Uuid>,
+    resource_name: impl Into<String>,
+    payload: Value,
+) {
+    let event = CreateHistoryEvent::new(
+        crate::audit::actor::SYSTEM,
+        resource_kind,
+        resource_id,
+        resource_name,
+        action,
+        payload,
+    );
+    record_and_emit(audit, events, event).await;
+}
+
+#[cfg(test)]
+mod record_and_emit_tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use crate::{
+        audit::{CreateHistoryEvent, HistoryEvent},
+        domain::pagination::{Page, PageRequest},
+        errors::AppError,
+        events::{DomainEvent, EventSink, EventSinkClient},
+        storage::AuditStore,
+    };
+
+    struct StaticAuditStore {
+        id: Uuid,
+        created_at: chrono::DateTime<chrono::Utc>,
     }
 
-    events.emit(&domain_event).await;
+    #[async_trait]
+    impl AuditStore for StaticAuditStore {
+        async fn record_event(&self, event: CreateHistoryEvent) -> Result<HistoryEvent, AppError> {
+            Ok(HistoryEvent::restore(
+                self.id,
+                event.actor().to_string(),
+                event.resource_kind().to_string(),
+                event.resource_id(),
+                event.resource_name().to_string(),
+                event.action().to_string(),
+                event.data().clone(),
+                self.created_at,
+            ))
+        }
+
+        async fn list_events(&self, _page: &PageRequest) -> Result<Page<HistoryEvent>, AppError> {
+            unreachable!("list_events not exercised by these tests")
+        }
+    }
+
+    struct FailingAuditStore;
+
+    #[async_trait]
+    impl AuditStore for FailingAuditStore {
+        async fn record_event(&self, _event: CreateHistoryEvent) -> Result<HistoryEvent, AppError> {
+            Err(AppError::internal("simulated audit failure"))
+        }
+
+        async fn list_events(&self, _page: &PageRequest) -> Result<Page<HistoryEvent>, AppError> {
+            unreachable!("list_events not exercised by these tests")
+        }
+    }
+
+    struct CollectorSink {
+        events: Arc<Mutex<Vec<DomainEvent>>>,
+    }
+
+    #[async_trait]
+    impl EventSink for CollectorSink {
+        async fn emit(&self, event: &DomainEvent) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    fn collector() -> (EventSinkClient, Arc<Mutex<Vec<DomainEvent>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = EventSinkClient::with_sink(Arc::new(CollectorSink {
+            events: events.clone(),
+        }));
+        (client, events)
+    }
+
+    fn sample_event() -> CreateHistoryEvent {
+        CreateHistoryEvent::new(
+            "system",
+            "label",
+            None,
+            "prod",
+            "create",
+            json!({"name": "prod"}),
+        )
+    }
+
+    async fn wait_for_events(events: &Arc<Mutex<Vec<DomainEvent>>>) -> Vec<DomainEvent> {
+        for _ in 0..100 {
+            let snapshot = events.lock().unwrap().clone();
+            if !snapshot.is_empty() {
+                return snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("timed out waiting for emitted event");
+    }
+
+    #[tokio::test]
+    async fn emitted_event_mirrors_persisted_row_on_success() {
+        let id = Uuid::new_v4();
+        let created_at = Utc.with_ymd_and_hms(2026, 4, 18, 12, 0, 0).unwrap();
+        let audit = StaticAuditStore { id, created_at };
+        let (events, captured) = collector();
+
+        super::record_and_emit(&audit, &events, sample_event()).await;
+
+        let emitted = wait_for_events(&captured).await;
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].id, id);
+        assert_eq!(emitted[0].timestamp, created_at);
+    }
+
+    #[tokio::test]
+    async fn no_event_emitted_when_audit_persistence_fails() {
+        let audit = FailingAuditStore;
+        let (events, captured) = collector();
+
+        super::record_and_emit(&audit, &events, sample_event()).await;
+
+        // Give the spawned emit task time to run if it had been scheduled.
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(
+            captured.lock().unwrap().is_empty(),
+            "no event should be emitted when audit persistence fails"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

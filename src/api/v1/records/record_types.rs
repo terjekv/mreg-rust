@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, require_permission},
+    authz::{self},
     domain::{
         resource_records::{
             CreateRecordTypeDefinition, RecordCardinality, RecordFieldKind, RecordFieldSchema,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::request as authz_request;
+use crate::api::v1::authz::{request as authz_request, require};
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordFieldSchemaRequest {
@@ -131,15 +131,14 @@ pub(crate) async fn create_record_type(
     payload: web::Json<CreateRecordTypeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::record_type::CREATE,
             authz::actions::resource_kinds::RECORD_TYPE,
             request.name.clone(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let record_type = state
@@ -168,15 +167,14 @@ pub(crate) async fn delete_record_type_endpoint(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = RecordTypeName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::record_type::DELETE,
             authz::actions::resource_kinds::RECORD_TYPE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.records().delete_record_type(&name).await?;

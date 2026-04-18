@@ -4,10 +4,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::authz::require;
 use crate::{
     AppState,
     authn::{self, PrincipalContext},
-    authz::{actions, require_permission},
+    authz::actions,
     errors::AppError,
 };
 
@@ -232,15 +233,14 @@ pub(crate) async fn logout_all(
     state: web::Data<AppState>,
     body: web::Json<LogoutAllRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         super::authz::request(
             &req,
             actions::auth_session::LOGOUT_ALL,
             actions::resource_kinds::AUTH_SESSION,
             &body.principal_key,
-        )
-        .build(),
+        ),
     )
     .await?;
     state

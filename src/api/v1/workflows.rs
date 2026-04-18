@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         exports::{CreateExportRun, CreateExportTemplate},
         imports::{CreateImportBatch, ImportBatch, ImportItem, ImportKind, ImportOperation},
@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::SystemListResponse;
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 /// Task execution result.
 #[derive(Serialize, ToSchema)]
@@ -55,15 +55,14 @@ pub(crate) async fn tasks(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::task::LIST,
             authz::actions::resource_kinds::TASK,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state.services.tasks().list(&PageRequest::default()).await?;
@@ -87,15 +86,14 @@ pub(crate) async fn imports(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::import_batch::LIST,
             authz::actions::resource_kinds::IMPORT_BATCH,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -123,15 +121,14 @@ pub(crate) async fn export_templates(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::export_template::LIST,
             authz::actions::resource_kinds::EXPORT_TEMPLATE,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -159,15 +156,14 @@ pub(crate) async fn export_runs(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::export_run::LIST,
             authz::actions::resource_kinds::EXPORT_RUN,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -277,8 +273,8 @@ pub(crate) async fn create_import(
     payload: web::Json<CreateImportRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::import_batch::CREATE,
@@ -291,8 +287,7 @@ pub(crate) async fn create_import(
         .attr(
             "item_count",
             AttrValue::Long(i64::try_from(request.items.len()).unwrap_or(i64::MAX)),
-        )
-        .build(),
+        ),
     )
     .await?;
     let summary = state
@@ -321,8 +316,8 @@ pub(crate) async fn create_export_template(
     payload: web::Json<CreateExportTemplateRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::export_template::CREATE,
@@ -330,8 +325,7 @@ pub(crate) async fn create_export_template(
             request.name.clone(),
         )
         .attr("engine", AttrValue::String(request.engine.clone()))
-        .attr("scope", AttrValue::String(request.scope.clone()))
-        .build(),
+        .attr("scope", AttrValue::String(request.scope.clone())),
     )
     .await?;
     let template = state
@@ -374,7 +368,7 @@ pub(crate) async fn create_export_run(
     if let Some(requested_by) = &request.requested_by {
         authz = authz.attr("requested_by", AttrValue::String(requested_by.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let run = state
         .services
         .exports()
@@ -397,15 +391,14 @@ pub(crate) async fn run_next_task(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::worker::TASK_CLAIM_NEXT,
             authz::actions::resource_kinds::TASK,
             "next",
-        )
-        .build(),
+        ),
     )
     .await?;
     let Some(task) = state.services.tasks().claim_next().await? else {
@@ -447,35 +440,40 @@ async fn execute_import_task(
     state: &web::Data<AppState>,
     task: &TaskEnvelope,
 ) -> Result<Value, AppError> {
-    if let Err(error) = require_permission(
-        &state.authz,
+    if let Err(error) = require(
+        &state,
         authz_request(
             req,
             authz::actions::worker::TASK_EXECUTE_IMPORT_BATCH,
             authz::actions::resource_kinds::TASK,
             task.id().to_string(),
         )
-        .attr("kind", AttrValue::String(task.kind().to_string()))
-        .build(),
+        .attr("kind", AttrValue::String(task.kind().to_string())),
     )
     .await
     {
-        let _ = state
+        if let Err(fail_err) = state
             .services
             .tasks()
             .fail(task.id(), error.to_string())
-            .await;
+            .await
+        {
+            tracing::warn!(task_id = %task.id(), error = %fail_err, "failed to mark import task as failed");
+        }
         return Err(error);
     }
     let import_id = parse_task_uuid(task.payload(), "import_id")?;
     match state.services.imports().run(import_id).await {
         Ok(summary) => serde_json::to_value(summary).map_err(AppError::internal),
         Err(error) => {
-            let _ = state
+            if let Err(fail_err) = state
                 .services
                 .tasks()
                 .fail(task.id(), error.to_string())
-                .await;
+                .await
+            {
+                tracing::warn!(task_id = %task.id(), error = %fail_err, "failed to mark import task as failed");
+            }
             Err(error)
         }
     }
@@ -489,35 +487,40 @@ async fn execute_export_task(
     state: &web::Data<AppState>,
     task: &TaskEnvelope,
 ) -> Result<Value, AppError> {
-    if let Err(error) = require_permission(
-        &state.authz,
+    if let Err(error) = require(
+        &state,
         authz_request(
             req,
             authz::actions::worker::TASK_EXECUTE_EXPORT_RUN,
             authz::actions::resource_kinds::TASK,
             task.id().to_string(),
         )
-        .attr("kind", AttrValue::String(task.kind().to_string()))
-        .build(),
+        .attr("kind", AttrValue::String(task.kind().to_string())),
     )
     .await
     {
-        let _ = state
+        if let Err(fail_err) = state
             .services
             .tasks()
             .fail(task.id(), error.to_string())
-            .await;
+            .await
+        {
+            tracing::warn!(task_id = %task.id(), error = %fail_err, "failed to mark export task as failed");
+        }
         return Err(error);
     }
     let run_id = parse_task_uuid(task.payload(), "run_id")?;
     match state.services.exports().run_export(run_id).await {
         Ok(run) => serde_json::to_value(run).map_err(AppError::internal),
         Err(error) => {
-            let _ = state
+            if let Err(fail_err) = state
                 .services
                 .tasks()
                 .fail(task.id(), error.to_string())
-                .await;
+                .await
+            {
+                tracing::warn!(task_id = %task.id(), error = %fail_err, "failed to mark export task as failed");
+            }
             Err(error)
         }
     }

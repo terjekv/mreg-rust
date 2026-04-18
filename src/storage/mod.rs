@@ -3,6 +3,9 @@ pub mod memory;
 pub mod postgres;
 pub mod readable;
 
+// Shared cross-backend helpers
+pub(crate) mod has_id;
+
 // Shared import helpers (used by both backends)
 pub(crate) mod import_helpers;
 

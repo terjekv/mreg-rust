@@ -4,6 +4,7 @@ use actix_web::HttpRequest;
 
 use crate::authz::{
     AttrValue, AuthorizationRequest, AuthorizationRequestBuilder, extract_principal,
+    require_permission, require_permissions,
 };
 use crate::{
     AppState,
@@ -193,6 +194,23 @@ pub(crate) fn request(
         resource_kind,
         resource_id.into(),
     )
+}
+
+/// Build the request and enforce authorization in one step.
+pub(crate) async fn require(
+    state: &AppState,
+    builder: AuthorizationRequestBuilder,
+) -> Result<(), AppError> {
+    require_permission(&state.authz, builder.build()).await
+}
+
+/// Enforce a precomputed list of authorization requests (e.g. from
+/// [`UpdateAuthzBuilder::build`]).
+pub(crate) async fn require_all(
+    state: &AppState,
+    requests: Vec<AuthorizationRequest>,
+) -> Result<(), AppError> {
+    require_permissions(&state.authz, requests).await
 }
 
 pub(crate) fn string_set(values: impl IntoIterator<Item = String>) -> AttrValue {

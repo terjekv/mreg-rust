@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         filters::NetworkPolicyFilter,
         network_policy::NetworkPolicy,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     NetworkPolicyPageResponse,
@@ -113,15 +113,14 @@ pub(crate) async fn list_network_policies(
     state: web::Data<AppState>,
     query: web::Query<PolicyQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network_policy::LIST,
             authz::actions::resource_kinds::NETWORK_POLICY,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -171,7 +170,7 @@ pub(crate) async fn create_network_policy(
             AttrValue::String(pattern.clone()),
         );
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let item = state
         .services
         .network_policies()
@@ -198,15 +197,14 @@ pub(crate) async fn get_network_policy(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = NetworkPolicyName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network_policy::GET,
             authz::actions::resource_kinds::NETWORK_POLICY,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state.services.network_policies().get(&name).await?;
@@ -231,15 +229,14 @@ pub(crate) async fn delete_network_policy(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = NetworkPolicyName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network_policy::DELETE,
             authz::actions::resource_kinds::NETWORK_POLICY,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.network_policies().delete(&name).await?;

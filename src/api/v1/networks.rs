@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, AuthorizationRequest, require_permission, require_permissions},
+    authz::{self, AttrValue, AuthorizationRequest},
     domain::{
         filters::NetworkFilter,
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::{UpdateAuthzBuilder, request as authz_request};
+use super::authz::{UpdateAuthzBuilder, request as authz_request, require, require_all};
 use super::{
     attachment_community_assignments::AttachmentCommunityAssignmentResponse,
     attachments::{AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse},
@@ -427,15 +427,14 @@ pub(crate) async fn list_networks(
     state: web::Data<AppState>,
     query: web::Query<ListNetworksQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network::LIST,
             authz::actions::resource_kinds::NETWORK,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -485,7 +484,7 @@ pub(crate) async fn create_network(
     if let Some(vlan) = request.vlan {
         authz = authz.attr("vlan", AttrValue::Long(i64::from(vlan)));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let network = state
         .services
         .networks()
@@ -513,15 +512,14 @@ pub(crate) async fn get_network(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let cidr = CidrValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network::GET,
             authz::actions::resource_kinds::NETWORK,
             cidr.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let network = state.services.networks().get(&cidr).await?;
@@ -550,7 +548,7 @@ pub(crate) async fn update_network(
     let cidr = CidrValue::new(path.into_inner())?;
     let request = payload.into_inner();
     let authz_requests = build_network_update_authz(&req, &cidr.as_str(), &request);
-    require_permissions(&state.authz, authz_requests).await?;
+    require_all(&state, authz_requests).await?;
     let command = UpdateNetwork {
         description: request.description,
         vlan: request.vlan.try_map(VlanId::new)?,
@@ -581,15 +579,14 @@ pub(crate) async fn list_used_addresses(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let cidr = CidrValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network::ADDRESS_LIST_USED,
             authz::actions::resource_kinds::NETWORK,
             cidr.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let assignments = state.services.networks().list_used_addresses(&cidr).await?;
@@ -627,7 +624,7 @@ pub(crate) async fn list_unused_addresses(
     if let Some(limit) = query.limit {
         authz = authz.attr("limit", AttrValue::Long(i64::from(limit)));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let addresses = state
         .services
         .networks()
@@ -655,15 +652,14 @@ pub(crate) async fn delete_network(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let cidr = CidrValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network::DELETE,
             authz::actions::resource_kinds::NETWORK,
             cidr.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.networks().delete(&cidr).await?;
@@ -687,15 +683,14 @@ pub(crate) async fn list_excluded_ranges(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let cidr = CidrValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network::EXCLUDED_RANGE_LIST,
             authz::actions::resource_kinds::NETWORK,
             cidr.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -727,8 +722,8 @@ pub(crate) async fn create_excluded_range(
     payload: web::Json<CreateExcludedRangeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::network::EXCLUDED_RANGE_CREATE,
@@ -744,8 +739,7 @@ pub(crate) async fn create_excluded_range(
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let (network, command) = request.into_parts()?;

@@ -2,7 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::HostCommunityAssignmentFilter,
         host_community_assignment::{CreateHostCommunityAssignment, HostCommunityAssignment},
@@ -38,15 +38,16 @@ pub async fn create_host_community_assignment(
 ) -> Result<HostCommunityAssignment, AppError> {
     let item = store.create_host_community_assignment(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_community_assignment",
+        actions::CREATE,
         Some(item.id()),
         item.host_name().as_str(),
-        "create",
         json!({"host_name": item.host_name().as_str(), "address": item.address().as_str(), "community_name": item.community_name().as_str(), "policy_name": item.policy_name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(item)
 }
@@ -76,15 +77,16 @@ pub async fn delete_host_community_assignment(
     let old = store.get_host_community_assignment(mapping_id).await?;
     store.delete_host_community_assignment(mapping_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_community_assignment",
+        actions::DELETE,
         Some(old.id()),
         old.host_name().as_str(),
-        "delete",
         json!({"host_name": old.host_name().as_str(), "address": old.address().as_str(), "community_name": old.community_name().as_str(), "policy_name": old.policy_name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

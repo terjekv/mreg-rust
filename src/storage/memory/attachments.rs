@@ -20,7 +20,7 @@ use crate::{
     storage::{AttachmentCommunityAssignmentStore, AttachmentStore},
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 fn matches_mac_address(
     state: &MemoryState,
@@ -306,9 +306,9 @@ pub(super) fn create_attachment_community_assignment_in_state(
 impl AttachmentStore for MemoryStorage {
     async fn list_attachments(&self, page: &PageRequest) -> Result<Page<HostAttachment>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<HostAttachment> = state.host_attachments.values().cloned().collect();
-        sort_items(
-            &mut items,
+        let items: Vec<HostAttachment> = state.host_attachments.values().cloned().collect();
+        sort_and_paginate(
+            items,
             page,
             &["network", "mac_address"],
             |attachment, field| match field {
@@ -320,8 +320,7 @@ impl AttachmentStore for MemoryStorage {
                     .to_string(),
                 _ => attachment.host_name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn list_attachments_for_host(
@@ -527,7 +526,7 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
         filter: &AttachmentCommunityAssignmentFilter,
     ) -> Result<Page<AttachmentCommunityAssignment>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<AttachmentCommunityAssignment> = state
+        let items: Vec<AttachmentCommunityAssignment> = state
             .attachment_community_assignments
             .values()
             .filter(|assignment| {
@@ -535,8 +534,8 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
             })
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["network", "policy_name", "community_name"],
             |assignment, field| match field {
@@ -545,8 +544,7 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
                 "community_name" => assignment.community_name().as_str().to_string(),
                 _ => assignment.host_name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn list_attachment_community_assignments_for_attachments(

@@ -13,7 +13,7 @@ use crate::{
     storage::PtrOverrideStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_ptr_override_in_state(
     state: &mut MemoryState,
@@ -72,14 +72,14 @@ impl PtrOverrideStore for MemoryStorage {
         filter: &PtrOverrideFilter,
     ) -> Result<Page<PtrOverride>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<PtrOverride> = state
+        let items: Vec<PtrOverride> = state
             .ptr_overrides
             .values()
             .filter(|ptr| filter.matches(ptr))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["address", "created_at"],
             |ptr, field| match field {
@@ -87,8 +87,7 @@ impl PtrOverrideStore for MemoryStorage {
                 "created_at" => ptr.created_at().to_rfc3339(),
                 _ => ptr.host_name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_ptr_override(

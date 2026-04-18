@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
         filters::BacnetIdFilter,
@@ -31,15 +31,17 @@ pub async fn create_bacnet_id(
 ) -> Result<BacnetIdAssignment, AppError> {
     let item = store.create_bacnet_id(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    let bid_str = item.bacnet_id().as_u32().to_string();
+    super::audit_mutation(
+        audit,
+        events,
         "bacnet_id",
+        actions::CREATE,
         None,
-        item.bacnet_id().as_u32().to_string(),
-        "create",
+        &bid_str,
         json!({"bacnet_id": item.bacnet_id().as_u32(), "host_name": item.host_name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(item)
 }
@@ -62,15 +64,17 @@ pub async fn delete_bacnet_id(
     let old = store.get_bacnet_id(bacnet_id).await?;
     store.delete_bacnet_id(bacnet_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    let bid_str = old.bacnet_id().as_u32().to_string();
+    super::audit_mutation(
+        audit,
+        events,
         "bacnet_id",
+        actions::DELETE,
         None,
-        old.bacnet_id().as_u32().to_string(),
-        "delete",
+        &bid_str,
         json!({"bacnet_id": old.bacnet_id().as_u32(), "host_name": old.host_name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

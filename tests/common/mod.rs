@@ -11,8 +11,10 @@ use std::sync::{
 };
 
 use actix_web::{App, body::to_bytes, http::StatusCode, test, web};
+use diesel::{Connection, PgConnection, QueryableByName, RunQueryDsl, sql_query};
 use serde_json::Value;
 use tokio::sync::OnceCell;
+use url::Url;
 use uuid::Uuid;
 
 use mreg_rust::{
@@ -25,6 +27,21 @@ use mreg_rust::{
     services::Services,
     storage::{DynStorage, ReadableStorage, build_storage},
 };
+
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> i32;
+    #[cfg(unix)]
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+static POSTGRES_TEST_SCHEMA_CLEANUP: OnceLock<(String, String)> = OnceLock::new();
+static POSTGRES_TEST_SCHEMA_CLEANUP_REGISTERED: OnceLock<()> = OnceLock::new();
+
+#[derive(QueryableByName)]
+struct SchemaNameRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    nspname: String,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TestBackend {
@@ -467,7 +484,23 @@ pub async fn postgres_state() -> Option<AppState> {
 
     PG_STATE
         .get_or_init(|| async {
-            let url = std::env::var("MREG_TEST_DATABASE_URL").ok()?;
+            let url = match postgres_test_database_url() {
+                Ok(Some(url)) => url,
+                Ok(None) => return None,
+                Err(error) => {
+                    if std::env::var("CI").is_ok() {
+                        panic!(
+                            "FATAL in CI: MREG_TEST_DATABASE_URL is set but isolated test schema \
+                             setup failed: {error}"
+                        );
+                    }
+                    eprintln!(
+                        "warning: MREG_TEST_DATABASE_URL is set but isolated test schema \
+                         setup failed: {error}. Postgres tests will be skipped."
+                    );
+                    return None;
+                }
+            };
             let result = build_state(
                 StorageBackendSetting::Postgres,
                 Some(url),
@@ -505,7 +538,23 @@ pub async fn postgres_state_with_auto_dhcp() -> Option<AppState> {
 
     PG_STATE_DHCP
         .get_or_init(|| async {
-            let url = std::env::var("MREG_TEST_DATABASE_URL").ok()?;
+            let url = match postgres_test_database_url() {
+                Ok(Some(url)) => url,
+                Ok(None) => return None,
+                Err(error) => {
+                    if std::env::var("CI").is_ok() {
+                        panic!(
+                            "FATAL in CI: MREG_TEST_DATABASE_URL is set but isolated test schema \
+                             setup failed (auto-dhcp): {error}"
+                        );
+                    }
+                    eprintln!(
+                        "warning: MREG_TEST_DATABASE_URL is set but isolated test schema \
+                         setup failed (auto-dhcp): {error}. Postgres tests will be skipped."
+                    );
+                    return None;
+                }
+            };
             let result = build_state(
                 StorageBackendSetting::Postgres,
                 Some(url),
@@ -551,6 +600,20 @@ Postgres tests must not be silently skipped in CI."
         );
     }
     message
+}
+
+pub fn postgres_test_database_url() -> Result<Option<String>, mreg_rust::errors::AppError> {
+    let Some(base_url) = std::env::var("MREG_TEST_DATABASE_URL").ok() else {
+        return Ok(None);
+    };
+
+    let schema = postgres_test_schema();
+    if let Err(error) = cleanup_stale_postgres_test_schemas(&base_url, schema) {
+        eprintln!("warning: failed to sweep stale postgres test schemas: {error}");
+    }
+    ensure_postgres_test_schema(&base_url, schema)?;
+    register_postgres_test_schema_cleanup(&base_url, schema)?;
+    Ok(Some(with_postgres_search_path(&base_url, schema)?))
 }
 
 fn build_state(
@@ -599,6 +662,159 @@ fn sanitize(stem: &str) -> String {
             _ => '-',
         })
         .collect()
+}
+
+fn postgres_test_schema() -> &'static str {
+    static SCHEMA: OnceLock<String> = OnceLock::new();
+    SCHEMA.get_or_init(|| format!("mreg_test_{}_t{:04x}", std::process::id(), run_nonce()))
+}
+
+fn ensure_postgres_test_schema(
+    database_url: &str,
+    schema: &str,
+) -> Result<(), mreg_rust::errors::AppError> {
+    let mut connection =
+        PgConnection::establish(database_url).map_err(mreg_rust::errors::AppError::internal)?;
+    sql_query(format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        .execute(&mut connection)
+        .map_err(mreg_rust::errors::AppError::internal)?;
+    Ok(())
+}
+
+fn cleanup_stale_postgres_test_schemas(
+    database_url: &str,
+    current_schema: &str,
+) -> Result<(), mreg_rust::errors::AppError> {
+    let mut connection =
+        PgConnection::establish(database_url).map_err(mreg_rust::errors::AppError::internal)?;
+    let schemas = sql_query(
+        "SELECT nspname \
+         FROM pg_namespace \
+         WHERE nspname LIKE 'mreg_test\\_%' ESCAPE '\\'",
+    )
+    .load::<SchemaNameRow>(&mut connection)
+    .map_err(mreg_rust::errors::AppError::internal)?;
+
+    for schema in schemas {
+        if schema.nspname == current_schema {
+            continue;
+        }
+        let Some(pid) = postgres_test_schema_pid(&schema.nspname) else {
+            continue;
+        };
+        if postgres_test_pid_is_live(pid) {
+            continue;
+        }
+        sql_query(format!("DROP SCHEMA IF EXISTS {} CASCADE", schema.nspname))
+            .execute(&mut connection)
+            .map_err(mreg_rust::errors::AppError::internal)?;
+    }
+
+    Ok(())
+}
+
+fn postgres_test_schema_pid(schema: &str) -> Option<u32> {
+    let pid = schema
+        .strip_prefix("mreg_test_")?
+        .split_once("_t")?
+        .0
+        .parse()
+        .ok()?;
+    Some(pid)
+}
+
+#[cfg(unix)]
+fn postgres_test_pid_is_live(pid: u32) -> bool {
+    // SAFETY: `kill(pid, 0)` only probes process existence and does not send a
+    // signal. We use it to avoid dropping schemas owned by live test processes.
+    let result = unsafe { kill(pid as i32, 0) };
+    if result == 0 {
+        return true;
+    }
+    matches!(std::io::Error::last_os_error().raw_os_error(), Some(1))
+}
+
+#[cfg(not(unix))]
+fn postgres_test_pid_is_live(_pid: u32) -> bool {
+    true
+}
+
+fn register_postgres_test_schema_cleanup(
+    database_url: &str,
+    schema: &str,
+) -> Result<(), mreg_rust::errors::AppError> {
+    POSTGRES_TEST_SCHEMA_CLEANUP.get_or_init(|| (database_url.to_string(), schema.to_string()));
+    if POSTGRES_TEST_SCHEMA_CLEANUP_REGISTERED.get().is_none() {
+        // SAFETY: `atexit` installs a no-arg callback invoked once on normal
+        // process termination. We register a single static function.
+        let result = unsafe { atexit(drop_postgres_test_schema_at_exit) };
+        if result != 0 {
+            return Err(mreg_rust::errors::AppError::internal(
+                "failed to register postgres test schema cleanup",
+            ));
+        }
+        let _ = POSTGRES_TEST_SCHEMA_CLEANUP_REGISTERED.set(());
+    }
+    Ok(())
+}
+
+extern "C" fn drop_postgres_test_schema_at_exit() {
+    let Some((database_url, schema)) = POSTGRES_TEST_SCHEMA_CLEANUP.get() else {
+        return;
+    };
+
+    let mut connection = match PgConnection::establish(database_url) {
+        Ok(connection) => connection,
+        Err(error) => {
+            eprintln!(
+                "warning: failed to connect for postgres test schema cleanup \
+                 ({schema}): {error}"
+            );
+            return;
+        }
+    };
+    if let Err(error) =
+        sql_query(format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&mut connection)
+    {
+        eprintln!("warning: failed to drop postgres test schema {schema} during cleanup: {error}");
+    }
+}
+
+fn with_postgres_search_path(
+    database_url: &str,
+    schema: &str,
+) -> Result<String, mreg_rust::errors::AppError> {
+    let mut url = Url::parse(database_url).map_err(|error| {
+        mreg_rust::errors::AppError::config(format!(
+            "MREG_TEST_DATABASE_URL must be a valid postgres URL: {error}"
+        ))
+    })?;
+
+    let existing_pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let mut existing_options = None;
+    url.set_query(None);
+    {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in existing_pairs {
+            if key == "options" {
+                existing_options = Some(value);
+            } else {
+                query.append_pair(&key, &value);
+            }
+        }
+        let search_path = format!("{schema},public");
+        let options = match existing_options {
+            Some(value) if !value.trim().is_empty() => {
+                format!("{value} -csearch_path={search_path}")
+            }
+            _ => format!("-csearch_path={search_path}"),
+        };
+        query.append_pair("options", &options);
+    }
+    Ok(url.into())
 }
 
 fn run_nonce() -> u16 {

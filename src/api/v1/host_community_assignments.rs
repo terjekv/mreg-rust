@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         filters::HostCommunityAssignmentFilter,
         host_community_assignment::HostCommunityAssignment,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     HostCommunityAssignmentPageResponse,
@@ -126,15 +126,14 @@ pub(crate) async fn list_host_community_assignments(
     state: web::Data<AppState>,
     query: web::Query<HostCommunityAssignmentQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_community_assignment::LIST,
             authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -168,8 +167,8 @@ pub(crate) async fn create_host_community_assignment(
     payload: web::Json<CreateHostCommunityAssignmentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_community_assignment::CREATE,
@@ -185,8 +184,7 @@ pub(crate) async fn create_host_community_assignment(
         .attr(
             "community_name",
             AttrValue::String(request.community_name.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state
@@ -215,15 +213,14 @@ pub(crate) async fn get_host_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let mapping_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_community_assignment::GET,
             authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
             mapping_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state
@@ -252,15 +249,14 @@ pub(crate) async fn delete_host_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let mapping_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_community_assignment::DELETE,
             authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
             mapping_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state

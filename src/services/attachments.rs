@@ -2,7 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::attachment::{
         AttachmentCommunityAssignment, AttachmentDhcpIdentifier, AttachmentPrefixReservation,
         CreateAttachmentCommunityAssignment, CreateAttachmentDhcpIdentifier,
@@ -26,21 +26,18 @@ pub async fn create_attachment(
     events: &EventSinkClient,
 ) -> Result<HostAttachment, AppError> {
     let attachment = store.create_attachment(command).await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "host_attachment",
-            Some(attachment.id()),
-            attachment.host_name().as_str(),
-            "create",
-            json!({
-                "host_name": attachment.host_name().as_str(),
-                "network": attachment.network_cidr().as_str(),
-                "mac_address": attachment.mac_address().map(|value| value.as_str()),
-            }),
-        ),
+        "host_attachment",
+        actions::CREATE,
+        Some(attachment.id()),
+        attachment.host_name().as_str(),
+        json!({
+            "host_name": attachment.host_name().as_str(),
+            "network": attachment.network_cidr().as_str(),
+            "mac_address": attachment.mac_address().map(|value| value.as_str()),
+        }),
     )
     .await;
     Ok(attachment)
@@ -54,21 +51,18 @@ pub async fn update_attachment(
     events: &EventSinkClient,
 ) -> Result<HostAttachment, AppError> {
     let attachment = store.update_attachment(attachment_id, command).await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "host_attachment",
-            Some(attachment.id()),
-            attachment.host_name().as_str(),
-            "update",
-            json!({
-                "host_name": attachment.host_name().as_str(),
-                "network": attachment.network_cidr().as_str(),
-                "mac_address": attachment.mac_address().map(|value| value.as_str()),
-            }),
-        ),
+        "host_attachment",
+        actions::UPDATE,
+        Some(attachment.id()),
+        attachment.host_name().as_str(),
+        json!({
+            "host_name": attachment.host_name().as_str(),
+            "network": attachment.network_cidr().as_str(),
+            "mac_address": attachment.mac_address().map(|value| value.as_str()),
+        }),
     )
     .await;
     Ok(attachment)
@@ -82,20 +76,17 @@ pub async fn delete_attachment(
 ) -> Result<(), AppError> {
     let old = store.get_attachment(attachment_id).await?;
     store.delete_attachment(attachment_id).await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "host_attachment",
-            Some(old.id()),
-            old.host_name().as_str(),
-            "delete",
-            json!({
-                "host_name": old.host_name().as_str(),
-                "network": old.network_cidr().as_str(),
-            }),
-        ),
+        "host_attachment",
+        actions::DELETE,
+        Some(old.id()),
+        old.host_name().as_str(),
+        json!({
+            "host_name": old.host_name().as_str(),
+            "network": old.network_cidr().as_str(),
+        }),
     )
     .await;
     Ok(())
@@ -116,22 +107,19 @@ pub async fn create_attachment_dhcp_identifier(
         crate::domain::attachment::DhcpIdentifierKind::DuidUuid => "duid_uuid",
         crate::domain::attachment::DhcpIdentifierKind::DuidRaw => "duid_raw",
     };
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "attachment_dhcp_identifier",
-            Some(identifier.id()),
-            identifier.value(),
-            "create",
-            json!({
-                "attachment_id": identifier.attachment_id(),
-                "family": identifier.family().as_u8(),
-                "kind": kind,
-                "value": identifier.value(),
-            }),
-        ),
+        "attachment_dhcp_identifier",
+        actions::CREATE,
+        Some(identifier.id()),
+        identifier.value(),
+        json!({
+            "attachment_id": identifier.attachment_id(),
+            "family": identifier.family().as_u8(),
+            "kind": kind,
+            "value": identifier.value(),
+        }),
     )
     .await;
     Ok(identifier)
@@ -153,17 +141,14 @@ pub async fn delete_attachment_dhcp_identifier(
     store
         .delete_attachment_dhcp_identifier(identifier_id)
         .await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "attachment_dhcp_identifier",
-            Some(identifier.id()),
-            identifier.value(),
-            "delete",
-            json!({"attachment_id": identifier.attachment_id(), "value": identifier.value()}),
-        ),
+        "attachment_dhcp_identifier",
+        actions::DELETE,
+        Some(identifier.id()),
+        identifier.value(),
+        json!({"attachment_id": identifier.attachment_id(), "value": identifier.value()}),
     )
     .await;
     Ok(())
@@ -176,17 +161,14 @@ pub async fn create_attachment_prefix_reservation(
     events: &EventSinkClient,
 ) -> Result<AttachmentPrefixReservation, AppError> {
     let reservation = store.create_attachment_prefix_reservation(command).await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "attachment_prefix_reservation",
-            Some(reservation.id()),
-            reservation.prefix().as_str(),
-            "create",
-            json!({"attachment_id": reservation.attachment_id(), "prefix": reservation.prefix().as_str()}),
-        ),
+        "attachment_prefix_reservation",
+        actions::CREATE,
+        Some(reservation.id()),
+        reservation.prefix().as_str(),
+        json!({"attachment_id": reservation.attachment_id(), "prefix": reservation.prefix().as_str()}),
     )
     .await;
     Ok(reservation)
@@ -208,17 +190,14 @@ pub async fn delete_attachment_prefix_reservation(
     store
         .delete_attachment_prefix_reservation(reservation_id)
         .await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "attachment_prefix_reservation",
-            Some(reservation.id()),
-            reservation.prefix().as_str(),
-            "delete",
-            json!({"attachment_id": reservation.attachment_id(), "prefix": reservation.prefix().as_str()}),
-        ),
+        "attachment_prefix_reservation",
+        actions::DELETE,
+        Some(reservation.id()),
+        reservation.prefix().as_str(),
+        json!({"attachment_id": reservation.attachment_id(), "prefix": reservation.prefix().as_str()}),
     )
     .await;
     Ok(())
@@ -233,23 +212,20 @@ pub async fn create_attachment_community_assignment(
     let assignment = store
         .create_attachment_community_assignment(command)
         .await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "attachment_community_assignment",
-            Some(assignment.id()),
-            assignment.host_name().as_str(),
-            "create",
-            json!({
-                "attachment_id": assignment.attachment_id(),
-                "host_name": assignment.host_name().as_str(),
-                "network": assignment.network_cidr().as_str(),
-                "policy_name": assignment.policy_name().as_str(),
-                "community_name": assignment.community_name().as_str(),
-            }),
-        ),
+        "attachment_community_assignment",
+        actions::CREATE,
+        Some(assignment.id()),
+        assignment.host_name().as_str(),
+        json!({
+            "attachment_id": assignment.attachment_id(),
+            "host_name": assignment.host_name().as_str(),
+            "network": assignment.network_cidr().as_str(),
+            "policy_name": assignment.policy_name().as_str(),
+            "community_name": assignment.community_name().as_str(),
+        }),
     )
     .await;
     Ok(assignment)
@@ -267,23 +243,20 @@ pub async fn delete_attachment_community_assignment(
     store
         .delete_attachment_community_assignment(assignment_id)
         .await?;
-    super::record_and_emit(
+    super::audit_mutation(
         audit,
         events,
-        CreateHistoryEvent::new(
-            "system",
-            "attachment_community_assignment",
-            Some(old.id()),
-            old.host_name().as_str(),
-            "delete",
-            json!({
-                "attachment_id": old.attachment_id(),
-                "host_name": old.host_name().as_str(),
-                "network": old.network_cidr().as_str(),
-                "policy_name": old.policy_name().as_str(),
-                "community_name": old.community_name().as_str(),
-            }),
-        ),
+        "attachment_community_assignment",
+        actions::DELETE,
+        Some(old.id()),
+        old.host_name().as_str(),
+        json!({
+            "attachment_id": old.attachment_id(),
+            "host_name": old.host_name().as_str(),
+            "network": old.network_cidr().as_str(),
+            "policy_name": old.policy_name().as_str(),
+            "community_name": old.community_name().as_str(),
+        }),
     )
     .await;
     Ok(())

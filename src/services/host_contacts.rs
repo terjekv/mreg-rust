@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::HostContactFilter,
         host_contact::{CreateHostContact, HostContact},
@@ -31,15 +31,16 @@ pub async fn create_host_contact(
 ) -> Result<HostContact, AppError> {
     let contact = store.create_host_contact(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_contact",
+        actions::CREATE,
         Some(contact.id()),
         contact.email().as_str(),
-        "create",
         json!({"email": contact.email().as_str(), "display_name": contact.display_name()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(contact)
 }
@@ -62,15 +63,16 @@ pub async fn delete_host_contact(
     let old = store.get_host_contact_by_email(email).await?;
     store.delete_host_contact(email).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_contact",
+        actions::DELETE,
         Some(old.id()),
         old.email().as_str(),
-        "delete",
         json!({"email": old.email().as_str(), "display_name": old.display_name()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

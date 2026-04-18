@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         host_policy::{
             CreateHostPolicyAtom, CreateHostPolicyRole, HostPolicyAtom, HostPolicyRole,
@@ -36,15 +36,16 @@ pub async fn create_atom(
 ) -> Result<HostPolicyAtom, AppError> {
     let atom = store.create_atom(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_atom",
+        actions::CREATE,
         Some(atom.id()),
         atom.name().as_str(),
-        "create",
         json!({"name": atom.name().as_str(), "description": atom.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(atom)
 }
@@ -72,15 +73,16 @@ pub async fn update_atom(
     let old = store.get_atom_by_name(name).await?;
     let new = store.update_atom(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_atom",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({"old": {"description": old.description()}, "new": {"description": new.description()}}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -95,15 +97,16 @@ pub async fn delete_atom(
     let old = store.get_atom_by_name(name).await?;
     store.delete_atom(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_atom",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str(), "description": old.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -129,15 +132,16 @@ pub async fn create_role(
 ) -> Result<HostPolicyRole, AppError> {
     let role = store.create_role(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::CREATE,
         Some(role.id()),
         role.name().as_str(),
-        "create",
         json!({"name": role.name().as_str(), "description": role.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(role)
 }
@@ -165,15 +169,16 @@ pub async fn update_role(
     let old = store.get_role_by_name(name).await?;
     let new = store.update_role(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({"old": {"description": old.description()}, "new": {"description": new.description()}}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -188,15 +193,16 @@ pub async fn delete_role(
     let old = store.get_role_by_name(name).await?;
     store.delete_role(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str(), "description": old.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -212,15 +218,16 @@ pub async fn add_atom_to_role(
     let role = store.get_role_by_name(role_name).await?;
     store.add_atom_to_role(role_name, atom_name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::ADD_ATOM,
         Some(role.id()),
         role.name().as_str(),
-        "add_atom",
         json!({"role": role.name().as_str(), "atom": atom_name.as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -236,15 +243,16 @@ pub async fn remove_atom_from_role(
     let role = store.get_role_by_name(role_name).await?;
     store.remove_atom_from_role(role_name, atom_name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::REMOVE_ATOM,
         Some(role.id()),
         role.name().as_str(),
-        "remove_atom",
         json!({"role": role.name().as_str(), "atom": atom_name.as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -260,15 +268,16 @@ pub async fn add_host_to_role(
     let role = store.get_role_by_name(role_name).await?;
     store.add_host_to_role(role_name, host_name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::ADD_HOST,
         Some(role.id()),
         role.name().as_str(),
-        "add_host",
         json!({"role": role.name().as_str(), "host": host_name}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -284,15 +293,16 @@ pub async fn remove_host_from_role(
     let role = store.get_role_by_name(role_name).await?;
     store.remove_host_from_role(role_name, host_name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::REMOVE_HOST,
         Some(role.id()),
         role.name().as_str(),
-        "remove_host",
         json!({"role": role.name().as_str(), "host": host_name}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -308,15 +318,16 @@ pub async fn add_label_to_role(
     let role = store.get_role_by_name(role_name).await?;
     store.add_label_to_role(role_name, label_name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::ADD_LABEL,
         Some(role.id()),
         role.name().as_str(),
-        "add_label",
         json!({"role": role.name().as_str(), "label": label_name}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -332,15 +343,16 @@ pub async fn remove_label_from_role(
     let role = store.get_role_by_name(role_name).await?;
     store.remove_label_from_role(role_name, label_name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "host_policy_role",
+        actions::REMOVE_LABEL,
         Some(role.id()),
         role.name().as_str(),
-        "remove_label",
         json!({"role": role.name().as_str(), "label": label_name}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         pagination::{Page, PageRequest},
@@ -29,15 +29,16 @@ pub async fn create(
 ) -> Result<NameServer, AppError> {
     let ns = store.create_nameserver(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "nameserver",
+        actions::CREATE,
         Some(ns.id()),
         ns.name().as_str(),
-        "create",
         json!({"name": ns.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(ns)
 }
@@ -61,15 +62,16 @@ pub async fn update(
     let old = store.get_nameserver_by_name(name).await?;
     let new = store.update_nameserver(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "nameserver",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -84,15 +86,16 @@ pub async fn delete(
     let old = store.get_nameserver_by_name(name).await?;
     store.delete_nameserver(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "nameserver",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

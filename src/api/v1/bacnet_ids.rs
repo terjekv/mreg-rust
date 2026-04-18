@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         bacnet::BacnetIdAssignment,
         filters::BacnetIdFilter,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     BacnetPageResponse,
@@ -105,15 +105,14 @@ pub(crate) async fn list_bacnet_ids(
     state: web::Data<AppState>,
     query: web::Query<BacnetQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::bacnet_id::LIST,
             authz::actions::resource_kinds::BACNET_ID,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -140,8 +139,8 @@ pub(crate) async fn create_bacnet_id(
     payload: web::Json<CreateBacnetRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::bacnet_id::CREATE,
@@ -149,8 +148,7 @@ pub(crate) async fn create_bacnet_id(
             request.bacnet_id.to_string(),
         )
         .attr("bacnet_id", AttrValue::Long(i64::from(request.bacnet_id)))
-        .attr("host_name", AttrValue::String(request.host_name.clone()))
-        .build(),
+        .attr("host_name", AttrValue::String(request.host_name.clone())),
     )
     .await?;
     let item = state
@@ -179,15 +177,14 @@ pub(crate) async fn get_bacnet_id(
     path: web::Path<u32>,
 ) -> Result<HttpResponse, AppError> {
     let bacnet_id = BacnetIdentifier::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::bacnet_id::GET,
             authz::actions::resource_kinds::BACNET_ID,
             bacnet_id.as_u32().to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state.services.bacnet().get(bacnet_id).await?;
@@ -212,15 +209,14 @@ pub(crate) async fn delete_bacnet_id(
     path: web::Path<u32>,
 ) -> Result<HttpResponse, AppError> {
     let bacnet_id = BacnetIdentifier::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::bacnet_id::DELETE,
             authz::actions::resource_kinds::BACNET_ID,
             bacnet_id.as_u32().to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.bacnet().delete(bacnet_id).await?;

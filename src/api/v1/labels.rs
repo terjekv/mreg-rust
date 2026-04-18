@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         label::{CreateLabel, Label, UpdateLabel},
         pagination::{PageRequest, PageResponse},
@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     LabelPageResponse,
@@ -80,15 +80,14 @@ pub(crate) async fn list_labels(
     state: web::Data<AppState>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::label::LIST,
             authz::actions::resource_kinds::LABEL,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state.services.labels().list(&query.into_inner()).await?;
@@ -114,15 +113,14 @@ pub(crate) async fn create_label(
     payload: web::Json<CreateLabelRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::label::CREATE,
             authz::actions::resource_kinds::LABEL,
             request.name.clone(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let label = state
@@ -151,15 +149,14 @@ pub(crate) async fn get_label(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = LabelName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::label::GET,
             authz::actions::resource_kinds::LABEL,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let label = state.services.labels().get(&name).await?;
@@ -201,7 +198,7 @@ pub(crate) async fn update_label(
     if let Some(description) = &request.description {
         authz = authz.attr("new_description", AttrValue::String(description.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let command = UpdateLabel::new(request.description)?;
     let label = state.services.labels().update(&name, command).await?;
     Ok(HttpResponse::Ok().json(LabelResponse::from_domain(&label)))
@@ -225,15 +222,14 @@ pub(crate) async fn delete_label(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = LabelName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::label::DELETE,
             authz::actions::resource_kinds::LABEL,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.labels().delete(&name).await?;

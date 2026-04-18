@@ -172,16 +172,19 @@ pub(in crate::storage::postgres) fn create(
 
         let contact_id = row.id;
 
-        // Link hosts
-        for host_name in command.hosts() {
-            let host_id = PostgresStorage::resolve_host_id(connection, host_name)?;
-            sql_query(
-                "INSERT INTO host_contacts_hosts (host_id, contact_id)
-                 VALUES ($1, $2)",
-            )
-            .bind::<SqlUuid, _>(host_id)
-            .bind::<SqlUuid, _>(contact_id)
-            .execute(connection)?;
+        let hosts = command.hosts();
+        if !hosts.is_empty() {
+            let host_ids = PostgresStorage::resolve_host_ids(connection, hosts)?;
+            for host_name in hosts {
+                let host_id = host_ids[host_name];
+                sql_query(
+                    "INSERT INTO host_contacts_hosts (host_id, contact_id)
+                     VALUES ($1, $2)",
+                )
+                .bind::<SqlUuid, _>(host_id)
+                .bind::<SqlUuid, _>(contact_id)
+                .execute(connection)?;
+            }
         }
 
         build_host_contact(connection, row)

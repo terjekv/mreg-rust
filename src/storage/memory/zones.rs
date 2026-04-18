@@ -21,7 +21,7 @@ use crate::{
 use super::{
     MemoryState, MemoryStorage, bump_zone_serial_in_state,
     delete_records_by_name_and_type_in_state, paginate_by_cursor, records::create_record_in_state,
-    sort_items,
+    sort_and_paginate,
 };
 
 pub(super) fn create_forward_zone_in_state(
@@ -111,17 +111,11 @@ pub(super) fn create_reverse_zone_in_state(
 impl ZoneStore for MemoryStorage {
     async fn list_forward_zones(&self, page: &PageRequest) -> Result<Page<ForwardZone>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<ForwardZone> = state.forward_zones.values().cloned().collect();
-        sort_items(
-            &mut items,
-            page,
-            &["created_at"],
-            |zone, field| match field {
-                "created_at" => zone.created_at().to_rfc3339(),
-                _ => zone.name().as_str().to_string(),
-            },
-        )?;
-        paginate_by_cursor(items, page)
+        let items: Vec<ForwardZone> = state.forward_zones.values().cloned().collect();
+        sort_and_paginate(items, page, &["created_at"], |zone, field| match field {
+            "created_at" => zone.created_at().to_rfc3339(),
+            _ => zone.name().as_str().to_string(),
+        })
     }
 
     async fn create_forward_zone(
@@ -139,8 +133,15 @@ impl ZoneStore for MemoryStorage {
                 None,
                 json!({ "nsdname": ns.as_str() }),
             );
-            if let Ok(cmd) = cmd {
-                let _ = create_record_in_state(&mut state, cmd);
+            match cmd {
+                Ok(cmd) => {
+                    if let Err(err) = create_record_in_state(&mut state, cmd) {
+                        tracing::warn!(error = %err, "failed to auto-create cascading NS record");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to construct cascading NS record command");
+                }
             }
         }
         Ok(zone)
@@ -218,8 +219,15 @@ impl ZoneStore for MemoryStorage {
                     None,
                     json!({ "nsdname": ns.as_str() }),
                 );
-                if let Ok(cmd) = cmd {
-                    let _ = create_record_in_state(&mut state, cmd);
+                match cmd {
+                    Ok(cmd) => {
+                        if let Err(err) = create_record_in_state(&mut state, cmd) {
+                            tracing::warn!(error = %err, "failed to auto-create cascading NS record");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to construct cascading NS record command");
+                    }
                 }
             }
         }
@@ -298,8 +306,15 @@ impl ZoneStore for MemoryStorage {
                 None,
                 json!({"nsdname": ns.as_str()}),
             );
-            if let Ok(cmd) = cmd {
-                let _ = create_record_in_state(&mut state, cmd);
+            match cmd {
+                Ok(cmd) => {
+                    if let Err(err) = create_record_in_state(&mut state, cmd) {
+                        tracing::warn!(error = %err, "failed to auto-create cascading NS record");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to construct cascading NS record command");
+                }
             }
         }
         // Bump parent zone serial
@@ -324,17 +339,11 @@ impl ZoneStore for MemoryStorage {
 
     async fn list_reverse_zones(&self, page: &PageRequest) -> Result<Page<ReverseZone>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<ReverseZone> = state.reverse_zones.values().cloned().collect();
-        sort_items(
-            &mut items,
-            page,
-            &["created_at"],
-            |zone, field| match field {
-                "created_at" => zone.created_at().to_rfc3339(),
-                _ => zone.name().as_str().to_string(),
-            },
-        )?;
-        paginate_by_cursor(items, page)
+        let items: Vec<ReverseZone> = state.reverse_zones.values().cloned().collect();
+        sort_and_paginate(items, page, &["created_at"], |zone, field| match field {
+            "created_at" => zone.created_at().to_rfc3339(),
+            _ => zone.name().as_str().to_string(),
+        })
     }
 
     async fn create_reverse_zone(
@@ -352,8 +361,15 @@ impl ZoneStore for MemoryStorage {
                 None,
                 json!({ "nsdname": ns.as_str() }),
             );
-            if let Ok(cmd) = cmd {
-                let _ = create_record_in_state(&mut state, cmd);
+            match cmd {
+                Ok(cmd) => {
+                    if let Err(err) = create_record_in_state(&mut state, cmd) {
+                        tracing::warn!(error = %err, "failed to auto-create cascading NS record");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to construct cascading NS record command");
+                }
             }
         }
         Ok(zone)
@@ -432,8 +448,15 @@ impl ZoneStore for MemoryStorage {
                     None,
                     json!({ "nsdname": ns.as_str() }),
                 );
-                if let Ok(cmd) = cmd {
-                    let _ = create_record_in_state(&mut state, cmd);
+                match cmd {
+                    Ok(cmd) => {
+                        if let Err(err) = create_record_in_state(&mut state, cmd) {
+                            tracing::warn!(error = %err, "failed to auto-create cascading NS record");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to construct cascading NS record command");
+                    }
                 }
             }
         }
@@ -512,8 +535,15 @@ impl ZoneStore for MemoryStorage {
                 None,
                 json!({"nsdname": ns.as_str()}),
             );
-            if let Ok(cmd) = cmd {
-                let _ = create_record_in_state(&mut state, cmd);
+            match cmd {
+                Ok(cmd) => {
+                    if let Err(err) = create_record_in_state(&mut state, cmd) {
+                        tracing::warn!(error = %err, "failed to auto-create cascading NS record");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to construct cascading NS record command");
+                }
             }
         }
         // Bump parent zone serial

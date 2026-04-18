@@ -1,75 +1,7 @@
-use uuid::Uuid;
-
 use crate::{
-    audit::HistoryEvent,
-    domain::{
-        attachment::{AttachmentCommunityAssignment, HostAttachment},
-        community::Community,
-        exports::{ExportRun, ExportTemplate},
-        host::{Host, IpAddressAssignment},
-        host_community_assignment::HostCommunityAssignment,
-        host_contact::HostContact,
-        host_group::HostGroup,
-        host_policy::{HostPolicyAtom, HostPolicyRole},
-        imports::ImportBatchSummary,
-        label::Label,
-        nameserver::NameServer,
-        network::{ExcludedRange, Network},
-        network_policy::NetworkPolicy,
-        pagination::{Page, PageRequest},
-        ptr_override::PtrOverride,
-        resource_records::{RecordInstance, RecordRrset, RecordTypeDefinition},
-        tasks::TaskEnvelope,
-        zone::{ForwardZone, ForwardZoneDelegation, ReverseZone, ReverseZoneDelegation},
-    },
+    domain::pagination::{Page, PageRequest},
+    storage::has_id::HasId,
 };
-
-pub(in crate::storage::postgres) trait HasId {
-    fn id(&self) -> Uuid;
-}
-
-macro_rules! impl_has_id {
-    ($($type:ty),*$(,)?) => {
-        $(
-            impl HasId for $type {
-                fn id(&self) -> Uuid {
-                    self.id()
-                }
-            }
-        )*
-    };
-}
-
-impl_has_id!(
-    HostPolicyAtom,
-    HostPolicyRole,
-    Label,
-    NameServer,
-    ForwardZone,
-    ReverseZone,
-    ForwardZoneDelegation,
-    ReverseZoneDelegation,
-    Network,
-    ExcludedRange,
-    Host,
-    IpAddressAssignment,
-    HostContact,
-    HostGroup,
-    PtrOverride,
-    NetworkPolicy,
-    Community,
-    HostAttachment,
-    AttachmentCommunityAssignment,
-    HostCommunityAssignment,
-    TaskEnvelope,
-    ImportBatchSummary,
-    ExportTemplate,
-    ExportRun,
-    RecordTypeDefinition,
-    RecordRrset,
-    RecordInstance,
-    HistoryEvent,
-);
 
 pub(in crate::storage::postgres) fn vec_to_page<T: HasId>(
     items: Vec<T>,

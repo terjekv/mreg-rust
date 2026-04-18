@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::RecordFilter,
         pagination::{Page, PageRequest},
@@ -33,15 +33,16 @@ pub async fn create_type(
 ) -> Result<RecordTypeDefinition, AppError> {
     let record_type = store.create_record_type(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "record_type",
+        actions::CREATE,
         Some(record_type.id()),
         record_type.name().as_str(),
-        "create",
         json!({"name": record_type.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(record_type)
 }
@@ -72,19 +73,20 @@ pub async fn create_record(
 ) -> Result<RecordInstance, AppError> {
     let record = store.create_record(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "record",
+        actions::CREATE,
         Some(record.id()),
         record.owner_name(),
-        "create",
         json!({
             "type_name": record.type_name().as_str(),
             "owner_name": record.owner_name(),
             "rrset_id": record.rrset_id().to_string(),
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(record)
 }
@@ -115,19 +117,20 @@ pub async fn delete_record(
     let old = store.get_record(record_id).await?;
     store.delete_record(record_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "record",
+        actions::DELETE,
         Some(old.id()),
         old.owner_name(),
-        "delete",
         json!({
             "type_name": old.type_name().as_str(),
             "owner_name": old.owner_name(),
             "rrset_id": old.rrset_id().to_string(),
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -142,18 +145,19 @@ pub async fn delete_rrset(
     let old = store.get_rrset(rrset_id).await?;
     store.delete_rrset(rrset_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "rrset",
+        actions::DELETE,
         Some(old.id()),
         old.owner_name().as_str(),
-        "delete",
         json!({
             "type_name": old.type_name().as_str(),
             "owner_name": old.owner_name().as_str(),
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -169,20 +173,21 @@ pub async fn update_record(
     let old = store.get_record(record_id).await?;
     let new = store.update_record(record_id, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "record",
+        actions::UPDATE,
         Some(new.id()),
         new.owner_name(),
-        "update",
         json!({
             "type_name": new.type_name().as_str(),
             "owner_name": new.owner_name(),
             "old": {"data": old.data(), "ttl": old.ttl().map(|t| t.as_u32())},
             "new": {"data": new.data(), "ttl": new.ttl().map(|t| t.as_u32())},
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -196,15 +201,16 @@ pub async fn delete_record_type(
 ) -> Result<(), AppError> {
     store.delete_record_type(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "record_type",
+        actions::DELETE,
         None,
         name.as_str(),
-        "delete",
         json!({"name": name.as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

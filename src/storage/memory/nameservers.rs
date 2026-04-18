@@ -12,7 +12,7 @@ use crate::{
     storage::NameServerStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_nameserver_in_state(
     state: &mut MemoryState,
@@ -41,12 +41,11 @@ pub(super) fn create_nameserver_in_state(
 impl NameServerStore for MemoryStorage {
     async fn list_nameservers(&self, page: &PageRequest) -> Result<Page<NameServer>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<NameServer> = state.nameservers.values().cloned().collect();
-        sort_items(&mut items, page, &["created_at"], |ns, field| match field {
+        let items: Vec<NameServer> = state.nameservers.values().cloned().collect();
+        sort_and_paginate(items, page, &["created_at"], |ns, field| match field {
             "created_at" => ns.created_at().to_rfc3339(),
             _ => ns.name().as_str().to_string(),
-        })?;
-        paginate_by_cursor(items, page)
+        })
     }
 
     async fn create_nameserver(&self, command: CreateNameServer) -> Result<NameServer, AppError> {

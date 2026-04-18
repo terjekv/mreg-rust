@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, AuthorizationRequest, require_permission, require_permissions},
+    authz::{self, AttrValue, AuthorizationRequest},
     domain::{
         pagination::{PageRequest, PageResponse},
         types::{DnsName, EmailAddressValue, SerialNumber, SoaSeconds, Ttl, ZoneName},
@@ -15,7 +15,9 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{UpdateAuthzBuilder, request as authz_request, string_set};
+use crate::api::v1::authz::{
+    UpdateAuthzBuilder, request as authz_request, require, require_all, string_set,
+};
 
 use super::{default_expire, default_refresh, default_retry, default_serial_no, default_ttl_value};
 
@@ -184,15 +186,14 @@ pub(crate) async fn list_forward_zones(
     state: web::Data<AppState>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::LIST,
             authz::actions::resource_kinds::FORWARD_ZONE,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -225,8 +226,8 @@ pub(crate) async fn create_forward_zone(
     payload: web::Json<CreateForwardZoneRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::CREATE,
@@ -245,8 +246,7 @@ pub(crate) async fn create_forward_zone(
         .attr(
             "default_ttl",
             AttrValue::Long(i64::from(request.default_ttl)),
-        )
-        .build(),
+        ),
     )
     .await?;
     let zone = state
@@ -275,15 +275,14 @@ pub(crate) async fn get_forward_zone(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = ZoneName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::GET,
             authz::actions::resource_kinds::FORWARD_ZONE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let zone = state.services.zones().get_forward(&name).await?;
@@ -312,7 +311,7 @@ pub(crate) async fn update_forward_zone(
     let name = ZoneName::new(path.into_inner())?;
     let request = payload.into_inner();
     let authz_requests = build_forward_zone_update_authz(&req, name.as_str(), &request);
-    require_permissions(&state.authz, authz_requests).await?;
+    require_all(&state, authz_requests).await?;
     let primary_ns = request.primary_ns.map(DnsName::new).transpose()?;
     let nameservers = request
         .nameservers
@@ -364,15 +363,14 @@ pub(crate) async fn delete_forward_zone(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = ZoneName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::DELETE,
             authz::actions::resource_kinds::FORWARD_ZONE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.zones().delete_forward(&name).await?;

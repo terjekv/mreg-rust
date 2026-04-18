@@ -71,7 +71,7 @@ fn local_password_hash(password: &str) -> String {
 }
 
 fn postgres_scoped_auth_state(scope_name: &str, allow_dev_authz_bypass: bool) -> Option<AppState> {
-    let database_url = std::env::var("MREG_TEST_DATABASE_URL").ok()?;
+    let database_url = common::postgres_test_database_url().ok()??;
     let config = Config {
         workers: Some(1),
         database_url: Some(database_url),

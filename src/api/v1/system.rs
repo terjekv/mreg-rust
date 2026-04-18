@@ -4,15 +4,12 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::{
-    AppState,
-    authz::{actions, require_permission},
-    domain::pagination::PageRequest,
-    errors::AppError,
+    AppState, authz::actions, domain::pagination::PageRequest, errors::AppError,
     storage::StorageBackendKind,
 };
 
 use super::SystemListResponse;
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(health)
@@ -111,15 +108,14 @@ pub(crate) async fn status(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             actions::system::STATUS_GET,
             actions::resource_kinds::SYSTEM,
             "status",
-        )
-        .build(),
+        ),
     )
     .await?;
     let modules = vec![
@@ -157,15 +153,14 @@ pub(crate) async fn history(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             actions::audit::HISTORY_LIST,
             actions::resource_kinds::AUDIT_HISTORY,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state.services.audit().list(&PageRequest::default()).await?;

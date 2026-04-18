@@ -13,7 +13,7 @@ use crate::{
     storage::CommunityStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_community_in_state(
     state: &mut MemoryState,
@@ -70,14 +70,14 @@ impl CommunityStore for MemoryStorage {
         filter: &CommunityFilter,
     ) -> Result<Page<Community>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<Community> = state
+        let items: Vec<Community> = state
             .communities
             .values()
             .filter(|community| filter.matches(community))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["policy_name", "created_at"],
             |community, field| match field {
@@ -85,8 +85,7 @@ impl CommunityStore for MemoryStorage {
                 "created_at" => community.created_at().to_rfc3339(),
                 _ => community.name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_community(&self, command: CreateCommunity) -> Result<Community, AppError> {

@@ -6,12 +6,12 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, require_permission},
+    authz::{self},
     domain::resource_records::{RecordOwnerKind, RecordRrset},
     errors::AppError,
 };
 
-use crate::api::v1::authz::request as authz_request;
+use crate::api::v1::authz::{request as authz_request, require};
 
 #[derive(Serialize, ToSchema)]
 pub struct RrsetResponse {
@@ -74,15 +74,14 @@ pub(crate) async fn get_rrset_endpoint(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let rrset_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::rrset::GET,
             authz::actions::resource_kinds::RRSET,
             rrset_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let rrset = state.services.records().get_rrset(rrset_id).await?;
@@ -107,15 +106,14 @@ pub(crate) async fn delete_rrset_endpoint(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let rrset_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::rrset::DELETE,
             authz::actions::resource_kinds::RRSET,
             rrset_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.records().delete_rrset(rrset_id).await?;

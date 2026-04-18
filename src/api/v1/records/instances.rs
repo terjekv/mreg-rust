@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission, require_permissions},
+    authz::{self, AttrValue},
     domain::{
         resource_records::{
             CreateRecordInstance, RawRdataValue, RecordInstance, RecordOwnerKind, UpdateRecord,
@@ -17,7 +17,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::request as authz_request;
+use crate::api::v1::authz::{request as authz_request, require, require_all};
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordRequest {
@@ -161,7 +161,7 @@ pub(crate) async fn create_record(
     if let Some(ttl) = request.ttl {
         authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let record = state
         .services
         .records()
@@ -188,15 +188,14 @@ pub(crate) async fn get_record_endpoint(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let record_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::record::GET,
             authz::actions::resource_kinds::RECORD,
             record_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let record = state.services.records().get_record(record_id).await?;
@@ -254,7 +253,7 @@ pub(crate) async fn update_record_endpoint(
             .build(),
         );
     }
-    require_permissions(&state.authz, authz_requests).await?;
+    require_all(&state, authz_requests).await?;
     let record = state
         .services
         .records()
@@ -281,15 +280,14 @@ pub(crate) async fn delete_record_endpoint(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let record_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::record::DELETE,
             authz::actions::resource_kinds::RECORD,
             record_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.records().delete_record(record_id).await?;

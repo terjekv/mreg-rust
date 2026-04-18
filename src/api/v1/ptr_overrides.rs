@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         filters::PtrOverrideFilter,
         pagination::{PageRequest, PageResponse, SortDirection},
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     PtrOverridePageResponse,
@@ -111,15 +111,14 @@ pub(crate) async fn list_ptr_overrides(
     state: web::Data<AppState>,
     query: web::Query<PtrQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::ptr_override::LIST,
             authz::actions::resource_kinds::PTR_OVERRIDE,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -160,7 +159,7 @@ pub(crate) async fn create_ptr_override(
     if let Some(target_name) = &request.target_name {
         authz = authz.attr("target_name", AttrValue::String(target_name.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let item = state
         .services
         .ptr_overrides()
@@ -187,15 +186,14 @@ pub(crate) async fn get_ptr_override(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::ptr_override::GET,
             authz::actions::resource_kinds::PTR_OVERRIDE,
             address.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state.services.ptr_overrides().get(&address).await?;
@@ -220,15 +218,14 @@ pub(crate) async fn delete_ptr_override(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::ptr_override::DELETE,
             authz::actions::resource_kinds::PTR_OVERRIDE,
             address.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.ptr_overrides().delete(&address).await?;

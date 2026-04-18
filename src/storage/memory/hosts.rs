@@ -29,7 +29,7 @@ use super::{
     bump_zone_serial_in_state, delete_records_by_name_and_type_in_state,
     delete_records_by_owner_in_state, paginate_by_cursor,
     records::create_record_in_state,
-    sort_items,
+    sort_and_paginate,
 };
 
 fn create_host_in_state(state: &mut MemoryState, command: CreateHost) -> Result<Host, AppError> {
@@ -307,14 +307,14 @@ impl HostStore for MemoryStorage {
         filter: &HostFilter,
     ) -> Result<Page<Host>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<Host> = state
+        let items: Vec<Host> = state
             .hosts
             .values()
             .filter(|host| filter.matches(host, &state.ip_addresses))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["name", "comment", "created_at", "updated_at"],
             |host, field| match field {
@@ -323,8 +323,7 @@ impl HostStore for MemoryStorage {
                 "updated_at" => host.updated_at().to_rfc3339(),
                 _ => host.name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_host(&self, command: CreateHost) -> Result<Host, AppError> {
@@ -398,8 +397,15 @@ impl HostStore for MemoryStorage {
                         None,
                         json!({ "ptrdname": host_name.as_str() }),
                     );
-                    if let Ok(cmd) = ptr_cmd {
-                        let _ = create_record_in_state(&mut state, cmd);
+                    match ptr_cmd {
+                        Ok(cmd) => {
+                            if let Err(err) = create_record_in_state(&mut state, cmd) {
+                                tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed to construct cascading PTR record command");
+                        }
                     }
                 }
             }
@@ -658,8 +664,15 @@ impl HostStore for MemoryStorage {
                 None,
                 json!({ "ptrdname": host_name.as_str() }),
             );
-            if let Ok(cmd) = ptr_cmd {
-                let _ = create_record_in_state(&mut state, cmd);
+            match ptr_cmd {
+                Ok(cmd) => {
+                    if let Err(err) = create_record_in_state(&mut state, cmd) {
+                        tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to construct cascading PTR record command");
+                }
             }
         }
 

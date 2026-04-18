@@ -2,7 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         pagination::{Page, PageRequest},
         types::ZoneName,
@@ -34,15 +34,16 @@ pub async fn create_forward(
 ) -> Result<ForwardZone, AppError> {
     let zone = store.create_forward_zone(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "forward_zone",
+        actions::CREATE,
         Some(zone.id()),
         zone.name().as_str(),
-        "create",
         json!({"name": zone.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(zone)
 }
@@ -66,15 +67,16 @@ pub async fn update_forward(
     let old = store.get_forward_zone_by_name(name).await?;
     let new = store.update_forward_zone(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "forward_zone",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -89,15 +91,16 @@ pub async fn delete_forward(
     let old = store.get_forward_zone_by_name(name).await?;
     store.delete_forward_zone(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "forward_zone",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -119,15 +122,16 @@ pub async fn create_reverse(
 ) -> Result<ReverseZone, AppError> {
     let zone = store.create_reverse_zone(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "reverse_zone",
+        actions::CREATE,
         Some(zone.id()),
         zone.name().as_str(),
-        "create",
         json!({"name": zone.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(zone)
 }
@@ -151,15 +155,16 @@ pub async fn update_reverse(
     let old = store.get_reverse_zone_by_name(name).await?;
     let new = store.update_reverse_zone(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "reverse_zone",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -174,15 +179,16 @@ pub async fn delete_reverse(
     let old = store.get_reverse_zone_by_name(name).await?;
     store.delete_reverse_zone(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "reverse_zone",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -214,15 +220,16 @@ pub async fn create_forward_delegation(
 ) -> Result<ForwardZoneDelegation, AppError> {
     let delegation = store.create_forward_zone_delegation(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "forward_zone_delegation",
+        actions::CREATE,
         Some(delegation.id()),
         delegation.name().as_str(),
-        "create",
         json!({"name": delegation.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(delegation)
 }
@@ -239,15 +246,17 @@ pub async fn delete_forward_delegation(
 ) -> Result<(), AppError> {
     store.delete_forward_zone_delegation(delegation_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    let id_str = delegation_id.to_string();
+    super::audit_mutation(
+        audit,
+        events,
         "forward_zone_delegation",
+        actions::DELETE,
         Some(delegation_id),
-        delegation_id.to_string(),
-        "delete",
-        json!({"id": delegation_id.to_string()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+        &id_str,
+        json!({"id": id_str}),
+    )
+    .await;
 
     Ok(())
 }
@@ -279,15 +288,16 @@ pub async fn create_reverse_delegation(
 ) -> Result<ReverseZoneDelegation, AppError> {
     let delegation = store.create_reverse_zone_delegation(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "reverse_zone_delegation",
+        actions::CREATE,
         Some(delegation.id()),
         delegation.name().as_str(),
-        "create",
         json!({"name": delegation.name().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(delegation)
 }
@@ -304,15 +314,17 @@ pub async fn delete_reverse_delegation(
 ) -> Result<(), AppError> {
     store.delete_reverse_zone_delegation(delegation_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    let id_str = delegation_id.to_string();
+    super::audit_mutation(
+        audit,
+        events,
         "reverse_zone_delegation",
+        actions::DELETE,
         Some(delegation_id),
-        delegation_id.to_string(),
-        "delete",
-        json!({"id": delegation_id.to_string()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+        &id_str,
+        json!({"id": id_str}),
+    )
+    .await;
 
     Ok(())
 }

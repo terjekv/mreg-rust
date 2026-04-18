@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         label::{CreateLabel, Label, UpdateLabel},
         pagination::{Page, PageRequest},
@@ -28,15 +28,16 @@ pub async fn create(
 ) -> Result<Label, AppError> {
     let label = store.create_label(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "label",
+        actions::CREATE,
         Some(label.id()),
         label.name().as_str(),
-        "create",
         json!({"name": label.name().as_str(), "description": label.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(label)
 }
@@ -60,15 +61,16 @@ pub async fn update(
     let old = store.get_label_by_name(name).await?;
     let new = store.update_label(name, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "label",
+        actions::UPDATE,
         Some(new.id()),
         new.name().as_str(),
-        "update",
         json!({"old": {"description": old.description()}, "new": {"description": new.description()}}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -83,15 +85,16 @@ pub async fn delete(
     let old = store.get_label_by_name(name).await?;
     store.delete_label(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "label",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str(), "description": old.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

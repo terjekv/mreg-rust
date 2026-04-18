@@ -12,7 +12,7 @@ use crate::{
     storage::HostCommunityAssignmentStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_host_community_assignment_in_state(
     state: &mut MemoryState,
@@ -94,14 +94,14 @@ impl HostCommunityAssignmentStore for MemoryStorage {
         filter: &HostCommunityAssignmentFilter,
     ) -> Result<Page<HostCommunityAssignment>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<HostCommunityAssignment> = state
+        let items: Vec<HostCommunityAssignment> = state
             .host_community_assignments
             .values()
             .filter(|mapping| filter.matches(mapping))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["community_name", "created_at"],
             |mapping, field| match field {
@@ -109,8 +109,7 @@ impl HostCommunityAssignmentStore for MemoryStorage {
                 "created_at" => mapping.created_at().to_rfc3339(),
                 _ => mapping.host_name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_host_community_assignment(

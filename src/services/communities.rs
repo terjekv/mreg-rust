@@ -2,7 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         community::{Community, CreateCommunity},
         filters::CommunityFilter,
@@ -32,15 +32,16 @@ pub async fn create_community(
 ) -> Result<Community, AppError> {
     let item = store.create_community(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "community",
+        actions::CREATE,
         Some(item.id()),
         item.name().as_str(),
-        "create",
         json!({"name": item.name().as_str(), "policy_name": item.policy_name().as_str(), "description": item.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(item)
 }
@@ -63,15 +64,16 @@ pub async fn delete_community(
     let old = store.get_community(community_id).await?;
     store.delete_community(community_id).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "community",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str(), "policy_name": old.policy_name().as_str(), "description": old.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

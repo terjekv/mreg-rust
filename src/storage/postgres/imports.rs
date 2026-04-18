@@ -1229,7 +1229,7 @@ impl ImportStore for PostgresStorage {
             Ok(summary) => Ok(summary),
             Err(error) => {
                 let message = error.to_string();
-                let _ = self
+                let mark_failed: Result<(), AppError> = self
                     .database
                     .run(move |connection| {
                         sql_query(
@@ -1243,6 +1243,9 @@ impl ImportStore for PostgresStorage {
                         Ok(())
                     })
                     .await;
+                if let Err(mark_err) = mark_failed {
+                    tracing::warn!(import_id = %import_id, error = %mark_err, "failed to mark import as failed");
+                }
                 Err(error)
             }
         }

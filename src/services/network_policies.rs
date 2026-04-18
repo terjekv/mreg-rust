@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::NetworkPolicyFilter,
         network_policy::{CreateNetworkPolicy, NetworkPolicy},
@@ -31,15 +31,16 @@ pub async fn create_network_policy(
 ) -> Result<NetworkPolicy, AppError> {
     let item = store.create_network_policy(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "network_policy",
+        actions::CREATE,
         Some(item.id()),
         item.name().as_str(),
-        "create",
         json!({"name": item.name().as_str(), "description": item.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(item)
 }
@@ -62,15 +63,16 @@ pub async fn delete_network_policy(
     let old = store.get_network_policy_by_name(name).await?;
     store.delete_network_policy(name).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "network_policy",
+        actions::DELETE,
         Some(old.id()),
         old.name().as_str(),
-        "delete",
         json!({"name": old.name().as_str(), "description": old.description()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

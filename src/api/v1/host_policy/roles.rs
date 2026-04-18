@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         host_policy::{CreateHostPolicyRole, HostPolicyRole, UpdateHostPolicyRole},
         pagination::{PageRequest, PageResponse},
@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::request as authz_request;
+use crate::api::v1::authz::{request as authz_request, require};
 
 crate::page_response!(
     RolePageResponse,
@@ -105,15 +105,14 @@ pub(crate) async fn list_roles(
     state: web::Data<AppState>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::LIST,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -143,8 +142,8 @@ pub(crate) async fn create_role(
     payload: web::Json<CreateRoleRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::CREATE,
@@ -154,8 +153,7 @@ pub(crate) async fn create_role(
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let role = state
@@ -184,15 +182,14 @@ pub(crate) async fn get_role(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = HostPolicyName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::GET,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let role = state.services.host_policy().get_role(&name).await?;
@@ -229,7 +226,7 @@ pub(crate) async fn update_role(
     if let Some(description) = &request.description {
         authz = authz.attr("new_description", AttrValue::String(description.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let command = UpdateHostPolicyRole {
         description: request.description,
     };
@@ -259,15 +256,14 @@ pub(crate) async fn delete_role(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = HostPolicyName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_policy::role::DELETE,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.host_policy().delete_role(&name).await?;

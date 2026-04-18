@@ -13,7 +13,7 @@ use crate::{
     storage::HostGroupStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_host_group_in_state(
     state: &mut MemoryState,
@@ -68,14 +68,14 @@ impl HostGroupStore for MemoryStorage {
         filter: &HostGroupFilter,
     ) -> Result<Page<HostGroup>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<HostGroup> = state
+        let items: Vec<HostGroup> = state
             .host_groups
             .values()
             .filter(|group| filter.matches(group))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["description", "created_at", "updated_at"],
             |group, field| match field {
@@ -84,8 +84,7 @@ impl HostGroupStore for MemoryStorage {
                 "updated_at" => group.updated_at().to_rfc3339(),
                 _ => group.name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_host_group(&self, command: CreateHostGroup) -> Result<HostGroup, AppError> {

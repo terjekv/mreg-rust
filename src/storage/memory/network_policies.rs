@@ -13,7 +13,7 @@ use crate::{
     storage::NetworkPolicyStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 pub(super) fn create_network_policy_in_state(
     state: &mut MemoryState,
@@ -47,14 +47,14 @@ impl NetworkPolicyStore for MemoryStorage {
         filter: &NetworkPolicyFilter,
     ) -> Result<Page<NetworkPolicy>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<NetworkPolicy> = state
+        let items: Vec<NetworkPolicy> = state
             .network_policies
             .values()
             .filter(|policy| filter.matches(policy))
             .cloned()
             .collect();
-        sort_items(
-            &mut items,
+        sort_and_paginate(
+            items,
             page,
             &["description", "created_at", "updated_at"],
             |policy, field| match field {
@@ -63,8 +63,7 @@ impl NetworkPolicyStore for MemoryStorage {
                 "updated_at" => policy.updated_at().to_rfc3339(),
                 _ => policy.name().as_str().to_string(),
             },
-        )?;
-        paginate_by_cursor(items, page)
+        )
     }
 
     async fn create_network_policy(

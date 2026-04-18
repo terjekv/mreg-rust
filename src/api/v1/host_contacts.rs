@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         filters::HostContactFilter,
         host_contact::HostContact,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::{request as authz_request, string_set};
+use super::authz::{request as authz_request, require, string_set};
 
 crate::page_response!(
     HostContactPageResponse,
@@ -121,15 +121,14 @@ pub(crate) async fn list_host_contacts(
     state: web::Data<AppState>,
     query: web::Query<HostContactQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_contact::LIST,
             authz::actions::resource_kinds::HOST_CONTACT,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -170,7 +169,7 @@ pub(crate) async fn create_host_contact(
     if let Some(display_name) = &request.display_name {
         authz = authz.attr("display_name", AttrValue::String(display_name.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let contact = state
         .services
         .host_contacts()
@@ -197,15 +196,14 @@ pub(crate) async fn get_host_contact(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let email = EmailAddressValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_contact::GET,
             authz::actions::resource_kinds::HOST_CONTACT,
             email.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let contact = state.services.host_contacts().get(&email).await?;
@@ -230,15 +228,14 @@ pub(crate) async fn delete_host_contact(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let email = EmailAddressValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_contact::DELETE,
             authz::actions::resource_kinds::HOST_CONTACT,
             email.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.host_contacts().delete(&email).await?;

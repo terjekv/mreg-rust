@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         filters::HostGroupFilter,
         host_group::HostGroup,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::{request as authz_request, string_set};
+use super::authz::{request as authz_request, require, string_set};
 
 crate::page_response!(
     HostGroupPageResponse,
@@ -145,15 +145,14 @@ pub(crate) async fn list_host_groups(
     state: web::Data<AppState>,
     query: web::Query<HostGroupQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_group::LIST,
             authz::actions::resource_kinds::HOST_GROUP,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -183,8 +182,8 @@ pub(crate) async fn create_host_group(
     payload: web::Json<CreateHostGroupRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_group::CREATE,
@@ -197,8 +196,7 @@ pub(crate) async fn create_host_group(
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let group = state
@@ -227,15 +225,14 @@ pub(crate) async fn get_host_group(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = HostGroupName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_group::GET,
             authz::actions::resource_kinds::HOST_GROUP,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let group = state.services.host_groups().get(&name).await?;
@@ -260,15 +257,14 @@ pub(crate) async fn delete_host_group(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = HostGroupName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host_group::DELETE,
             authz::actions::resource_kinds::HOST_GROUP,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.host_groups().delete(&name).await?;

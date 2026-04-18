@@ -10,19 +10,11 @@ pub struct LabelName(String);
 
 impl LabelName {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let candidate = value.as_ref().trim().to_ascii_lowercase();
-        if candidate.is_empty() {
-            return Err(AppError::validation("label name cannot be empty"));
-        }
-        if !candidate
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
-        {
-            return Err(AppError::validation(
-                "label name must contain only lowercase letters, digits, '-' or '_'",
-            ));
-        }
-        Ok(Self(candidate))
+        Ok(Self(normalize_identifier_name(
+            value.as_ref(),
+            "label name",
+            false,
+        )?))
     }
 
     pub fn as_str(&self) -> &str {
@@ -61,19 +53,11 @@ pub struct HostPolicyName(String);
 
 impl HostPolicyName {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let candidate = value.as_ref().trim().to_ascii_lowercase();
-        if candidate.is_empty() {
-            return Err(AppError::validation("host policy name cannot be empty"));
-        }
-        if !candidate
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
-        {
-            return Err(AppError::validation(
-                "host policy name must contain only lowercase letters, digits, '-' or '_'",
-            ));
-        }
-        Ok(Self(candidate))
+        Ok(Self(normalize_identifier_name(
+            value.as_ref(),
+            "host policy name",
+            false,
+        )?))
     }
 
     pub fn as_str(&self) -> &str {
@@ -90,6 +74,7 @@ impl HostGroupName {
         Ok(Self(normalize_identifier_name(
             value.as_ref(),
             "host group name",
+            true,
         )?))
     }
 
@@ -132,6 +117,7 @@ impl NetworkPolicyName {
         Ok(Self(normalize_identifier_name(
             value.as_ref(),
             "network policy name",
+            true,
         )?))
     }
 
@@ -174,6 +160,7 @@ impl CommunityName {
         Ok(Self(normalize_identifier_name(
             value.as_ref(),
             "community name",
+            true,
         )?))
     }
 
@@ -255,17 +242,30 @@ impl<'de> Deserialize<'de> for OwnerGroupName {
     }
 }
 
-fn normalize_identifier_name(value: &str, label: &str) -> Result<String, AppError> {
+fn normalize_identifier_name(
+    value: &str,
+    label: &str,
+    allow_dots: bool,
+) -> Result<String, AppError> {
     let candidate = value.trim().to_ascii_lowercase();
     if candidate.is_empty() {
         return Err(AppError::validation(format!("{label} cannot be empty")));
     }
-    if !candidate
-        .chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_' | '.'))
-    {
+    let valid = candidate.chars().all(|ch| {
+        ch.is_ascii_lowercase()
+            || ch.is_ascii_digit()
+            || ch == '-'
+            || ch == '_'
+            || (allow_dots && ch == '.')
+    });
+    if !valid {
+        let allowed = if allow_dots {
+            "lowercase letters, digits, '.', '-' or '_'"
+        } else {
+            "lowercase letters, digits, '-' or '_'"
+        };
         return Err(AppError::validation(format!(
-            "{label} must contain only lowercase letters, digits, '.', '-' or '_'"
+            "{label} must contain only {allowed}"
         )));
     }
     Ok(candidate)

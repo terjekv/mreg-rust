@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         attachment::{AttachmentCommunityAssignment, CreateAttachmentCommunityAssignment},
         filters::AttachmentCommunityAssignmentFilter,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(list_attachment_community_assignments)
@@ -107,15 +107,14 @@ pub(crate) async fn list_attachment_community_assignments(
     state: web::Data<AppState>,
     query: web::Query<AttachmentCommunityAssignmentQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_community_assignment::LIST,
             authz::actions::resource_kinds::ATTACHMENT_COMMUNITY_ASSIGNMENT,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -137,8 +136,8 @@ pub(crate) async fn create_attachment_community_assignment(
     payload: web::Json<CreateAttachmentCommunityAssignmentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_community_assignment::CREATE,
@@ -156,8 +155,7 @@ pub(crate) async fn create_attachment_community_assignment(
         .attr(
             "community_name",
             AttrValue::String(request.community_name.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let assignment = state
@@ -179,15 +177,14 @@ pub(crate) async fn get_attachment_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let assignment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_community_assignment::GET,
             authz::actions::resource_kinds::ATTACHMENT_COMMUNITY_ASSIGNMENT,
             assignment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let assignment = state
@@ -209,15 +206,14 @@ pub(crate) async fn delete_attachment_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let assignment_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::attachment_community_assignment::DELETE,
             authz::actions::resource_kinds::ATTACHMENT_COMMUNITY_ASSIGNMENT,
             assignment_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state

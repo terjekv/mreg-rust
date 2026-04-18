@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         pagination::{PageRequest, PageResponse},
         types::{DnsName, ZoneName},
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, string_set};
+use crate::api::v1::authz::{request as authz_request, require, string_set};
 
 crate::page_response!(
     ForwardZoneDelegationPageResponse,
@@ -130,15 +130,14 @@ pub(crate) async fn list_forward_zone_delegations(
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     let zone_name = ZoneName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::delegation::LIST,
             authz::actions::resource_kinds::FORWARD_ZONE,
             zone_name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -173,8 +172,8 @@ pub(crate) async fn create_forward_zone_delegation(
 ) -> Result<HttpResponse, AppError> {
     let zone_name = ZoneName::new(path.into_inner())?;
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::delegation::CREATE,
@@ -186,8 +185,7 @@ pub(crate) async fn create_forward_zone_delegation(
             AttrValue::String(zone_name.as_str().to_string()),
         )
         .attr("comment", AttrValue::String(request.comment.clone()))
-        .attr("nameservers", string_set(request.nameservers.clone()))
-        .build(),
+        .attr("nameservers", string_set(request.nameservers.clone())),
     )
     .await?;
     let nameservers = request
@@ -228,15 +226,14 @@ pub(crate) async fn delete_forward_zone_delegation(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let delegation_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::forward::delegation::DELETE,
             authz::actions::resource_kinds::FORWARD_ZONE_DELEGATION,
             delegation_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state
@@ -271,15 +268,14 @@ pub(crate) async fn list_reverse_zone_delegations(
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     let zone_name = ZoneName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::reverse::delegation::LIST,
             authz::actions::resource_kinds::REVERSE_ZONE,
             zone_name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -314,8 +310,8 @@ pub(crate) async fn create_reverse_zone_delegation(
 ) -> Result<HttpResponse, AppError> {
     let zone_name = ZoneName::new(path.into_inner())?;
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::reverse::delegation::CREATE,
@@ -327,8 +323,7 @@ pub(crate) async fn create_reverse_zone_delegation(
             AttrValue::String(zone_name.as_str().to_string()),
         )
         .attr("comment", AttrValue::String(request.comment.clone()))
-        .attr("nameservers", string_set(request.nameservers.clone()))
-        .build(),
+        .attr("nameservers", string_set(request.nameservers.clone())),
     )
     .await?;
     let nameservers = request
@@ -369,15 +364,14 @@ pub(crate) async fn delete_reverse_zone_delegation(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let delegation_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::reverse::delegation::DELETE,
             authz::actions::resource_kinds::REVERSE_ZONE_DELEGATION,
             delegation_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state

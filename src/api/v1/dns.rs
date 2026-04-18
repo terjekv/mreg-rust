@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::{
     AppState,
-    authz::{actions, require_permission},
+    authz::actions,
     domain::{
         filters::RecordFilter,
         pagination::{PageRequest, SortDirection},
@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::SystemListResponse;
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(record_types)
@@ -36,15 +36,14 @@ pub(crate) async fn record_types(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             actions::record_type::LIST,
             actions::resource_kinds::RECORD_TYPE,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -72,15 +71,14 @@ pub(crate) async fn rrsets(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             actions::rrset::LIST,
             actions::resource_kinds::RRSET,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -134,15 +132,14 @@ pub(crate) async fn list_records_endpoint(
     state: web::Data<AppState>,
     query: web::Query<ListRecordsQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             actions::record::LIST,
             actions::resource_kinds::RECORD,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;

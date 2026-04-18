@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, AuthorizationRequest, require_permission, require_permissions},
+    authz::{self, AttrValue, AuthorizationRequest},
     domain::{
         filters::HostFilter,
         filters::{
@@ -27,7 +27,7 @@ use crate::{
 
 use super::authz::{
     UpdateAuthzBuilder, host_attrs_for_host, host_request as host_authz_request,
-    request as authz_request,
+    request as authz_request, require, require_all,
 };
 use super::{
     attachment_community_assignments::AttachmentCommunityAssignmentResponse,
@@ -465,15 +465,14 @@ pub(crate) async fn list_hosts(
     state: web::Data<AppState>,
     query: web::Query<ListHostsQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host::LIST,
             authz::actions::resource_kinds::HOST,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -525,7 +524,7 @@ pub(crate) async fn create_host(
     if let Some(ttl) = request.ttl {
         authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
 
     let auto_v4 = state.config.dhcp_auto_v4_client_id;
     let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
@@ -555,11 +554,9 @@ pub(crate) async fn get_host(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = Hostname::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
-        host_authz_request(state.get_ref(), &req, authz::actions::host::GET, &name)
-            .await?
-            .build(),
+    require(
+        &state,
+        host_authz_request(state.get_ref(), &req, authz::actions::host::GET, &name).await?,
     )
     .await?;
     let host = state.services.hosts().get(&name).await?;
@@ -628,7 +625,7 @@ pub(crate) async fn update_host(
     let request = payload.into_inner();
     let base_attrs = host_attrs_for_host(state.get_ref(), &current_name).await?;
     let authz_requests = build_host_update_authz(&req, current_name.as_str(), &request, base_attrs);
-    require_permissions(&state.authz, authz_requests).await?;
+    require_all(&state, authz_requests).await?;
 
     let name = request.name.map(Hostname::new).transpose()?;
     let ttl = request.ttl.try_map(Ttl::new)?;
@@ -665,11 +662,9 @@ pub(crate) async fn delete_host(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = Hostname::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
-        host_authz_request(state.get_ref(), &req, authz::actions::host::DELETE, &name)
-            .await?
-            .build(),
+    require(
+        &state,
+        host_authz_request(state.get_ref(), &req, authz::actions::host::DELETE, &name).await?,
     )
     .await?;
     state.services.hosts().delete(&name).await?;
@@ -690,15 +685,14 @@ pub(crate) async fn list_ip_addresses(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host::ip::LIST,
             authz::actions::resource_kinds::IP_ADDRESS,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -729,16 +723,15 @@ pub(crate) async fn list_host_ip_addresses(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = Hostname::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         host_authz_request(
             state.get_ref(),
             &req,
             authz::actions::host::ip::LIST_FOR_HOST,
             &name,
         )
-        .await?
-        .build(),
+        .await?,
     )
     .await?;
     let page = state
@@ -798,7 +791,7 @@ pub(crate) async fn assign_ip_address(
     if let Some(mac_address) = &request.mac_address {
         authz = authz.attr("mac_address", AttrValue::String(mac_address.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
 
     let auto_v4 = state.config.dhcp_auto_v4_client_id;
     let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
@@ -847,7 +840,7 @@ pub(crate) async fn update_ip_address(
     if let UpdateField::Set(ref mac_address) = request.mac_address {
         authz = authz.attr("new_mac_address", AttrValue::String(mac_address.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let mac = request.mac_address.try_map(MacAddressValue::new)?;
     let command = UpdateIpAddress { mac_address: mac };
     let assignment = state
@@ -876,15 +869,14 @@ pub(crate) async fn unassign_ip_address(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::host::ip::UNASSIGN,
             authz::actions::resource_kinds::IP_ADDRESS,
             address.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.hosts().unassign_ip_address(&address).await?;

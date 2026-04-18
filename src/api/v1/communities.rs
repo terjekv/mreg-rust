@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         community::Community,
         filters::CommunityFilter,
@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     CommunityPageResponse,
@@ -119,15 +119,14 @@ pub(crate) async fn list_communities(
     state: web::Data<AppState>,
     query: web::Query<CommunityQuery>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::community::LIST,
             authz::actions::resource_kinds::COMMUNITY,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let (page, filter) = query.into_inner().into_parts()?;
@@ -157,8 +156,8 @@ pub(crate) async fn create_community(
     payload: web::Json<CreateCommunityRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::community::CREATE,
@@ -173,8 +172,7 @@ pub(crate) async fn create_community(
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state
@@ -203,15 +201,14 @@ pub(crate) async fn get_community(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let community_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::community::GET,
             authz::actions::resource_kinds::COMMUNITY,
             community_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let item = state.services.communities().get(community_id).await?;
@@ -236,15 +233,14 @@ pub(crate) async fn delete_community(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let community_id = path.into_inner();
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::community::DELETE,
             authz::actions::resource_kinds::COMMUNITY,
             community_id.to_string(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.communities().delete(community_id).await?;

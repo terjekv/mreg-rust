@@ -3,6 +3,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// Conventional actor identifiers used by service-layer mutations.
+pub mod actor {
+    pub const SYSTEM: &str = "system";
+}
+
+/// Conventional action verbs recorded on audit events.
+pub mod actions {
+    pub const CREATE: &str = "create";
+    pub const UPDATE: &str = "update";
+    pub const DELETE: &str = "delete";
+    pub const ADD_ATOM: &str = "add_atom";
+    pub const REMOVE_ATOM: &str = "remove_atom";
+    pub const ADD_HOST: &str = "add_host";
+    pub const REMOVE_HOST: &str = "remove_host";
+    pub const ADD_LABEL: &str = "add_label";
+    pub const REMOVE_LABEL: &str = "remove_label";
+}
+
 /// Immutable audit trail entry recording a mutation with actor, resource, and action details.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEvent {

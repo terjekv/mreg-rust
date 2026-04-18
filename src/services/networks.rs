@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::NetworkFilter,
         host::IpAddressAssignment,
@@ -32,18 +32,19 @@ pub async fn create(
 ) -> Result<Network, AppError> {
     let network = store.create_network(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "network",
+        actions::CREATE,
         Some(network.id()),
         network.cidr().as_str(),
-        "create",
         json!({
             "cidr": network.cidr().as_str(),
             "description": network.description(),
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(network)
 }
@@ -66,18 +67,19 @@ pub async fn delete(
     let old = store.get_network_by_cidr(cidr).await?;
     store.delete_network(cidr).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "network",
+        actions::DELETE,
         Some(old.id()),
         old.cidr().as_str(),
-        "delete",
         json!({
             "cidr": old.cidr().as_str(),
             "description": old.description(),
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }
@@ -102,18 +104,19 @@ pub async fn update(
     let old = store.get_network_by_cidr(cidr).await?;
     let new = store.update_network(cidr, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "network",
+        actions::UPDATE,
         Some(new.id()),
         new.cidr().as_str(),
-        "update",
         json!({
             "old": {"description": old.description(), "vlan": old.vlan(), "frozen": old.frozen(), "reserved": old.reserved()},
             "new": {"description": new.description(), "vlan": new.vlan(), "frozen": new.frozen(), "reserved": new.reserved()},
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(new)
 }
@@ -128,19 +131,21 @@ pub async fn add_excluded_range(
 ) -> Result<ExcludedRange, AppError> {
     let range = store.add_excluded_range(cidr, command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    let range_name = format!("{}-{}", range.start_ip().as_str(), range.end_ip().as_str());
+    super::audit_mutation(
+        audit,
+        events,
         "excluded_range",
+        actions::CREATE,
         Some(range.id()),
-        format!("{}-{}", range.start_ip().as_str(), range.end_ip().as_str()),
-        "create",
+        &range_name,
         json!({
             "start_ip": range.start_ip().as_str(),
             "end_ip": range.end_ip().as_str(),
             "description": range.description(),
         }),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(range)
 }

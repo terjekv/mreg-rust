@@ -64,57 +64,9 @@ use crate::{
         HostGroupStore, HostPolicyStore, HostStore, ImportStore, LabelStore, NameServerStore,
         NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
         StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, ZoneStore,
+        has_id::HasId,
     },
 };
-
-pub(super) trait HasId {
-    fn id(&self) -> Uuid;
-}
-
-macro_rules! impl_has_id {
-    ($($type:ty),*$(,)?) => {
-        $(
-            impl HasId for $type {
-                fn id(&self) -> Uuid {
-                    self.id()
-                }
-            }
-        )*
-    };
-}
-
-impl_has_id!(
-    HostPolicyAtom,
-    HostPolicyRole,
-    Label,
-    NameServer,
-    ForwardZone,
-    ReverseZone,
-    ForwardZoneDelegation,
-    ReverseZoneDelegation,
-    Network,
-    HostAttachment,
-    ExcludedRange,
-    Host,
-    IpAddressAssignment,
-    HostContact,
-    HostGroup,
-    PtrOverride,
-    NetworkPolicy,
-    Community,
-    AttachmentCommunityAssignment,
-    HostCommunityAssignment,
-    AttachmentDhcpIdentifier,
-    AttachmentPrefixReservation,
-    TaskEnvelope,
-    ImportBatchSummary,
-    ExportTemplate,
-    ExportRun,
-    RecordTypeDefinition,
-    RecordRrset,
-    RecordInstance,
-    HistoryEvent,
-);
 
 pub(super) fn paginate_by_cursor<T: HasId>(
     items: Vec<T>,
@@ -184,6 +136,16 @@ pub(super) fn sort_items<T: HasId>(
         if descending { cmp.reverse() } else { cmp }
     });
     Ok(())
+}
+
+pub(super) fn sort_and_paginate<T: HasId>(
+    mut items: Vec<T>,
+    page: &PageRequest,
+    valid_fields: &[&str],
+    key_fn: impl Fn(&T, &str) -> String,
+) -> Result<Page<T>, AppError> {
+    sort_items(&mut items, page, valid_fields, key_fn)?;
+    paginate_by_cursor(items, page)
 }
 
 #[derive(Clone)]

@@ -893,7 +893,7 @@ impl ExportStore for PostgresStorage {
             Ok(run) => Ok(run),
             Err(error) => {
                 let message = error.to_string();
-                let _ = self
+                let mark_failed: Result<(), AppError> = self
                     .database
                     .run(move |connection| {
                         sql_query(
@@ -907,6 +907,9 @@ impl ExportStore for PostgresStorage {
                         Ok(())
                     })
                     .await;
+                if let Err(mark_err) = mark_failed {
+                    tracing::warn!(run_id = %run_id, error = %mark_err, "failed to mark export_run as failed");
+                }
                 Err(error)
             }
         }

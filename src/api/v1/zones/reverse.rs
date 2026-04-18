@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, AuthorizationRequest, require_permission, require_permissions},
+    authz::{self, AttrValue, AuthorizationRequest},
     domain::{
         pagination::{PageRequest, PageResponse},
         types::{CidrValue, DnsName, EmailAddressValue, SerialNumber, SoaSeconds, Ttl, ZoneName},
@@ -15,7 +15,9 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{UpdateAuthzBuilder, request as authz_request, string_set};
+use crate::api::v1::authz::{
+    UpdateAuthzBuilder, request as authz_request, require, require_all, string_set,
+};
 
 use super::{default_expire, default_refresh, default_retry, default_serial_no, default_ttl_value};
 
@@ -188,15 +190,14 @@ pub(crate) async fn list_reverse_zones(
     state: web::Data<AppState>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::reverse::LIST,
             authz::actions::resource_kinds::REVERSE_ZONE,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -251,7 +252,7 @@ pub(crate) async fn create_reverse_zone(
     if let Some(network) = &request.network {
         authz = authz.attr("network", AttrValue::Ip(network.clone()));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let zone = state
         .services
         .zones()
@@ -278,15 +279,14 @@ pub(crate) async fn get_reverse_zone(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = ZoneName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::reverse::GET,
             authz::actions::resource_kinds::REVERSE_ZONE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let zone = state.services.zones().get_reverse(&name).await?;
@@ -315,7 +315,7 @@ pub(crate) async fn update_reverse_zone(
     let name = ZoneName::new(path.into_inner())?;
     let request = payload.into_inner();
     let authz_requests = build_reverse_zone_update_authz(&req, name.as_str(), &request);
-    require_permissions(&state.authz, authz_requests).await?;
+    require_all(&state, authz_requests).await?;
     let primary_ns = request.primary_ns.map(DnsName::new).transpose()?;
     let nameservers = request
         .nameservers
@@ -367,15 +367,14 @@ pub(crate) async fn delete_reverse_zone(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = ZoneName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::zone::reverse::DELETE,
             authz::actions::resource_kinds::REVERSE_ZONE,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.zones().delete_reverse(&name).await?;

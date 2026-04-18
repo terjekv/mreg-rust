@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    authz::{self, AttrValue, require_permission},
+    authz::{self, AttrValue},
     domain::{
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         pagination::{PageRequest, PageResponse},
@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use super::authz::request as authz_request;
+use super::authz::{request as authz_request, require};
 
 crate::page_response!(
     NameServerPageResponse,
@@ -81,15 +81,14 @@ pub(crate) async fn list_nameservers(
     state: web::Data<AppState>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::nameserver::LIST,
             authz::actions::resource_kinds::NAMESERVER,
             "*",
-        )
-        .build(),
+        ),
     )
     .await?;
     let page = state
@@ -131,7 +130,7 @@ pub(crate) async fn create_nameserver(
     if let Some(ttl) = request.ttl {
         authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let nameserver = state
         .services
         .nameservers()
@@ -159,15 +158,14 @@ pub(crate) async fn get_nameserver(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = DnsName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::nameserver::GET,
             authz::actions::resource_kinds::NAMESERVER,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     let nameserver = state.services.nameservers().get(&name).await?;
@@ -217,7 +215,7 @@ pub(crate) async fn update_nameserver(
         }
         UpdateField::Unchanged => {}
     }
-    require_permission(&state.authz, authz.build()).await?;
+    require(&state, authz).await?;
     let ttl = request.ttl.try_map(Ttl::new)?;
     let command = UpdateNameServer { ttl };
     let nameserver = state.services.nameservers().update(&name, command).await?;
@@ -242,15 +240,14 @@ pub(crate) async fn delete_nameserver(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let name = DnsName::new(path.into_inner())?;
-    require_permission(
-        &state.authz,
+    require(
+        &state,
         authz_request(
             &req,
             authz::actions::nameserver::DELETE,
             authz::actions::resource_kinds::NAMESERVER,
             name.as_str(),
-        )
-        .build(),
+        ),
     )
     .await?;
     state.services.nameservers().delete(&name).await?;

@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::CreateHistoryEvent,
+    audit::actions,
     domain::{
         filters::PtrOverrideFilter,
         pagination::{Page, PageRequest},
@@ -31,15 +31,16 @@ pub async fn create_ptr_override(
 ) -> Result<PtrOverride, AppError> {
     let item = store.create_ptr_override(command).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "ptr_override",
+        actions::CREATE,
         Some(item.id()),
         item.address().as_str(),
-        "create",
         json!({"host_name": item.host_name().as_str(), "address": item.address().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(item)
 }
@@ -62,15 +63,16 @@ pub async fn delete_ptr_override(
     let old = store.get_ptr_override_by_address(address).await?;
     store.delete_ptr_override(address).await?;
 
-    let audit_event = CreateHistoryEvent::new(
-        "system",
+    super::audit_mutation(
+        audit,
+        events,
         "ptr_override",
+        actions::DELETE,
         Some(old.id()),
         old.address().as_str(),
-        "delete",
         json!({"host_name": old.host_name().as_str(), "address": old.address().as_str()}),
-    );
-    super::record_and_emit(audit, events, audit_event).await;
+    )
+    .await;
 
     Ok(())
 }

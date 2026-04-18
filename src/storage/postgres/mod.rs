@@ -20,9 +20,13 @@ mod records;
 mod tasks;
 mod zones;
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use diesel::{
-    ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, RunQueryDsl, sql_query,
+    ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, QueryableByName, RunQueryDsl,
+    sql_query,
+    sql_types::{Array, Text, Uuid as SqlUuid},
 };
 use uuid::Uuid;
 
@@ -197,22 +201,6 @@ impl PostgresStorage {
             .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name.as_str())))
     }
 
-    pub(in crate::storage::postgres) fn resolve_host_group_id(
-        connection: &mut PgConnection,
-        name: &crate::domain::types::HostGroupName,
-    ) -> Result<Uuid, AppError> {
-        use crate::db::schema::host_groups;
-
-        host_groups::table
-            .filter(host_groups::name.eq(name.as_str()))
-            .select(host_groups::id)
-            .first::<Uuid>(connection)
-            .optional()?
-            .ok_or_else(|| {
-                AppError::not_found(format!("host group '{}' was not found", name.as_str()))
-            })
-    }
-
     pub(in crate::storage::postgres) fn resolve_network_policy_id(
         connection: &mut PgConnection,
         name: &crate::domain::types::NetworkPolicyName,
@@ -228,4 +216,76 @@ impl PostgresStorage {
                 AppError::not_found(format!("network policy '{}' was not found", name.as_str()))
             })
     }
+
+    /// Resolve many host names to ids in a single round-trip. Returns NotFound
+    /// listing the first missing name if any input cannot be resolved.
+    pub(in crate::storage::postgres) fn resolve_host_ids(
+        connection: &mut PgConnection,
+        names: &[crate::domain::types::Hostname],
+    ) -> Result<HashMap<crate::domain::types::Hostname, Uuid>, AppError> {
+        resolve_named_ids(
+            connection,
+            names,
+            |n| n.as_str(),
+            "SELECT id, name::text AS name FROM hosts WHERE name = ANY($1::text[])",
+            "host",
+        )
+    }
+
+    /// Batch counterpart to `resolve_host_group_id`.
+    pub(in crate::storage::postgres) fn resolve_host_group_ids(
+        connection: &mut PgConnection,
+        names: &[crate::domain::types::HostGroupName],
+    ) -> Result<HashMap<crate::domain::types::HostGroupName, Uuid>, AppError> {
+        resolve_named_ids(
+            connection,
+            names,
+            |n| n.as_str(),
+            "SELECT id, name::text AS name FROM host_groups WHERE name = ANY($1::text[])",
+            "host group",
+        )
+    }
+}
+
+#[derive(QueryableByName)]
+struct NameIdRow {
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
+    #[diesel(sql_type = Text)]
+    name: String,
+}
+
+fn resolve_named_ids<N>(
+    connection: &mut PgConnection,
+    names: &[N],
+    as_str: impl Fn(&N) -> &str,
+    query: &str,
+    kind: &str,
+) -> Result<HashMap<N, Uuid>, AppError>
+where
+    N: Clone + Eq + std::hash::Hash,
+{
+    if names.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let raw: Vec<String> = names.iter().map(|n| as_str(n).to_string()).collect();
+
+    let rows = sql_query(query)
+        .bind::<Array<Text>, _>(&raw)
+        .load::<NameIdRow>(connection)?;
+
+    let mut by_name: HashMap<String, Uuid> = HashMap::with_capacity(rows.len());
+    for row in rows {
+        by_name.insert(row.name, row.id);
+    }
+
+    let mut result: HashMap<N, Uuid> = HashMap::with_capacity(names.len());
+    for name in names {
+        let id = by_name.get(as_str(name)).copied().ok_or_else(|| {
+            AppError::not_found(format!("{} '{}' was not found", kind, as_str(name)))
+        })?;
+        result.insert(name.clone(), id);
+    }
+    Ok(result)
 }
