@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn openapi_record_response_flattens_record_kind_without_discriminator_or_stale_fields() {
         use utoipa::OpenApi;
-        let doc = serde_json::to_value(&crate::api::ApiDoc::openapi())
+        let doc = serde_json::to_value(crate::api::ApiDoc::openapi())
             .expect("openapi doc must serialize as JSON value");
 
         let record_response = doc
@@ -889,7 +889,7 @@ mod tests {
         // `RecordKind::from_record` emits `data: null` for raw-rdata / RFC 3597
         // responses, so the schema for OpaqueRecordKind.data MUST be nullable.
         use utoipa::OpenApi;
-        let doc = serde_json::to_value(&crate::api::ApiDoc::openapi())
+        let doc = serde_json::to_value(crate::api::ApiDoc::openapi())
             .expect("openapi doc must serialize as JSON value");
 
         let schema = doc
