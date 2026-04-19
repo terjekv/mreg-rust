@@ -1,12 +1,14 @@
 pub mod instances;
 pub mod record_types;
 pub mod rrsets;
+pub mod typed_data;
 
 // Glob re-exports so that utoipa's generated `__path_*` types are visible
 // to the OpenAPI derive in `src/api/mod.rs`.
 pub use instances::*;
 pub use record_types::*;
 pub use rrsets::*;
+pub use typed_data::*;
 
 use actix_web::web;
 
