@@ -31,7 +31,7 @@ API handler
 The service layer:
 1. Calls the storage backend to perform the mutation
 2. Records an audit event via `AuditStore`
-3. Emits a `DomainEvent` to the configured `EventSink`
+3. **On successful audit recording**, emits a `DomainEvent` to the configured `EventSink`. If the audit record fails, the failure is logged at `warn` level and no event is emitted, so external sinks never see a mutation that has no audit row to reconcile against.
 
 For **update** operations, the service fetches the current state before the mutation so both old and new values are captured.
 
@@ -57,14 +57,14 @@ Every event has this structure:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | UUID | Unique event identifier |
+| `id` | UUID | Unique event identifier; matches the `id` of the corresponding audit history row |
 | `actor` | string | Who performed the action (currently `"system"`) |
 | `resource_kind` | string | Entity type: `host`, `label`, `forward_zone`, `record`, etc. |
 | `resource_id` | UUID or null | UUID of the affected resource |
 | `resource_name` | string | Human-readable identifier (hostname, zone name, etc.) |
 | `action` | string | `create`, `update`, or `delete` |
 | `data` | object | Action-specific payload (see below) |
-| `timestamp` | ISO 8601 | When the event was recorded |
+| `timestamp` | ISO 8601 | When the event was recorded; matches the `created_at` of the corresponding audit history row |
 
 ### Data payload by action
 
