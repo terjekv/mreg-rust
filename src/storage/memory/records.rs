@@ -15,7 +15,7 @@ use crate::{
             RecordInstance, RecordOwnerKind, RecordRrset, RecordTypeDefinition, UpdateRecord,
             ValidatedRecordContent, alias_target_names, validate_record_relationships,
         },
-        types::{DnsName, RecordTypeName},
+        types::{DnsName, Hostname, RecordTypeName},
     },
     errors::AppError,
     storage::RecordStore,
@@ -400,6 +400,26 @@ impl RecordStore for MemoryStorage {
             .get(&rrset_id)
             .cloned()
             .ok_or_else(|| AppError::not_found("rrset not found"))
+    }
+
+    async fn list_records_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<RecordInstance>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state = self.state.read().await;
+        Ok(state
+            .records
+            .iter()
+            .filter(|record| {
+                record.owner_kind() == Some(&RecordOwnerKind::Host)
+                    && host_names.contains(record.owner_name())
+            })
+            .cloned()
+            .collect())
     }
 
     async fn create_record(

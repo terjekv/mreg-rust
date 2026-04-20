@@ -209,6 +209,50 @@ pub(super) fn get_by_email(
     build_host_contact(connection, row)
 }
 
+pub(super) fn list_for_hosts(
+    connection: &mut PgConnection,
+    hosts: &[Hostname],
+) -> Result<Vec<HostContact>, AppError> {
+    if hosts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str().to_string())
+        .collect::<Vec<_>>();
+    let rows = sql_query(
+        "SELECT DISTINCT hc.id,
+                hc.email::text AS email,
+                hc.display_name,
+                hc.created_at,
+                hc.updated_at
+         FROM host_contacts hc
+         JOIN host_contacts_hosts hch ON hch.contact_id = hc.id
+         JOIN hosts h ON h.id = hch.host_id
+         WHERE h.name = ANY($1::text[])
+         ORDER BY hc.email",
+    )
+    .bind::<Array<Text>, _>(&host_names)
+    .load::<HostContactRow>(connection)?;
+
+    let contact_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let mut hosts_by_contact = load_contact_hosts_batch(connection, &contact_ids)?;
+
+    rows.into_iter()
+        .map(|row| {
+            let hosts = hosts_by_contact.remove(&row.id).unwrap_or_default();
+            HostContact::restore(
+                row.id,
+                EmailAddressValue::new(row.email)?,
+                row.display_name,
+                hosts,
+                row.created_at,
+                row.updated_at,
+            )
+        })
+        .collect()
+}
+
 pub(super) fn delete(connection: &mut PgConnection, email: &str) -> Result<(), AppError> {
     connection.transaction::<(), AppError, _>(|connection| {
         let contact_id = sql_query("SELECT id FROM host_contacts WHERE email = $1")
@@ -260,6 +304,16 @@ impl HostContactStore for PostgresStorage {
         let email = email.as_str().to_string();
         self.database
             .run(move |connection| get_by_email(connection, &email))
+            .await
+    }
+
+    async fn list_host_contacts_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostContact>, AppError> {
+        let hosts = hosts.to_vec();
+        self.database
+            .run(move |connection| list_for_hosts(connection, &hosts))
             .await
     }
 

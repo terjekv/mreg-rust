@@ -544,6 +544,14 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
     })
 }
 
+fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
+    let normalized = value.trim().to_string();
+    if normalized.is_empty() {
+        return Err(AppError::validation(format!("{label} cannot be empty")));
+    }
+    Ok(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -612,12 +620,4 @@ mod tests {
             "validation error: attachment prefix reservations require an IPv6 attachment network"
         );
     }
-}
-
-fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
-    let normalized = value.trim().to_string();
-    if normalized.is_empty() {
-        return Err(AppError::validation(format!("{label} cannot be empty")));
-    }
-    Ok(normalized)
 }

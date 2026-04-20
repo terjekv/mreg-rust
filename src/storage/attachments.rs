@@ -22,6 +22,10 @@ pub trait AttachmentStore: Send + Sync {
         &self,
         host: &Hostname,
     ) -> Result<Vec<HostAttachment>, AppError>;
+    async fn list_attachments_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostAttachment>, AppError>;
     async fn list_attachments_for_network(
         &self,
         network: &CidrValue,

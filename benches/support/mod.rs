@@ -1046,7 +1046,7 @@ pub fn host_detail_fixtures(runtime: &Runtime) -> (DynStorage, Hostname, Hostnam
                     .expect("dhcp create");
                 // /120 delegated prefixes inside the /112 parent network so
                 // the attachment graph remains internally consistent.
-                let suffix = (index as u32) * 0x100;
+                let suffix = index * 0x100;
                 storage
                     .attachments()
                     .create_attachment_prefix_reservation(

@@ -30,6 +30,10 @@ pub trait HostPolicyStore: Send + Sync {
         &self,
         host_name: &Hostname,
     ) -> Result<Vec<HostPolicyRole>, AppError>;
+    async fn list_roles_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostPolicyRole>, AppError>;
     async fn create_role(&self, command: CreateHostPolicyRole) -> Result<HostPolicyRole, AppError>;
     async fn get_role_by_name(&self, name: &HostPolicyName) -> Result<HostPolicyRole, AppError>;
     async fn update_role(

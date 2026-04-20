@@ -247,6 +247,34 @@ impl HostPolicyStore for PostgresStorage {
             .await
     }
 
+    async fn list_roles_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostPolicyRole>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str().to_string())
+            .collect::<Vec<_>>();
+        self.database
+            .run(move |c| {
+                if host_names.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let rows = sql_query(
+                    "SELECT DISTINCT r.id, r.name, r.description, r.created_at, r.updated_at
+                     FROM host_policy_roles r
+                     JOIN host_policy_role_hosts rh ON rh.role_id = r.id
+                     JOIN hosts h ON h.id = rh.host_id
+                     WHERE h.name = ANY($1::text[])
+                     ORDER BY r.name ASC",
+                )
+                .bind::<diesel::sql_types::Array<Text>, _>(&host_names)
+                .load::<RoleRow>(c)?;
+                build_roles_from_rows(c, rows)
+            })
+            .await
+    }
+
     async fn create_role(&self, command: CreateHostPolicyRole) -> Result<HostPolicyRole, AppError> {
         let name = command.name().as_str().to_string();
         let description = command.description().to_string();

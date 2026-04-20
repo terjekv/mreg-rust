@@ -517,6 +517,44 @@ impl AttachmentStore for PostgresStorage {
             .await
     }
 
+    async fn list_attachments_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostAttachment>, AppError> {
+        let hosts = hosts
+            .iter()
+            .map(|host| host.as_str().to_string())
+            .collect::<Vec<_>>();
+        self.database
+            .run(move |connection| {
+                if hosts.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let rows = sql_query(
+                    "SELECT a.id,
+                            a.host_id,
+                            h.name::text AS host_name,
+                            a.network_id,
+                            n.network::text AS network_cidr,
+                            a.mac_address,
+                            a.comment,
+                            a.created_at,
+                            a.updated_at
+                     FROM host_attachments a
+                     JOIN hosts h ON h.id = a.host_id
+                     JOIN networks n ON n.id = a.network_id
+                     WHERE h.name = ANY($1::text[])
+                     ORDER BY h.name, n.network, a.mac_address NULLS LAST",
+                )
+                .bind::<Array<Text>, _>(&hosts)
+                .load::<HostAttachmentRow>(connection)?;
+                rows.into_iter()
+                    .map(HostAttachmentRow::into_domain)
+                    .collect()
+            })
+            .await
+    }
+
     async fn list_attachments_for_network(
         &self,
         network: &CidrValue,

@@ -23,6 +23,7 @@ pub trait HostStore: Send + Sync {
     ) -> Result<Page<Host>, AppError>;
     async fn create_host(&self, command: CreateHost) -> Result<Host, AppError>;
     async fn get_host_by_name(&self, name: &Hostname) -> Result<Host, AppError>;
+    async fn list_hosts_by_names(&self, names: &[Hostname]) -> Result<Vec<Host>, AppError>;
     async fn get_host_auth_context(&self, name: &Hostname) -> Result<HostAuthContext, AppError>;
     async fn update_host(&self, name: &Hostname, command: UpdateHost) -> Result<Host, AppError>;
     async fn delete_host(&self, name: &Hostname) -> Result<(), AppError>;
@@ -35,6 +36,10 @@ pub trait HostStore: Send + Sync {
         host: &Hostname,
         page: &PageRequest,
     ) -> Result<Page<IpAddressAssignment>, AppError>;
+    async fn list_ip_addresses_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<IpAddressAssignment>, AppError>;
     async fn get_ip_address(
         &self,
         address: &IpAddressValue,

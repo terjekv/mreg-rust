@@ -5,7 +5,7 @@ use crate::{
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
         filters::BacnetIdFilter,
         pagination::{Page, PageRequest},
-        types::BacnetIdentifier,
+        types::{BacnetIdentifier, Hostname},
     },
     errors::AppError,
 };
@@ -26,5 +26,9 @@ pub trait BacnetStore: Send + Sync {
         &self,
         bacnet_id: BacnetIdentifier,
     ) -> Result<BacnetIdAssignment, AppError>;
+    async fn list_bacnet_ids_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<BacnetIdAssignment>, AppError>;
     async fn delete_bacnet_id(&self, bacnet_id: BacnetIdentifier) -> Result<(), AppError>;
 }

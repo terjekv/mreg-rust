@@ -7,7 +7,7 @@ use crate::{
         filters::HostContactFilter,
         host_contact::{CreateHostContact, HostContact},
         pagination::{Page, PageRequest},
-        types::EmailAddressValue,
+        types::{EmailAddressValue, Hostname},
     },
     errors::AppError,
     storage::HostContactStore,
@@ -94,6 +94,28 @@ impl HostContactStore for MemoryStorage {
             .ok_or_else(|| {
                 AppError::not_found(format!("host contact '{}' was not found", email.as_str()))
             })
+    }
+
+    async fn list_host_contacts_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostContact>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state = self.state.read().await;
+        Ok(state
+            .host_contacts
+            .values()
+            .filter(|contact| {
+                contact
+                    .hosts()
+                    .iter()
+                    .any(|host| host_names.contains(host.as_str()))
+            })
+            .cloned()
+            .collect())
     }
 
     async fn delete_host_contact(&self, email: &EmailAddressValue) -> Result<(), AppError> {

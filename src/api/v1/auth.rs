@@ -33,17 +33,16 @@ impl KeyExtractor for LoginRateLimitExtractor {
 
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
         if self.trust_proxy_headers {
-            if let Some(forwarded_for) = req.headers().get("X-Forwarded-For") {
-                if let Ok(ip_str) = forwarded_for.to_str() {
-                    if let Some(ip) = ip_str.split(',').next().map(str::trim) {
-                        return Ok(ip.to_string());
-                    }
-                }
+            if let Some(forwarded_for) = req.headers().get("X-Forwarded-For")
+                && let Ok(ip_str) = forwarded_for.to_str()
+                && let Some(ip) = ip_str.split(',').next().map(str::trim)
+            {
+                return Ok(ip.to_string());
             }
-            if let Some(real_ip) = req.headers().get("X-Real-IP") {
-                if let Ok(ip_str) = real_ip.to_str() {
-                    return Ok(ip_str.trim().to_string());
-                }
+            if let Some(real_ip) = req.headers().get("X-Real-IP")
+                && let Ok(ip_str) = real_ip.to_str()
+            {
+                return Ok(ip_str.trim().to_string());
             }
         }
         if let Some(addr) = req.peer_addr() {

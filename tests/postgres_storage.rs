@@ -1656,6 +1656,48 @@ async fn postgres_host_detail_query_budget_stays_batched() -> Result<(), Box<dyn
         1
     );
 
+    let (body, queries) = ctx
+        .get_json_with_query_capture(
+            &format!("/inventory/hosts?name={host}"),
+            "host-list-detail-query-budget",
+        )
+        .await;
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        body["items"][0]["attachments"].as_array().map(Vec::len),
+        Some(2)
+    );
+
+    let effective_queries: usize = queries
+        .query_counts()
+        .iter()
+        .filter(|(query, _)| {
+            !query.starts_with("INSERT INTO \"export_templates\"")
+                && !query.starts_with("INSERT INTO \"record_types\"")
+                && !query.starts_with("SELECT 1 -- binds: []")
+        })
+        .map(|(_, count)| *count)
+        .sum();
+
+    assert!(
+        effective_queries <= 4,
+        "host list detail query budget exceeded: {:?}",
+        queries.query_counts()
+    );
+    assert_eq!(queries.queries_matching("FROM host_attachments"), 1);
+    assert_eq!(
+        queries.queries_matching("FROM attachment_dhcp_identifiers"),
+        1
+    );
+    assert_eq!(
+        queries.queries_matching("FROM attachment_prefix_reservations"),
+        1
+    );
+    assert_eq!(
+        queries.queries_matching("FROM attachment_community_assignments"),
+        1
+    );
+
     Ok(())
 }
 

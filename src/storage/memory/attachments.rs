@@ -336,6 +336,23 @@ impl AttachmentStore for MemoryStorage {
             .collect())
     }
 
+    async fn list_attachments_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostAttachment>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state = self.state.read().await;
+        Ok(state
+            .host_attachments
+            .values()
+            .filter(|attachment| host_names.contains(attachment.host_name().as_str()))
+            .cloned()
+            .collect())
+    }
+
     async fn list_attachments_for_network(
         &self,
         network: &CidrValue,

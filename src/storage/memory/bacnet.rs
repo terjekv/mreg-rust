@@ -6,7 +6,7 @@ use crate::{
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
         filters::BacnetIdFilter,
         pagination::{Page, PageRequest},
-        types::BacnetIdentifier,
+        types::{BacnetIdentifier, Hostname},
     },
     errors::AppError,
     storage::BacnetStore,
@@ -86,6 +86,23 @@ impl BacnetStore for MemoryStorage {
             .ok_or_else(|| {
                 AppError::not_found(format!("bacnet id '{}' was not found", bacnet_id.as_u32()))
             })
+    }
+
+    async fn list_bacnet_ids_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<BacnetIdAssignment>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state = self.state.read().await;
+        Ok(state
+            .bacnet_ids
+            .values()
+            .filter(|assignment| host_names.contains(assignment.host_name().as_str()))
+            .cloned()
+            .collect())
     }
 
     async fn delete_bacnet_id(&self, bacnet_id: BacnetIdentifier) -> Result<(), AppError> {

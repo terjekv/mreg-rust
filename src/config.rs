@@ -249,12 +249,12 @@ impl Config {
             AuthMode::None => {}
             AuthMode::Scoped => {
                 require_present("MREG_AUTH_JWT_SIGNING_KEY", &self.auth_jwt_signing_key)?;
-                if let Some(key) = &self.auth_jwt_signing_key {
-                    if key.len() < 32 {
-                        return Err(AppError::config(
-                            "MREG_AUTH_JWT_SIGNING_KEY must be at least 32 bytes (256 bits) for HS256 security",
-                        ));
-                    }
+                if let Some(key) = &self.auth_jwt_signing_key
+                    && key.len() < 32
+                {
+                    return Err(AppError::config(
+                        "MREG_AUTH_JWT_SIGNING_KEY must be at least 32 bytes (256 bits) for HS256 security",
+                    ));
                 }
                 if self.auth_scopes.is_empty() {
                     return Err(AppError::config(

@@ -7,7 +7,7 @@ use crate::{
         filters::HostGroupFilter,
         host_group::{CreateHostGroup, HostGroup},
         pagination::{Page, PageRequest},
-        types::HostGroupName,
+        types::{HostGroupName, Hostname},
     },
     errors::AppError,
     storage::HostGroupStore,
@@ -101,6 +101,28 @@ impl HostGroupStore for MemoryStorage {
             .ok_or_else(|| {
                 AppError::not_found(format!("host group '{}' was not found", name.as_str()))
             })
+    }
+
+    async fn list_host_groups_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostGroup>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state = self.state.read().await;
+        Ok(state
+            .host_groups
+            .values()
+            .filter(|group| {
+                group
+                    .hosts()
+                    .iter()
+                    .any(|host| host_names.contains(host.as_str()))
+            })
+            .cloned()
+            .collect())
     }
 
     async fn delete_host_group(&self, name: &HostGroupName) -> Result<(), AppError> {

@@ -580,6 +580,25 @@ async fn inventory_detail_responses_include_attachment_graph() {
     let response = test::call_service(
         &app,
         test::TestRequest::get()
+            .uri("/inventory/hosts")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        body["items"][0]["attachments"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        body["items"][0]["attachments"][0]["ip_addresses"][0]["address"],
+        "192.0.2.20"
+    );
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
             .uri("/inventory/networks/192.0.2.0%2F24")
             .to_request(),
     )

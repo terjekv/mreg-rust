@@ -153,6 +153,29 @@ impl HostPolicyStore for MemoryStorage {
         Ok(items)
     }
 
+    async fn list_roles_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostPolicyRole>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state = self.state.read().await;
+        let mut items: Vec<HostPolicyRole> = state
+            .host_policy_roles
+            .values()
+            .filter(|role| {
+                role.hosts()
+                    .iter()
+                    .any(|value| host_names.contains(value.as_str()))
+            })
+            .cloned()
+            .collect();
+        items.sort_by(|left, right| left.name().as_str().cmp(right.name().as_str()));
+        Ok(items)
+    }
+
     async fn create_role(&self, command: CreateHostPolicyRole) -> Result<HostPolicyRole, AppError> {
         let mut state = self.state.write().await;
         let key = command.name().as_str().to_string();

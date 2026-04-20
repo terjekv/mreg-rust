@@ -6,6 +6,7 @@ pub mod host_community_assignments;
 pub mod host_contacts;
 pub mod host_groups;
 pub mod host_policy;
+pub mod host_views;
 pub mod hosts;
 pub mod imports;
 pub mod labels;
@@ -396,6 +397,12 @@ impl Services {
             store: self.storage.host_policy(),
             audit: self.storage.audit(),
             events: &self.events,
+        }
+    }
+
+    pub fn host_views(&self) -> host_views::HostViewService<'_> {
+        host_views::HostViewService {
+            store: self.storage.host_views(),
         }
     }
 
