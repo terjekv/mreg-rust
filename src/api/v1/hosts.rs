@@ -225,7 +225,27 @@ pub struct HostPolicySummary {
     atoms: Vec<String>,
 }
 
-async fn build_host_response(
+// `pub` only with `bench-helpers` so benches can call this read-model builder.
+// Production library builds keep it crate-internal.
+#[cfg(feature = "bench-helpers")]
+pub async fn build_host_response(
+    state: &AppState,
+    host: &Host,
+    include_details: bool,
+) -> Result<HostResponse, AppError> {
+    build_host_response_impl(state, host, include_details).await
+}
+
+#[cfg(not(feature = "bench-helpers"))]
+pub(crate) async fn build_host_response(
+    state: &AppState,
+    host: &Host,
+    include_details: bool,
+) -> Result<HostResponse, AppError> {
+    build_host_response_impl(state, host, include_details).await
+}
+
+async fn build_host_response_impl(
     state: &AppState,
     host: &Host,
     include_details: bool,

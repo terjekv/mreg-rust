@@ -266,7 +266,27 @@ pub struct NetworkAttachmentInventoryResponse {
     community_assignments: Vec<AttachmentCommunityAssignmentResponse>,
 }
 
-async fn build_network_response(
+// `pub` only with `bench-helpers` so benches can call this read-model builder.
+// Production library builds keep it crate-internal.
+#[cfg(feature = "bench-helpers")]
+pub async fn build_network_response(
+    state: &AppState,
+    network: &Network,
+    include_details: bool,
+) -> Result<NetworkResponse, AppError> {
+    build_network_response_impl(state, network, include_details).await
+}
+
+#[cfg(not(feature = "bench-helpers"))]
+pub(crate) async fn build_network_response(
+    state: &AppState,
+    network: &Network,
+    include_details: bool,
+) -> Result<NetworkResponse, AppError> {
+    build_network_response_impl(state, network, include_details).await
+}
+
+async fn build_network_response_impl(
     state: &AppState,
     network: &Network,
     include_details: bool,

@@ -10,6 +10,10 @@ openssl = ["actix-web/openssl", "dep:openssl"]
 amqp = ["dep:lapin"]
 redis = ["dep:redis"]
 ldap = ["dep:ldap3"]
+# Exposes a handful of internal helpers (response builders, template rendering)
+# as `pub` for the benchmarks under `benches/`. Off by default so production
+# library builds keep these crate-internal.
+bench-helpers = []
 
 [dependencies]
 actix-web = "4.11.0"
@@ -52,6 +56,10 @@ actix-http = "3"
 rstest = "0.25"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 iai-callgrind = "0.16.1"
+serde_urlencoded = "0.7"
+# Self-dep activates `bench-helpers` for tests/benches/examples while keeping
+# it off for the library's production build (`cargo build`/`cargo run`).
+mreg-rust = { path = ".", features = ["bench-helpers"] }
 
 [[bench]]
 name = "inventory_operations_criterion"
@@ -63,4 +71,196 @@ harness = false
 
 [[bench]]
 name = "authz_request_build_callgrind"
+harness = false
+
+[[bench]]
+name = "dns_name_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "hostname_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "zone_name_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "cidr_value_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "ip_address_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "mac_address_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "label_name_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "email_address_validation_callgrind"
+harness = false
+
+[[bench]]
+name = "record_validation_address_callgrind"
+harness = false
+
+[[bench]]
+name = "record_validation_mail_callgrind"
+harness = false
+
+[[bench]]
+name = "record_validation_security_callgrind"
+harness = false
+
+[[bench]]
+name = "record_kind_projection_callgrind"
+harness = false
+
+[[bench]]
+name = "jwt_issue_callgrind"
+harness = false
+
+[[bench]]
+name = "jwt_validate_callgrind"
+harness = false
+
+[[bench]]
+name = "authenticate_bearer_criterion"
+harness = false
+
+[[bench]]
+name = "host_filter_parse_callgrind"
+harness = false
+
+[[bench]]
+name = "record_filter_parse_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_bind_forward_zone_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_bind_reverse_zone_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_dhcp_canonical_json_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_kea_dhcp4_fragment_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_kea_dhcp4_full_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_kea_dhcp6_fragment_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_kea_dhcp6_full_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_isc_dhcpd4_fragment_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_isc_dhcpd4_full_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_isc_dhcpd6_fragment_callgrind"
+harness = false
+
+[[bench]]
+name = "export_template_isc_dhcpd6_full_callgrind"
+harness = false
+
+[[bench]]
+name = "import_batch_resolve_callgrind"
+harness = false
+
+[[bench]]
+name = "import_batch_run_criterion"
+harness = false
+
+[[bench]]
+name = "host_detail_assembly_criterion"
+harness = false
+
+[[bench]]
+name = "network_detail_assembly_criterion"
+harness = false
+
+[[bench]]
+name = "zone_export_context_build_criterion"
+harness = false
+
+[[bench]]
+name = "dhcp_export_context_build_criterion"
+harness = false
+
+[[bench]]
+name = "record_listing_criterion"
+harness = false
+
+[[bench]]
+name = "host_delete_ptr_cascade_criterion"
+harness = false
+
+[[bench]]
+name = "attachment_graph_delete_criterion"
+harness = false
+
+[[bench]]
+name = "page_request_deserialize_callgrind"
+harness = false
+
+[[bench]]
+name = "filter_sql_compile_callgrind"
+harness = false
+
+[[bench]]
+name = "principal_key_derive_callgrind"
+harness = false
+
+[[bench]]
+name = "rdata_render_callgrind"
+harness = false
+
+[[bench]]
+name = "cidr_membership_callgrind"
+harness = false
+
+[[bench]]
+name = "domain_event_serialize_callgrind"
+harness = false
+
+[[bench]]
+name = "audit_record_serialize_callgrind"
+harness = false
+
+[[bench]]
+name = "wildcard_zone_match_criterion"
+harness = false
+
+[[bench]]
+name = "ip_allocation_matrix_criterion"
+harness = false
+
+[[bench]]
+name = "zone_serial_bump_criterion"
+harness = false
+
+[[bench]]
+name = "host_lookup_by_name_criterion"
 harness = false
