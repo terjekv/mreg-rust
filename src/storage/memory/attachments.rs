@@ -9,7 +9,7 @@ use crate::{
             AttachmentCommunityAssignment, AttachmentDhcpIdentifier, AttachmentPrefixReservation,
             CreateAttachmentCommunityAssignment, CreateAttachmentDhcpIdentifier,
             CreateAttachmentPrefixReservation, CreateHostAttachment, HostAttachment,
-            UpdateHostAttachment,
+            UpdateHostAttachment, validate_prefix_reservation_for_attachment,
         },
         community::Community,
         filters::AttachmentCommunityAssignmentFilter,
@@ -225,12 +225,12 @@ pub(super) fn create_attachment_prefix_reservation_in_state(
     state: &mut MemoryState,
     command: CreateAttachmentPrefixReservation,
 ) -> Result<AttachmentPrefixReservation, AppError> {
-    if !state
+    let attachment = state
         .host_attachments
-        .contains_key(&command.attachment_id())
-    {
-        return Err(AppError::not_found("host attachment was not found"));
-    }
+        .get(&command.attachment_id())
+        .cloned()
+        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    validate_prefix_reservation_for_attachment(&attachment, command.prefix())?;
     let now = Utc::now();
     let reservation = AttachmentPrefixReservation::restore(
         Uuid::new_v4(),

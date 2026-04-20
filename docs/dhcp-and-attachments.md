@@ -207,10 +207,11 @@ For IPv6 prefix delegation (DHCPv6-PD):
 ```bash
 curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/prefix-reservations \
   -H 'Content-Type: application/json' \
-  -d '{ "prefix": "fd00:1:2::/48" }'
+  -d '{ "prefix": "fd00:1:2::/120" }'
 ```
 
-Only IPv6 prefixes are allowed.
+Only IPv6 prefixes are allowed, and the reserved prefix must be equal to or
+contained within the attachment network.
 
 ### 5. Assign IPs to an existing attachment
 

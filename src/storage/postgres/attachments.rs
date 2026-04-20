@@ -21,7 +21,7 @@ use crate::{
             AttachmentCommunityAssignment, AttachmentDhcpIdentifier, AttachmentPrefixReservation,
             CreateAttachmentCommunityAssignment, CreateAttachmentDhcpIdentifier,
             CreateAttachmentPrefixReservation, CreateHostAttachment, DhcpIdentifierKind,
-            HostAttachment, UpdateHostAttachment,
+            HostAttachment, UpdateHostAttachment, validate_prefix_reservation_for_attachment,
         },
         filters::AttachmentCommunityAssignmentFilter,
         pagination::{Page, PageRequest},
@@ -412,7 +412,8 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         command: CreateAttachmentPrefixReservation,
     ) -> Result<AttachmentPrefixReservation, AppError> {
-        Self::query_attachment_by_id(connection, command.attachment_id())?;
+        let attachment = Self::query_attachment_by_id(connection, command.attachment_id())?;
+        validate_prefix_reservation_for_attachment(&attachment, command.prefix())?;
         sql_query(
             "INSERT INTO attachment_prefix_reservations (attachment_id, prefix)
              VALUES ($1, $2::cidr)

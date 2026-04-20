@@ -380,6 +380,32 @@ impl CreateAttachmentPrefixReservation {
     }
 }
 
+pub fn validate_prefix_reservation_for_attachment(
+    attachment: &HostAttachment,
+    prefix: &CidrValue,
+) -> Result<(), AppError> {
+    if !prefix.is_v6() {
+        return Err(AppError::validation(
+            "attachment prefix reservations must be IPv6 prefixes",
+        ));
+    }
+    if !attachment.network_cidr().is_v6() {
+        return Err(AppError::validation(
+            "attachment prefix reservations require an IPv6 attachment network",
+        ));
+    }
+    if !attachment
+        .network_cidr()
+        .as_inner()
+        .contains(prefix.as_inner())
+    {
+        return Err(AppError::validation(
+            "attachment prefix reservation must be contained within the attachment network",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttachmentCommunityAssignment {
     id: Uuid,
@@ -516,6 +542,76 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
             Some(normalized)
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use super::{HostAttachment, validate_prefix_reservation_for_attachment};
+    use crate::domain::types::{CidrValue, Hostname};
+
+    fn attachment(network: &str) -> HostAttachment {
+        HostAttachment::restore(
+            Uuid::nil(),
+            Uuid::nil(),
+            Hostname::new("host.test").expect("hostname"),
+            Uuid::nil(),
+            CidrValue::new(network).expect("network"),
+            None,
+            None,
+            Utc::now(),
+            Utc::now(),
+        )
+    }
+
+    #[test]
+    fn prefix_reservation_allows_equal_or_narrower_prefixes() {
+        let attachment = attachment("2001:db8::/64");
+
+        validate_prefix_reservation_for_attachment(
+            &attachment,
+            &CidrValue::new("2001:db8::/64").expect("prefix"),
+        )
+        .expect("equal prefix should be allowed");
+
+        validate_prefix_reservation_for_attachment(
+            &attachment,
+            &CidrValue::new("2001:db8::/80").expect("prefix"),
+        )
+        .expect("narrower prefix should be allowed");
+    }
+
+    #[test]
+    fn prefix_reservation_rejects_prefix_outside_attachment_network() {
+        let attachment = attachment("2001:db8::/64");
+        let err = validate_prefix_reservation_for_attachment(
+            &attachment,
+            &CidrValue::new("2001:db9::/80").expect("prefix"),
+        )
+        .expect_err("out-of-network prefix should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "validation error: attachment prefix reservation must be contained within the attachment network"
+        );
+    }
+
+    #[test]
+    fn prefix_reservation_rejects_ipv4_attachment_network() {
+        let attachment = attachment("10.0.0.0/24");
+        let err = validate_prefix_reservation_for_attachment(
+            &attachment,
+            &CidrValue::new("2001:db8::/64").expect("prefix"),
+        )
+        .expect_err("ipv4 attachment network should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "validation error: attachment prefix reservations require an IPv6 attachment network"
+        );
+    }
 }
 
 fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
