@@ -782,20 +782,24 @@ pub fn attachment_graph_storage(runtime: &Runtime) -> (DynStorage, Hostname) {
                 .expect("network create");
         }
 
-        let community = storage
-            .communities()
-            .create_community(
-                CreateCommunity::new(
-                    NetworkPolicyName::new("bench-policy").expect("policy name"),
-                    v4.clone(),
-                    CommunityName::new("bench-community").expect("community"),
-                    "attachment bench community",
+        for (community_cidr, name) in [
+            (v4.clone(), "bench-community-v4"),
+            (v6.clone(), "bench-community-v6"),
+        ] {
+            storage
+                .communities()
+                .create_community(
+                    CreateCommunity::new(
+                        NetworkPolicyName::new("bench-policy").expect("policy name"),
+                        community_cidr,
+                        CommunityName::new(name).expect("community"),
+                        "attachment bench community",
+                    )
+                    .expect("community command"),
                 )
-                .expect("community command"),
-            )
-            .await
-            .expect("community create");
-        let _ = community;
+                .await
+                .expect("community create");
+        }
 
         storage
             .hosts()
@@ -869,12 +873,17 @@ pub fn attachment_graph_storage(runtime: &Runtime) -> (DynStorage, Hostname) {
                     .expect("dhcp identifier create");
             }
 
+            let community_name = if on_v6 {
+                "bench-community-v6"
+            } else {
+                "bench-community-v4"
+            };
             storage
                 .attachment_community_assignments()
                 .create_attachment_community_assignment(CreateAttachmentCommunityAssignment::new(
                     attachment.id(),
                     NetworkPolicyName::new("bench-policy").expect("policy"),
-                    CommunityName::new("bench-community").expect("community"),
+                    CommunityName::new(community_name).expect("community"),
                 ))
                 .await
                 .expect("community assignment create");
