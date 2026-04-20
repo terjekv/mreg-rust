@@ -9,8 +9,8 @@ use mreg_rust::domain::filters::HostFilter;
 
 fn equality_params() -> HashMap<String, String> {
     HashMap::from([
-        ("name__exact".to_string(), "host01.bench.test".to_string()),
-        ("zone__exact".to_string(), "bench.test".to_string()),
+        ("name".to_string(), "host01.bench.test".to_string()),
+        ("zone".to_string(), "bench.test".to_string()),
     ])
 }
 

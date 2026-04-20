@@ -18,8 +18,8 @@ fn host_filter() -> HostFilter {
 
 fn record_filter() -> RecordFilter {
     RecordFilter::from_query_params(HashMap::from([
-        ("type_name__exact".to_string(), "A".to_string()),
-        ("owner_kind__exact".to_string(), "host".to_string()),
+        ("type_name".to_string(), "A".to_string()),
+        ("owner_kind".to_string(), "host".to_string()),
         ("owner_name__contains".to_string(), "bench".to_string()),
     ]))
     .expect("record filter parses")

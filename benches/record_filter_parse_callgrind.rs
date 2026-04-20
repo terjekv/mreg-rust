@@ -8,13 +8,13 @@ use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 use mreg_rust::domain::filters::RecordFilter;
 
 fn type_only_params() -> HashMap<String, String> {
-    HashMap::from([("type_name__exact".to_string(), "A".to_string())])
+    HashMap::from([("type_name".to_string(), "A".to_string())])
 }
 
 fn compound_params() -> HashMap<String, String> {
     HashMap::from([
         ("type_name__in".to_string(), "A,AAAA,CNAME".to_string()),
-        ("owner_kind__exact".to_string(), "Host".to_string()),
+        ("owner_kind".to_string(), "Host".to_string()),
         (
             "owner_name__endswith".to_string(),
             ".bench.test".to_string(),
