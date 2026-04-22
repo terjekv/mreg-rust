@@ -362,6 +362,56 @@ pub(super) fn get_by_name(
     build_host_group(connection, row)
 }
 
+pub(super) fn list_for_hosts(
+    connection: &mut PgConnection,
+    hosts: &[Hostname],
+) -> Result<Vec<HostGroup>, AppError> {
+    if hosts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str().to_string())
+        .collect::<Vec<_>>();
+    let rows = sql_query(
+        "SELECT DISTINCT hg.id,
+                hg.name::text AS name,
+                hg.description,
+                hg.created_at,
+                hg.updated_at
+         FROM host_groups hg
+         JOIN host_group_hosts hgh ON hgh.host_group_id = hg.id
+         JOIN hosts h ON h.id = hgh.host_id
+         WHERE h.name = ANY($1::text[])
+         ORDER BY hg.name",
+    )
+    .bind::<Array<Text>, _>(&host_names)
+    .load::<HostGroupRow>(connection)?;
+
+    let group_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let mut hosts_by_group = load_group_hosts_batch(connection, &group_ids)?;
+    let mut parents_by_group = load_group_parents_batch(connection, &group_ids)?;
+    let mut owners_by_group = load_group_owners_batch(connection, &group_ids)?;
+
+    rows.into_iter()
+        .map(|row| {
+            let hosts = hosts_by_group.remove(&row.id).unwrap_or_default();
+            let parents = parents_by_group.remove(&row.id).unwrap_or_default();
+            let owners = owners_by_group.remove(&row.id).unwrap_or_default();
+            HostGroup::restore(
+                row.id,
+                HostGroupName::new(&row.name)?,
+                row.description,
+                hosts,
+                parents,
+                owners,
+                row.created_at,
+                row.updated_at,
+            )
+        })
+        .collect()
+}
+
 pub(super) fn delete(connection: &mut PgConnection, name: &str) -> Result<(), AppError> {
     connection.transaction::<(), AppError, _>(|connection| {
         use crate::db::schema::host_groups;
@@ -417,6 +467,16 @@ impl HostGroupStore for PostgresStorage {
         let name = name.as_str().to_string();
         self.database
             .run(move |connection| get_by_name(connection, &name))
+            .await
+    }
+
+    async fn list_host_groups_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostGroup>, AppError> {
+        let hosts = hosts.to_vec();
+        self.database
+            .run(move |connection| list_for_hosts(connection, &hosts))
             .await
     }
 

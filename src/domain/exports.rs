@@ -1,9 +1,51 @@
 use chrono::{DateTime, Utc};
+use minijinja::Environment;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::errors::AppError;
+
+/// Render an export template against a pre-built context value.
+///
+/// `pub` only with the `bench-helpers` feature so benches can call it
+/// directly. Production library builds keep it crate-internal.
+#[cfg(feature = "bench-helpers")]
+pub fn render_export_template(
+    template: &ExportTemplate,
+    context: &Value,
+) -> Result<String, AppError> {
+    render_export_template_impl(template, context)
+}
+
+#[cfg(not(feature = "bench-helpers"))]
+pub(crate) fn render_export_template(
+    template: &ExportTemplate,
+    context: &Value,
+) -> Result<String, AppError> {
+    render_export_template_impl(template, context)
+}
+
+fn render_export_template_impl(
+    template: &ExportTemplate,
+    context: &Value,
+) -> Result<String, AppError> {
+    match template.engine() {
+        "json" => serde_json::to_string_pretty(context).map_err(AppError::internal),
+        "minijinja" => {
+            let mut env = Environment::new();
+            env.add_template("export", template.body())
+                .map_err(AppError::internal)?;
+            env.get_template("export")
+                .map_err(AppError::internal)?
+                .render(minijinja::value::Value::from_serialize(context))
+                .map_err(AppError::internal)
+        }
+        other => Err(AppError::validation(format!(
+            "unsupported export template engine '{other}'"
+        ))),
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ExportTemplate {

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use diesel::{
     OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Integer, Text, Timestamptz, Uuid as SqlUuid},
+    sql_types::{Array, Integer, Text, Timestamptz, Uuid as SqlUuid},
 };
 use uuid::Uuid;
 
@@ -125,6 +125,42 @@ pub(super) fn get(
     ))
 }
 
+pub(super) fn list_for_hosts(
+    connection: &mut PgConnection,
+    hosts: &[Hostname],
+) -> Result<Vec<BacnetIdAssignment>, AppError> {
+    if hosts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str().to_string())
+        .collect::<Vec<_>>();
+    let rows = sql_query(
+        "SELECT b.id, b.host_id, h.name::text AS host_name,
+                b.created_at, b.updated_at
+         FROM bacnet_ids b
+         JOIN hosts h ON h.id = b.host_id
+         WHERE h.name = ANY($1::text[])
+         ORDER BY b.id",
+    )
+    .bind::<Array<Text>, _>(&host_names)
+    .load::<BacnetIdRow>(connection)?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(BacnetIdAssignment::restore(
+                BacnetIdentifier::new(u32::try_from(row.id).map_err(|_| {
+                    AppError::internal(format!("invalid bacnet_id in database: {}", row.id))
+                })?)?,
+                Hostname::new(row.host_name)?,
+                row.created_at,
+                row.updated_at,
+            ))
+        })
+        .collect()
+}
+
 pub(super) fn delete(
     connection: &mut PgConnection,
     bacnet_id: BacnetIdentifier,
@@ -170,6 +206,16 @@ impl BacnetStore for PostgresStorage {
     ) -> Result<BacnetIdAssignment, AppError> {
         self.database
             .run(move |connection| get(connection, bacnet_id))
+            .await
+    }
+
+    async fn list_bacnet_ids_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<BacnetIdAssignment>, AppError> {
+        let hosts = hosts.to_vec();
+        self.database
+            .run(move |connection| list_for_hosts(connection, &hosts))
             .await
     }
 

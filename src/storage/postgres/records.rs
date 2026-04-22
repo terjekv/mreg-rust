@@ -22,7 +22,7 @@ use crate::{
             RecordTypeDefinition, UpdateRecord, ValidatedRecordContent, alias_target_names,
             validate_record_relationships,
         },
-        types::{DnsName, RecordTypeName},
+        types::{DnsName, Hostname, RecordTypeName},
     },
     errors::AppError,
     storage::RecordStore,
@@ -341,6 +341,39 @@ impl RecordStore for PostgresStorage {
                 .optional()?
                 .ok_or_else(|| AppError::not_found("rrset not found"))?
                 .into_domain()
+            })
+            .await
+    }
+
+    async fn list_records_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<RecordInstance>, AppError> {
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str().to_string())
+            .collect::<Vec<_>>();
+        self.database
+            .run(move |connection| {
+                if host_names.is_empty() {
+                    return Ok(Vec::new());
+                }
+                Self::ensure_builtin_record_types(connection)?;
+                let rows = sql_query(
+                    "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
+                            rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
+                            r.data, r.raw_rdata, r.rendered,
+                            r.created_at, r.updated_at
+                     FROM records r
+                     JOIN rrsets rs ON rs.id = r.rrset_id
+                     JOIN record_types rt ON rt.id = rs.type_id
+                     WHERE rs.anchor_kind = 'host'
+                       AND rs.owner_name = ANY($1::text[])
+                     ORDER BY rs.owner_name, r.created_at DESC",
+                )
+                .bind::<diesel::sql_types::Array<Text>, _>(&host_names)
+                .load::<RecordRow>(connection)?;
+                rows.into_iter().map(RecordRow::into_domain).collect()
             })
             .await
     }

@@ -8,7 +8,7 @@ use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString},
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use mreg_rust::domain::{
     attachment::{
         CreateAttachmentDhcpIdentifier, CreateHostAttachment, DhcpIdentifierFamily,
@@ -70,12 +70,34 @@ fn local_password_hash(password: &str) -> String {
         .to_string()
 }
 
-fn postgres_scoped_auth_state(scope_name: &str, allow_dev_authz_bypass: bool) -> Option<AppState> {
-    let database_url = common::postgres_test_database_url().ok()??;
+async fn postgres_scoped_auth_state(
+    scope_name: &str,
+    allow_dev_authz_bypass: bool,
+) -> Option<AppState> {
+    // Warm the isolated schema once so fresh scoped-auth states do not race on
+    // migrations when the test binary runs in parallel.
+    common::postgres_state().await?;
+    let database_url = match common::postgres_test_database_url() {
+        Ok(Some(url)) => url,
+        Ok(None) => return None,
+        Err(error) => {
+            if std::env::var("CI").is_ok() {
+                panic!(
+                    "FATAL in CI: postgres scoped auth state setup failed for scope \
+                     '{scope_name}': {error}"
+                );
+            }
+            eprintln!(
+                "warning: postgres scoped auth state setup failed for scope \
+                 '{scope_name}': {error}"
+            );
+            return None;
+        }
+    };
     let config = Config {
         workers: Some(1),
         database_url: Some(database_url),
-        run_migrations: true,
+        run_migrations: false,
         storage_backend: StorageBackendSetting::Postgres,
         treetop_timeout_ms: 1000,
         allow_dev_authz_bypass,
@@ -93,8 +115,38 @@ fn postgres_scoped_auth_state(scope_name: &str, allow_dev_authz_bypass: bool) ->
         }],
         ..Config::default()
     };
-    let storage = build_storage(&config).ok()?;
-    let authn = AuthnClient::from_config(&config, storage.clone()).ok()?;
+    let storage = match build_storage(&config) {
+        Ok(storage) => storage,
+        Err(error) => {
+            if std::env::var("CI").is_ok() {
+                panic!(
+                    "FATAL in CI: failed to build postgres scoped auth storage for scope \
+                     '{scope_name}': {error}"
+                );
+            }
+            eprintln!(
+                "warning: failed to build postgres scoped auth storage for scope \
+                 '{scope_name}': {error}"
+            );
+            return None;
+        }
+    };
+    let authn = match AuthnClient::from_config(&config, storage.clone()) {
+        Ok(authn) => authn,
+        Err(error) => {
+            if std::env::var("CI").is_ok() {
+                panic!(
+                    "FATAL in CI: failed to build postgres scoped auth client for scope \
+                     '{scope_name}': {error}"
+                );
+            }
+            eprintln!(
+                "warning: failed to build postgres scoped auth client for scope \
+                 '{scope_name}': {error}"
+            );
+            return None;
+        }
+    };
     let authz = AuthorizerClient::from_config(&config).expect("authz config");
     Some(AppState {
         config: Arc::new(config),
@@ -1456,23 +1508,6 @@ async fn postgres_host_detail_query_budget_stays_batched() -> Result<(), Box<dyn
 
     assert_eq!(
         ctx.post(
-            &format!("/inventory/attachments/{attachment_a_id}/prefix-reservations"),
-            json!({ "prefix": "2001:db8:41::/120" }),
-        )
-        .await,
-        actix_web::http::StatusCode::CREATED
-    );
-    assert_eq!(
-        ctx.post(
-            &format!("/inventory/attachments/{attachment_b_id}/prefix-reservations"),
-            json!({ "prefix": "2001:db8:42::/120" }),
-        )
-        .await,
-        actix_web::http::StatusCode::CREATED
-    );
-
-    assert_eq!(
-        ctx.post(
             "/policy/network/policies",
             json!({ "name": policy, "description": "budget policy" }),
         )
@@ -1621,6 +1656,48 @@ async fn postgres_host_detail_query_budget_stays_batched() -> Result<(), Box<dyn
         1
     );
 
+    let (body, queries) = ctx
+        .get_json_with_query_capture(
+            &format!("/inventory/hosts?name={host}"),
+            "host-list-detail-query-budget",
+        )
+        .await;
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        body["items"][0]["attachments"].as_array().map(Vec::len),
+        Some(2)
+    );
+
+    let effective_queries: usize = queries
+        .query_counts()
+        .iter()
+        .filter(|(query, _)| {
+            !query.starts_with("INSERT INTO \"export_templates\"")
+                && !query.starts_with("INSERT INTO \"record_types\"")
+                && !query.starts_with("SELECT 1 -- binds: []")
+        })
+        .map(|(_, count)| *count)
+        .sum();
+
+    assert!(
+        effective_queries <= 4,
+        "host list detail query budget exceeded: {:?}",
+        queries.query_counts()
+    );
+    assert_eq!(queries.queries_matching("FROM host_attachments"), 1);
+    assert_eq!(
+        queries.queries_matching("FROM attachment_dhcp_identifiers"),
+        1
+    );
+    assert_eq!(
+        queries.queries_matching("FROM attachment_prefix_reservations"),
+        1
+    );
+    assert_eq!(
+        queries.queries_matching("FROM attachment_community_assignments"),
+        1
+    );
+
     Ok(())
 }
 
@@ -1693,14 +1770,6 @@ async fn postgres_network_detail_query_budget_stays_batched()
                     "value": value,
                     "priority": 10
                 }),
-            )
-            .await,
-            actix_web::http::StatusCode::CREATED
-        );
-        assert_eq!(
-            ctx.post(
-                &format!("/inventory/attachments/{attachment_id}/prefix-reservations"),
-                json!({ "prefix": "2001:db8:43::/120" }),
             )
             .await,
             actix_web::http::StatusCode::CREATED
@@ -1787,7 +1856,11 @@ async fn postgres_logout_all_cutoff_persists_across_fresh_contexts()
     };
 
     let principal_key = format!("mreg::local::{}", ctx.name("principal"));
-    let cutoff = Utc::now();
+    // PostgreSQL TIMESTAMPTZ has microsecond precision; the storage layer
+    // truncates nanoseconds before persisting. Pre-truncate here so the
+    // round-trip comparison can be exact.
+    let cutoff = DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("cutoff must round-trip via micros");
 
     ctx.storage()
         .auth_sessions()
@@ -1802,8 +1875,7 @@ async fn postgres_logout_all_cutoff_persists_across_fresh_contexts()
         .auth_sessions()
         .principal_revoked_before(&principal_key)
         .await?;
-    assert!(stored.is_some());
-    assert!(stored.expect("revocation cutoff") >= cutoff);
+    assert_eq!(stored, Some(cutoff));
 
     Ok(())
 }
@@ -2130,11 +2202,23 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
 
     let host = ctx.host("cascade-host");
     let cidr = ctx.cidr(71);
+    let v6_token = ctx.bacnet_id(71);
+    let v6_cidr = format!(
+        "2001:db8:{:x}:{:x}::/64",
+        (v6_token >> 16) & 0xffff,
+        v6_token & 0xffff
+    );
+    let v6_prefix = format!(
+        "2001:db8:{:x}:{:x}::/120",
+        (v6_token >> 16) & 0xffff,
+        v6_token & 0xffff
+    );
     let address = ctx.ip_in_cidr(&cidr, 21);
     let policy = ctx.name("cascade-policy");
     let community = ctx.name("cascade-community");
 
     ctx.seed_network(&cidr).await;
+    ctx.seed_network(&v6_cidr).await;
     ctx.seed_host(&host).await;
 
     let (status, attachment) = ctx
@@ -2145,6 +2229,17 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
         .await;
     assert_eq!(status, actix_web::http::StatusCode::CREATED);
     let attachment_id = attachment["id"]
+        .as_str()
+        .expect("attachment id")
+        .to_string();
+    let (status, v6_attachment) = ctx
+        .post_json(
+            &format!("/inventory/hosts/{host}/attachments"),
+            json!({ "network": v6_cidr }),
+        )
+        .await;
+    assert_eq!(status, actix_web::http::StatusCode::CREATED);
+    let v6_attachment_id = v6_attachment["id"]
         .as_str()
         .expect("attachment id")
         .to_string();
@@ -2172,8 +2267,8 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
     );
     assert_eq!(
         ctx.post(
-            &format!("/inventory/attachments/{attachment_id}/prefix-reservations"),
-            json!({ "prefix": "2001:db8:71::/120" }),
+            &format!("/inventory/attachments/{v6_attachment_id}/prefix-reservations"),
+            json!({ "prefix": v6_prefix }),
         )
         .await,
         actix_web::http::StatusCode::CREATED
@@ -2225,6 +2320,11 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
             .await,
         actix_web::http::StatusCode::NOT_FOUND
     );
+    assert_eq!(
+        ctx.get_status(&format!("/inventory/attachments/{v6_attachment_id}"))
+            .await,
+        actix_web::http::StatusCode::NOT_FOUND
+    );
 
     assert!(
         storage
@@ -2239,7 +2339,7 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
         storage
             .attachments()
             .list_attachment_prefix_reservations_for_attachments(&[uuid::Uuid::parse_str(
-                &attachment_id
+                &v6_attachment_id
             )?])
             .await?
             .is_empty()
@@ -2438,7 +2538,7 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
     let scope = "local-login";
     let login_username = format!("{scope}:admin");
     let principal_key = format!("mreg::{scope}::admin");
-    let Some(state_a) = postgres_scoped_auth_state(scope, true) else {
+    let Some(state_a) = postgres_scoped_auth_state(scope, true).await else {
         eprintln!(
             "{}",
             common::postgres_skip_message(
@@ -2475,7 +2575,9 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
     assert_eq!(body["principal"]["namespace"], json!(["mreg", scope]));
     assert_eq!(body["principal"]["key"], principal_key);
 
-    let fresh = postgres_scoped_auth_state(scope, true).expect("fresh postgres auth state");
+    let fresh = postgres_scoped_auth_state(scope, true)
+        .await
+        .expect("fresh postgres auth state");
     let (status, body) = call_auth_json(
         test::TestRequest::get()
             .uri("/auth/me")
@@ -2497,7 +2599,7 @@ async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-logout";
     let login_username = format!("{scope}:admin");
-    let Some(state_a) = postgres_scoped_auth_state(scope, true) else {
+    let Some(state_a) = postgres_scoped_auth_state(scope, true).await else {
         eprintln!(
             "{}",
             common::postgres_skip_message(
@@ -2532,7 +2634,9 @@ async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(body.is_null());
 
-    let fresh = postgres_scoped_auth_state(scope, true).expect("fresh postgres auth state");
+    let fresh = postgres_scoped_auth_state(scope, true)
+        .await
+        .expect("fresh postgres auth state");
     let (status, body) = call_auth_json(
         test::TestRequest::get()
             .uri("/auth/me")
@@ -2553,7 +2657,7 @@ async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
     let scope = "local-logout-all";
     let login_username = format!("{scope}:admin");
     let principal_key = format!("mreg::{scope}::admin");
-    let Some(state_a) = postgres_scoped_auth_state(scope, true) else {
+    let Some(state_a) = postgres_scoped_auth_state(scope, true).await else {
         eprintln!(
             "{}",
             common::postgres_skip_message(
@@ -2589,7 +2693,9 @@ async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(body.is_null());
 
-    let fresh = postgres_scoped_auth_state(scope, true).expect("fresh postgres auth state");
+    let fresh = postgres_scoped_auth_state(scope, true)
+        .await
+        .expect("fresh postgres auth state");
     let (status, body) = call_auth_json(
         test::TestRequest::get()
             .uri("/auth/me")

@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use minijinja::Environment;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -8,6 +7,7 @@ use crate::{
     domain::{
         exports::{
             CreateExportRun, CreateExportTemplate, ExportRun, ExportRunStatus, ExportTemplate,
+            render_export_template,
         },
         pagination::{Page, PageRequest},
         tasks::{CreateTask, TaskEnvelope, TaskStatus},
@@ -277,24 +277,6 @@ fn dhcp_export_context(state: &MemoryState, run: &ExportRun) -> (Value, Vec<Stri
         }),
         warnings,
     )
-}
-
-fn render_export_template(template: &ExportTemplate, context: &Value) -> Result<String, AppError> {
-    match template.engine() {
-        "json" => serde_json::to_string_pretty(context).map_err(AppError::internal),
-        "minijinja" => {
-            let mut env = Environment::new();
-            env.add_template("export", template.body())
-                .map_err(AppError::internal)?;
-            let template_ref = env.get_template("export").map_err(AppError::internal)?;
-            template_ref
-                .render(minijinja::value::Value::from_serialize(context))
-                .map_err(AppError::internal)
-        }
-        other => Err(AppError::validation(format!(
-            "unsupported export template engine '{other}'"
-        ))),
-    }
 }
 
 /// Build a zone-scoped export context for a forward zone.

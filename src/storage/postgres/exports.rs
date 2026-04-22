@@ -5,7 +5,6 @@ use diesel::{
     Connection, ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, RunQueryDsl,
     SelectableHelper, insert_into, sql_query, sql_types::Uuid as SqlUuid, update,
 };
-use minijinja::Environment;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -15,7 +14,10 @@ use crate::{
         schema::{export_runs, export_templates},
     },
     domain::{
-        exports::{CreateExportRun, CreateExportTemplate, ExportRun, ExportTemplate},
+        exports::{
+            CreateExportRun, CreateExportTemplate, ExportRun, ExportTemplate,
+            render_export_template,
+        },
         pagination::{Page, PageRequest},
         tasks::CreateTask,
     },
@@ -34,24 +36,6 @@ fn dhcp_identifier_kind_name(kind: crate::domain::attachment::DhcpIdentifierKind
         crate::domain::attachment::DhcpIdentifierKind::DuidLl => "duid_ll",
         crate::domain::attachment::DhcpIdentifierKind::DuidUuid => "duid_uuid",
         crate::domain::attachment::DhcpIdentifierKind::DuidRaw => "duid_raw",
-    }
-}
-
-fn render_export_template(template: &ExportTemplate, context: &Value) -> Result<String, AppError> {
-    match template.engine() {
-        "json" => serde_json::to_string_pretty(context).map_err(AppError::internal),
-        "minijinja" => {
-            let mut env = Environment::new();
-            env.add_template("export", template.body())
-                .map_err(AppError::internal)?;
-            env.get_template("export")
-                .map_err(AppError::internal)?
-                .render(minijinja::value::Value::from_serialize(context))
-                .map_err(AppError::internal)
-        }
-        other => Err(AppError::validation(format!(
-            "unsupported export template engine '{other}'"
-        ))),
     }
 }
 

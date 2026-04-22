@@ -441,7 +441,7 @@ async fn execute_import_task(
     task: &TaskEnvelope,
 ) -> Result<Value, AppError> {
     if let Err(error) = require(
-        &state,
+        state,
         authz_request(
             req,
             authz::actions::worker::TASK_EXECUTE_IMPORT_BATCH,
@@ -488,7 +488,7 @@ async fn execute_export_task(
     task: &TaskEnvelope,
 ) -> Result<Value, AppError> {
     if let Err(error) = require(
-        &state,
+        state,
         authz_request(
             req,
             authz::actions::worker::TASK_EXECUTE_EXPORT_RUN,

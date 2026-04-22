@@ -19,6 +19,22 @@ fn task_queue_mutex() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn unique_ipv6_attachment_prefixes(ctx: &TestCtx, slot: u16) -> (String, String, String) {
+    let v4_cidr = ctx.cidr(slot);
+    let prefix = v4_cidr.strip_suffix("/24").expect("expected /24");
+    let octets: Vec<&str> = prefix.split('.').collect();
+    let group = format!(
+        "{:x}{:02x}",
+        octets[1].parse::<u16>().unwrap(),
+        octets[2].parse::<u16>().unwrap()
+    );
+    (
+        format!("fd00:{group}::/112"),
+        format!("fd00:{group}::100/120"),
+        format!("fd00:{group}:1::/120"),
+    )
+}
+
 async fn drain_task_queue(ctx: &TestCtx) {
     let storage = ctx.storage();
     while let Some(task) = storage
@@ -796,6 +812,90 @@ async fn import_batch_is_atomic_scenario(ctx: &TestCtx) {
     assert_eq!(stored["status"], "failed");
 }
 
+async fn import_batch_rejects_out_of_network_attachment_prefix_scenario(ctx: &TestCtx) {
+    let _guard = task_queue_mutex().lock().await;
+    drain_task_queue(ctx).await;
+
+    let zone = ctx.zone("import-prefix-zone");
+    let host = ctx.host_in_zone("import-prefix-host", &zone);
+    let (cidr, _valid_prefix, invalid_prefix) = unique_ipv6_attachment_prefixes(ctx, 8);
+    let (_, created) = ctx
+        .post_json(
+            "/workflows/imports",
+            json!({
+                "requested_by": "tester",
+                "items": [
+                    {
+                        "ref": "network-1",
+                        "kind": "network",
+                        "operation": "create",
+                        "attributes": {
+                            "cidr": cidr,
+                            "description": "Imported IPv6 network"
+                        }
+                    },
+                    {
+                        "ref": "host-1",
+                        "kind": "host",
+                        "operation": "create",
+                        "attributes": {
+                            "name": host,
+                            "zone": zone
+                        }
+                    },
+                    {
+                        "ref": "attachment-1",
+                        "kind": "host_attachment",
+                        "operation": "create",
+                        "attributes": {
+                            "host_name": host,
+                            "network": cidr,
+                            "mac_address": "aa:bb:cc:dd:ee:08"
+                        }
+                    },
+                    {
+                        "ref": "prefix-1",
+                        "kind": "attachment_prefix_reservation",
+                        "operation": "create",
+                        "attributes": {
+                            "attachment_id_ref": "attachment-1",
+                            "prefix": invalid_prefix
+                        }
+                    }
+                ]
+            }),
+        )
+        .await;
+    let import_id = created["id"].as_str().unwrap().to_string();
+
+    let status = ctx.post("/workflows/tasks/run-next", json!({})).await;
+    assert!(
+        matches!(
+            status,
+            StatusCode::OK | StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND
+        ),
+        "unexpected import failure status: {status}"
+    );
+
+    assert_eq!(
+        ctx.get_status(&format!("/inventory/hosts/{host}")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        ctx.get_status(&format!("/inventory/networks/{cidr}")).await,
+        StatusCode::NOT_FOUND
+    );
+
+    let imports = ctx.get_json("/workflows/imports").await;
+    let stored = imports["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == import_id)
+        .expect("import batch should exist");
+    assert_eq!(stored["status"], "failed");
+}
+
 async fn task_claiming_advances_state_scenario(ctx: &TestCtx) {
     let _guard = task_queue_mutex().lock().await;
     drain_task_queue(ctx).await;
@@ -1162,6 +1262,13 @@ dual_backend_test!(import_batch_is_atomic, |ctx| {
     import_batch_is_atomic_scenario(&ctx).await;
 });
 
+dual_backend_test!(
+    import_batch_rejects_out_of_network_attachment_prefix,
+    |ctx| {
+        import_batch_rejects_out_of_network_attachment_prefix_scenario(&ctx).await;
+    }
+);
+
 dual_backend_test!(task_claiming_advances_state, |ctx| {
     task_claiming_advances_state_scenario(&ctx).await;
 });
@@ -1481,6 +1588,56 @@ async fn attachment_update_and_delete_scenario(ctx: &TestCtx) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+async fn attachment_prefix_reservation_requires_contained_v6_prefix_scenario(ctx: &TestCtx) {
+    let host = ctx.host("attach-prefix");
+    let (cidr, valid_prefix, invalid_prefix) = unique_ipv6_attachment_prefixes(ctx, 13);
+    ctx.seed_host(&host).await;
+
+    let status = ctx
+        .post(
+            "/inventory/networks",
+            json!({
+                "cidr": cidr,
+                "description": format!("ipv6 network {cidr}"),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = ctx
+        .post_json(
+            &format!("/inventory/hosts/{host}/attachments"),
+            json!({
+                "network": cidr,
+                "mac_address": "aa:bb:cc:dd:ee:13",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let attachment_id = body["id"].as_str().unwrap().to_string();
+
+    let status = ctx
+        .post(
+            &format!("/inventory/attachments/{attachment_id}/prefix-reservations"),
+            json!({ "prefix": valid_prefix }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = ctx
+        .post_json(
+            &format!("/inventory/attachments/{attachment_id}/prefix-reservations"),
+            json!({ "prefix": invalid_prefix }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "validation_error");
+    assert_eq!(
+        body["message"],
+        "validation error: attachment prefix reservation must be contained within the attachment network"
+    );
+}
+
 dual_backend_test!(host_contact_update_and_delete, |ctx| {
     host_contact_update_and_delete_scenario(&ctx).await;
 });
@@ -1500,6 +1657,13 @@ dual_backend_test!(community_create_and_delete, |ctx| {
 dual_backend_test!(attachment_update_and_delete, |ctx| {
     attachment_update_and_delete_scenario(&ctx).await;
 });
+
+dual_backend_test!(
+    attachment_prefix_reservation_requires_contained_v6_prefix,
+    |ctx| {
+        attachment_prefix_reservation_requires_contained_v6_prefix_scenario(&ctx).await;
+    }
+);
 
 // ---------------------------------------------------------------------------
 // Host creation with IP assignment scenarios

@@ -883,6 +883,21 @@ impl HostStore for PostgresStorage {
             .await
     }
 
+    async fn list_hosts_by_names(&self, names: &[Hostname]) -> Result<Vec<Host>, AppError> {
+        let names = names.to_vec();
+        self.database
+            .run(move |connection| {
+                let ids = Self::resolve_host_ids(connection, &names)?;
+                let mut hosts = Self::query_hosts(connection)?
+                    .into_iter()
+                    .filter(|host| ids.contains_key(host.name()))
+                    .collect::<Vec<_>>();
+                hosts.sort_by_key(|host| host.name().as_str().to_string());
+                Ok(hosts)
+            })
+            .await
+    }
+
     async fn get_host_auth_context(&self, name: &Hostname) -> Result<HostAuthContext, AppError> {
         let name = name.clone();
         self.database
@@ -993,6 +1008,20 @@ impl HostStore for PostgresStorage {
             .run(move |connection| {
                 let items = Self::query_ip_addresses_for_host(connection, &host)?;
                 Ok(vec_to_page(items, &page))
+            })
+            .await
+    }
+
+    async fn list_ip_addresses_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<IpAddressAssignment>, AppError> {
+        let hosts = hosts.to_vec();
+        self.database
+            .run(move |connection| {
+                let host_ids = Self::resolve_host_ids(connection, &hosts)?;
+                let ids = host_ids.into_values().collect::<Vec<_>>();
+                Self::query_ip_addresses_for_hosts(connection, &ids)
             })
             .await
     }

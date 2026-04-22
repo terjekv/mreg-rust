@@ -9,6 +9,7 @@ mod host_community_assignments;
 mod host_contacts;
 mod host_groups;
 mod host_policy;
+mod host_views;
 mod hosts;
 mod imports;
 mod labels;
@@ -36,8 +37,8 @@ use crate::{
     storage::{
         AttachmentCommunityAssignmentStore, AttachmentStore, AuditStore, AuthSessionStore,
         BacnetStore, CommunityStore, ExportStore, HostCommunityAssignmentStore, HostContactStore,
-        HostGroupStore, HostPolicyStore, HostStore, ImportStore, LabelStore, NameServerStore,
-        NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
+        HostGroupStore, HostPolicyStore, HostStore, HostViewStore, ImportStore, LabelStore,
+        NameServerStore, NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
         StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, ZoneStore,
     },
 };
@@ -178,6 +179,10 @@ impl Storage for PostgresStorage {
     }
 
     fn host_policy(&self) -> &(dyn HostPolicyStore + Send + Sync) {
+        self
+    }
+
+    fn host_views(&self) -> &(dyn HostViewStore + Send + Sync) {
         self
     }
 }

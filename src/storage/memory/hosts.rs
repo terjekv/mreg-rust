@@ -433,6 +433,18 @@ impl HostStore for MemoryStorage {
             .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name.as_str())))
     }
 
+    async fn list_hosts_by_names(&self, names: &[Hostname]) -> Result<Vec<Host>, AppError> {
+        let state = self.state.read().await;
+        names
+            .iter()
+            .map(|name| {
+                state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+                    AppError::not_found(format!("host '{}' was not found", name.as_str()))
+                })
+            })
+            .collect()
+    }
+
     async fn get_host_auth_context(&self, name: &Hostname) -> Result<HostAuthContext, AppError> {
         let state = self.state.read().await;
         let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
@@ -610,6 +622,33 @@ impl HostStore for MemoryStorage {
             .collect();
         items.sort_by_key(|item| item.id());
         paginate_by_cursor(items, page)
+    }
+
+    async fn list_ip_addresses_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<IpAddressAssignment>, AppError> {
+        let state = self.state.read().await;
+        let host_ids = hosts
+            .iter()
+            .map(|host| {
+                state
+                    .hosts
+                    .get(host.as_str())
+                    .map(|value| value.id())
+                    .ok_or_else(|| {
+                        AppError::not_found(format!("host '{}' was not found", host.as_str()))
+                    })
+            })
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        let mut items: Vec<IpAddressAssignment> = state
+            .ip_addresses
+            .values()
+            .filter(|assignment| host_ids.contains(&assignment.host_id()))
+            .cloned()
+            .collect();
+        items.sort_by_key(|item| item.id());
+        Ok(items)
     }
 
     async fn get_ip_address(

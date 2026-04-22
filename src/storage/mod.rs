@@ -21,6 +21,7 @@ mod host_community_assignments;
 mod host_contacts;
 mod host_groups;
 mod host_policy_store;
+mod host_views_store;
 mod hosts;
 mod imports_store;
 mod labels;
@@ -44,6 +45,7 @@ pub use host_community_assignments::HostCommunityAssignmentStore;
 pub use host_contacts::HostContactStore;
 pub use host_groups::HostGroupStore;
 pub use host_policy_store::HostPolicyStore;
+pub use host_views_store::HostViewStore;
 pub use hosts::HostStore;
 pub use imports_store::ImportStore;
 pub use labels::LabelStore;
@@ -94,6 +96,7 @@ pub type DynExportStore = dyn ExportStore + Send + Sync;
 pub type DynAuditStore = dyn AuditStore + Send + Sync;
 pub type DynAuthSessionStore = dyn AuthSessionStore + Send + Sync;
 pub type DynHostPolicyStore = dyn HostPolicyStore + Send + Sync;
+pub type DynHostViewStore = dyn HostViewStore + Send + Sync;
 
 /// Identifies which storage backend is active at runtime.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -155,6 +158,7 @@ pub trait Storage: Send + Sync {
     fn audit(&self) -> &(dyn AuditStore + Send + Sync);
     fn auth_sessions(&self) -> &(dyn AuthSessionStore + Send + Sync);
     fn host_policy(&self) -> &(dyn HostPolicyStore + Send + Sync);
+    fn host_views(&self) -> &(dyn HostViewStore + Send + Sync);
 }
 
 /// Construct the storage backend based on configuration (auto, memory, or postgres).

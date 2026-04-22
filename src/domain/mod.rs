@@ -10,6 +10,7 @@ pub mod host_community_assignment;
 pub mod host_contact;
 pub mod host_group;
 pub mod host_policy;
+pub mod host_view;
 pub mod imports;
 pub mod label;
 pub mod nameserver;

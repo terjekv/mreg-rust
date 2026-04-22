@@ -18,6 +18,7 @@ pub struct LdapScopeAuthenticator {
 }
 
 impl LdapScopeAuthenticator {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         url: String,
         timeout_ms: u64,

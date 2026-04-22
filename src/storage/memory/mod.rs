@@ -8,6 +8,7 @@ mod host_community_assignments;
 mod host_contacts;
 mod host_groups;
 mod host_policy;
+mod host_views;
 mod hosts;
 mod imports;
 mod labels;
@@ -61,8 +62,8 @@ use crate::{
     storage::{
         AttachmentCommunityAssignmentStore, AttachmentStore, AuditStore, AuthSessionStore,
         BacnetStore, CommunityStore, ExportStore, HostCommunityAssignmentStore, HostContactStore,
-        HostGroupStore, HostPolicyStore, HostStore, ImportStore, LabelStore, NameServerStore,
-        NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
+        HostGroupStore, HostPolicyStore, HostStore, HostViewStore, ImportStore, LabelStore,
+        NameServerStore, NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
         StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, ZoneStore,
         has_id::HasId,
     },
@@ -122,12 +123,12 @@ pub(super) fn sort_items<T: HasId>(
     valid_fields: &[&str],
     key_fn: impl Fn(&T, &str) -> String,
 ) -> Result<(), crate::errors::AppError> {
-    if let Some(field) = page.sort_by() {
-        if !valid_fields.contains(&field) {
-            return Err(crate::errors::AppError::validation(format!(
-                "unsupported sort_by field: {field}"
-            )));
-        }
+    if let Some(field) = page.sort_by()
+        && !valid_fields.contains(&field)
+    {
+        return Err(crate::errors::AppError::validation(format!(
+            "unsupported sort_by field: {field}"
+        )));
     }
     let field = page.sort_by().unwrap_or("name");
     let descending = *page.sort_direction() == SortDirection::Desc;
@@ -459,6 +460,10 @@ impl Storage for MemoryStorage {
     }
 
     fn host_policy(&self) -> &(dyn HostPolicyStore + Send + Sync) {
+        self
+    }
+
+    fn host_views(&self) -> &(dyn HostViewStore + Send + Sync) {
         self
     }
 }

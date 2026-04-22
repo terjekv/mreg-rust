@@ -8,7 +8,7 @@ use crate::{
             CreateRecordInstance, CreateRecordTypeDefinition, RecordInstance, RecordRrset,
             RecordTypeDefinition, UpdateRecord,
         },
-        types::{DnsName, RecordTypeName},
+        types::{DnsName, Hostname, RecordTypeName},
     },
     errors::AppError,
 };
@@ -28,6 +28,10 @@ pub trait RecordStore: Send + Sync {
     ) -> Result<Page<RecordInstance>, AppError>;
     async fn get_record(&self, record_id: uuid::Uuid) -> Result<RecordInstance, AppError>;
     async fn get_rrset(&self, rrset_id: uuid::Uuid) -> Result<RecordRrset, AppError>;
+    async fn list_records_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<RecordInstance>, AppError>;
     async fn create_record_type(
         &self,
         command: CreateRecordTypeDefinition,

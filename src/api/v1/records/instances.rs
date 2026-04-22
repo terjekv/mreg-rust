@@ -87,7 +87,19 @@ pub struct RecordResponse {
 }
 
 impl RecordResponse {
+    // `pub` only with `bench-helpers` so benches can build the response DTO
+    // directly. Production library builds keep this crate-internal.
+    #[cfg(feature = "bench-helpers")]
+    pub fn from_domain(record: &RecordInstance) -> Self {
+        Self::from_domain_impl(record)
+    }
+
+    #[cfg(not(feature = "bench-helpers"))]
     pub(crate) fn from_domain(record: &RecordInstance) -> Self {
+        Self::from_domain_impl(record)
+    }
+
+    fn from_domain_impl(record: &RecordInstance) -> Self {
         Self {
             id: record.id(),
             rrset_id: record.rrset_id(),
