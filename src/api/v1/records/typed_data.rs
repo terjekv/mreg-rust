@@ -32,7 +32,7 @@
 //! Drift between this enum and [`crate::domain::builtin_types`] is enforced by
 //! the rstest suite at the bottom of this file.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -62,26 +62,26 @@ impl RecordKind {
     /// types and malformed stored payloads fall back to [`OpaqueRecordKind`].
     pub(crate) fn from_record(record: &RecordInstance) -> Self {
         let type_name = record.type_name().as_str();
-        let opaque_data = if record.raw_rdata().is_some() || record.data().is_null() {
-            None
-        } else {
-            Some(record.data().clone())
-        };
+        let data = record.data();
+        let omit_opaque_data = record.raw_rdata().is_some() || data.is_null();
         let opaque = || {
             Self::Opaque(OpaqueRecordKind {
                 type_name: type_name.to_string(),
-                data: opaque_data.clone(),
+                data: if omit_opaque_data {
+                    None
+                } else {
+                    Some(data.clone())
+                },
             })
         };
 
-        if record.data().is_null() {
+        if data.is_null() {
             return opaque();
         }
 
-        let envelope = serde_json::json!({ "type_name": type_name, "data": record.data() });
-        match serde_json::from_value::<TypedRecordKind>(envelope) {
-            Ok(typed) => Self::Typed(typed),
-            Err(error) => {
+        match Self::decode_typed_record(type_name, data) {
+            Some(Ok(typed)) => Self::Typed(typed),
+            Some(Err(error)) => {
                 tracing::warn!(
                     %type_name,
                     %error,
@@ -89,7 +89,127 @@ impl RecordKind {
                 );
                 opaque()
             }
+            None => opaque(),
         }
+    }
+
+    fn decode_typed_record(
+        type_name: &str,
+        data: &Value,
+    ) -> Option<Result<TypedRecordKind, serde_json::Error>> {
+        match type_name {
+            "A" => Some(Self::decode_typed_variant::<ARecordData>(
+                data,
+                TypedRecordKind::A,
+            )),
+            "AAAA" => Some(Self::decode_typed_variant::<AaaaRecordData>(
+                data,
+                TypedRecordKind::AAAA,
+            )),
+            "NS" => Some(Self::decode_typed_variant::<NsRecordData>(
+                data,
+                TypedRecordKind::NS,
+            )),
+            "PTR" => Some(Self::decode_typed_variant::<PtrRecordData>(
+                data,
+                TypedRecordKind::PTR,
+            )),
+            "CNAME" => Some(Self::decode_typed_variant::<CnameRecordData>(
+                data,
+                TypedRecordKind::CNAME,
+            )),
+            "DNAME" => Some(Self::decode_typed_variant::<DnameRecordData>(
+                data,
+                TypedRecordKind::DNAME,
+            )),
+            "MX" => Some(Self::decode_typed_variant::<MxRecordData>(
+                data,
+                TypedRecordKind::MX,
+            )),
+            "TXT" => Some(Self::decode_typed_variant::<TxtRecordData>(
+                data,
+                TypedRecordKind::TXT,
+            )),
+            "SRV" => Some(Self::decode_typed_variant::<SrvRecordData>(
+                data,
+                TypedRecordKind::SRV,
+            )),
+            "NAPTR" => Some(Self::decode_typed_variant::<NaptrRecordData>(
+                data,
+                TypedRecordKind::NAPTR,
+            )),
+            "SSHFP" => Some(Self::decode_typed_variant::<SshfpRecordData>(
+                data,
+                TypedRecordKind::SSHFP,
+            )),
+            "LOC" => Some(Self::decode_typed_variant::<LocRecordData>(
+                data,
+                TypedRecordKind::LOC,
+            )),
+            "HINFO" => Some(Self::decode_typed_variant::<HinfoRecordData>(
+                data,
+                TypedRecordKind::HINFO,
+            )),
+            "DS" => Some(Self::decode_typed_variant::<DsRecordData>(
+                data,
+                TypedRecordKind::DS,
+            )),
+            "DNSKEY" => Some(Self::decode_typed_variant::<DnskeyRecordData>(
+                data,
+                TypedRecordKind::DNSKEY,
+            )),
+            "CDS" => Some(Self::decode_typed_variant::<CdsRecordData>(
+                data,
+                TypedRecordKind::CDS,
+            )),
+            "CDNSKEY" => Some(Self::decode_typed_variant::<CdnskeyRecordData>(
+                data,
+                TypedRecordKind::CDNSKEY,
+            )),
+            "CSYNC" => Some(Self::decode_typed_variant::<CsyncRecordData>(
+                data,
+                TypedRecordKind::CSYNC,
+            )),
+            "CAA" => Some(Self::decode_typed_variant::<CaaRecordData>(
+                data,
+                TypedRecordKind::CAA,
+            )),
+            "TLSA" => Some(Self::decode_typed_variant::<TlsaRecordData>(
+                data,
+                TypedRecordKind::TLSA,
+            )),
+            "SMIMEA" => Some(Self::decode_typed_variant::<SmimeaRecordData>(
+                data,
+                TypedRecordKind::SMIMEA,
+            )),
+            "SVCB" => Some(Self::decode_typed_variant::<SvcbRecordData>(
+                data,
+                TypedRecordKind::SVCB,
+            )),
+            "HTTPS" => Some(Self::decode_typed_variant::<HttpsRecordData>(
+                data,
+                TypedRecordKind::HTTPS,
+            )),
+            "URI" => Some(Self::decode_typed_variant::<UriRecordData>(
+                data,
+                TypedRecordKind::URI,
+            )),
+            "OPENPGPKEY" => Some(Self::decode_typed_variant::<OpenpgpkeyRecordData>(
+                data,
+                TypedRecordKind::OPENPGPKEY,
+            )),
+            _ => None,
+        }
+    }
+
+    fn decode_typed_variant<T>(
+        data: &Value,
+        wrap: fn(T) -> TypedRecordKind,
+    ) -> Result<TypedRecordKind, serde_json::Error>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_value::<T>(data.clone()).map(wrap)
     }
 }
 
