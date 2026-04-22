@@ -33,17 +33,7 @@ pub struct LdapScopeAuthenticator {
 }
 
 impl LdapScopeAuthenticator {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        url: String,
-        timeout_ms: u64,
-        user_search_base: String,
-        user_search_filter: String,
-        group_search_base: String,
-        group_search_filter: String,
-        bind_dn: Option<String>,
-        bind_password: Option<String>,
-    ) -> Self {
+    pub fn new(config: LdapAuthenticatorConfig) -> Self {
         Self {
             url: config.url,
             timeout: std::time::Duration::from_millis(config.timeout_ms),
