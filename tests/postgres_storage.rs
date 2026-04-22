@@ -1418,6 +1418,89 @@ async fn postgres_supports_unanchored_srv_and_rfc3597_raw_records()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn postgres_record_response_preserves_typed_and_opaque_wire_shapes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let Some(ctx) =
+        postgres_ctx("postgres_record_response_preserves_typed_and_opaque_wire_shapes").await
+    else {
+        return Ok(());
+    };
+
+    let host = ctx.host("typed-record");
+    ctx.seed_host(&host).await;
+
+    let (status, created_typed) = ctx
+        .post_json(
+            "/dns/records",
+            json!({
+                "type_name": "CNAME",
+                "owner_kind": "host",
+                "owner_name": host,
+                "ttl": 300,
+                "data": {
+                    "target": "alias.example.org"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created_typed["type_name"], "CNAME");
+    assert_eq!(created_typed["data"]["target"], "alias.example.org");
+    assert!(created_typed.get("kind").is_none());
+
+    let typed_id = created_typed["id"].as_str().expect("typed record id");
+    let fetched_typed = ctx.get_json(&format!("/dns/records/{typed_id}")).await;
+    assert_eq!(fetched_typed["type_name"], "CNAME");
+    assert_eq!(fetched_typed["data"]["target"], "alias.example.org");
+    assert!(fetched_typed.get("kind").is_none());
+
+    let raw_type_name = "TYPE65534";
+    let (status, _) = ctx
+        .post_json(
+            "/dns/record-types",
+            json!({
+                "name": raw_type_name,
+                "dns_type": 65534,
+                "owner_kind": "host",
+                "cardinality": "multiple",
+                "fields": [],
+                "behavior_flags": {
+                    "rfc3597": { "allow_raw_rdata": true }
+                }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let raw_owner = ctx.host("opaque-record");
+    let (status, created_opaque) = ctx
+        .post_json(
+            "/dns/records",
+            json!({
+                "type_name": raw_type_name,
+                "owner_name": raw_owner,
+                "ttl": 300,
+                "raw_rdata": "\\# 6 cafe01020304"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created_opaque["type_name"], raw_type_name);
+    assert!(created_opaque["data"].is_null());
+    assert_eq!(created_opaque["raw_rdata"], "\\# 6 cafe01020304");
+    assert!(created_opaque.get("kind").is_none());
+
+    let opaque_id = created_opaque["id"].as_str().expect("opaque record id");
+    let fetched_opaque = ctx.get_json(&format!("/dns/records/{opaque_id}")).await;
+    assert_eq!(fetched_opaque["type_name"], raw_type_name);
+    assert!(fetched_opaque["data"].is_null());
+    assert_eq!(fetched_opaque["raw_rdata"], "\\# 6 cafe01020304");
+    assert!(fetched_opaque.get("kind").is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn postgres_host_detail_query_budget_stays_batched() -> Result<(), Box<dyn std::error::Error>>
 {
     let Some(ctx) = postgres_ctx("postgres_host_detail_query_budget_stays_batched").await else {

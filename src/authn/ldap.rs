@@ -5,6 +5,21 @@ use crate::errors::AppError;
 
 use super::{AuthenticatedIdentity, BackendLoginRequest, ScopeAuthenticator};
 
+/// Construction parameters for [`LdapScopeAuthenticator`]. Mirrors the
+/// `AuthScopeBackendConfig::Ldap` variant so the call site can pass one
+/// value instead of tripping clippy's `too_many_arguments` lint.
+#[derive(Clone, Debug)]
+pub struct LdapAuthenticatorConfig {
+    pub url: String,
+    pub timeout_ms: u64,
+    pub user_search_base: String,
+    pub user_search_filter: String,
+    pub group_search_base: String,
+    pub group_search_filter: String,
+    pub bind_dn: Option<String>,
+    pub bind_password: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct LdapScopeAuthenticator {
     url: String,
@@ -18,26 +33,16 @@ pub struct LdapScopeAuthenticator {
 }
 
 impl LdapScopeAuthenticator {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        url: String,
-        timeout_ms: u64,
-        user_search_base: String,
-        user_search_filter: String,
-        group_search_base: String,
-        group_search_filter: String,
-        bind_dn: Option<String>,
-        bind_password: Option<String>,
-    ) -> Self {
+    pub fn new(config: LdapAuthenticatorConfig) -> Self {
         Self {
-            url,
-            timeout: std::time::Duration::from_millis(timeout_ms),
-            user_search_base,
-            user_search_filter,
-            group_search_base,
-            group_search_filter,
-            bind_dn,
-            bind_password,
+            url: config.url,
+            timeout: std::time::Duration::from_millis(config.timeout_ms),
+            user_search_base: config.user_search_base,
+            user_search_filter: config.user_search_filter,
+            group_search_base: config.group_search_base,
+            group_search_filter: config.group_search_filter,
+            bind_dn: config.bind_dn,
+            bind_password: config.bind_password,
         }
     }
 

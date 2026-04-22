@@ -18,6 +18,7 @@ use crate::{
 };
 
 use crate::api::v1::authz::{request as authz_request, require, require_all};
+use crate::api::v1::records::typed_data::RecordKind;
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordRequest {
@@ -69,17 +70,28 @@ impl UpdateRecordRequest {
     }
 }
 
+/// Unified response envelope for every DNS record instance.
+///
+/// `kind` is `#[serde(flatten)]`-ed, so the wire JSON has `type_name` and
+/// `data` at the top level alongside `id`, `owner_name`, etc. — exactly
+/// matching the historical shape.  Consumers can dispatch on `type_name`
+/// against [`RecordKind`] to get a typed `data` payload for the 25 built-in
+/// types, and fall through to
+/// [`crate::api::v1::records::typed_data::OpaqueRecordKind`] for
+/// user-registered or RFC 3597 records.  The published OpenAPI schema is
+/// `oneOf` *without* a discriminator object — see the
+/// [`crate::api::v1::records::typed_data`] module docs for why and what client
+/// generators should do instead.
 #[derive(Serialize, ToSchema)]
 pub struct RecordResponse {
     id: Uuid,
     rrset_id: Uuid,
     type_id: Uuid,
-    type_name: String,
+    #[serde(flatten)]
+    kind: RecordKind,
     owner_kind: Option<RecordOwnerKind>,
     owner_name: String,
     ttl: Option<u32>,
-    #[schema(value_type = Object)]
-    data: Value,
     raw_rdata: Option<String>,
     rendered: Option<String>,
     created_at: DateTime<Utc>,
@@ -100,16 +112,17 @@ impl RecordResponse {
     }
 
     fn from_domain_impl(record: &RecordInstance) -> Self {
+        let raw_rdata = record.raw_rdata().map(RawRdataValue::presentation);
+
         Self {
             id: record.id(),
             rrset_id: record.rrset_id(),
             type_id: record.type_id(),
-            type_name: record.type_name().as_str().to_string(),
+            kind: RecordKind::from_record(record),
             owner_kind: record.owner_kind().cloned(),
             owner_name: record.owner_name().to_string(),
             ttl: record.ttl().map(|ttl| ttl.as_u32()),
-            data: record.data().clone(),
-            raw_rdata: record.raw_rdata().map(RawRdataValue::presentation),
+            raw_rdata,
             rendered: record.rendered().map(str::to_string),
             created_at: record.created_at(),
             updated_at: record.updated_at(),

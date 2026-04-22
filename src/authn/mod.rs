@@ -214,14 +214,16 @@ impl AuthnClient {
                             #[cfg(feature = "ldap")]
                             {
                                 Arc::new(ldap::LdapScopeAuthenticator::new(
-                                    url.clone(),
-                                    *timeout_ms,
-                                    user_search_base.clone(),
-                                    user_search_filter.clone(),
-                                    group_search_base.clone(),
-                                    group_search_filter.clone(),
-                                    bind_dn.clone(),
-                                    bind_password.clone(),
+                                    ldap::LdapAuthenticatorConfig {
+                                        url: url.clone(),
+                                        timeout_ms: *timeout_ms,
+                                        user_search_base: user_search_base.clone(),
+                                        user_search_filter: user_search_filter.clone(),
+                                        group_search_base: group_search_base.clone(),
+                                        group_search_filter: group_search_filter.clone(),
+                                        bind_dn: bind_dn.clone(),
+                                        bind_password: bind_password.clone(),
+                                    },
                                 ))
                             }
                             #[cfg(not(feature = "ldap"))]
