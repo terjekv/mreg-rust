@@ -112,6 +112,8 @@ impl RecordResponse {
     }
 
     fn from_domain_impl(record: &RecordInstance) -> Self {
+        let raw_rdata = record.raw_rdata().map(RawRdataValue::presentation);
+
         Self {
             id: record.id(),
             rrset_id: record.rrset_id(),
