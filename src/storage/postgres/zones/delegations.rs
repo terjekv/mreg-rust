@@ -30,7 +30,7 @@ use super::super::PostgresStorage;
 use super::super::helpers::{map_unique, vec_to_page};
 
 impl PostgresStorage {
-    pub(super) fn list_forward_zone_delegations_impl(
+    pub(in crate::storage::postgres) fn list_forward_zone_delegations_impl(
         connection: &mut PgConnection,
         zone_name: &str,
         page: &PageRequest,
@@ -142,7 +142,7 @@ impl PostgresStorage {
         })
     }
 
-    pub(super) fn delete_forward_zone_delegation_impl(
+    pub(in crate::storage::postgres) fn delete_forward_zone_delegation_impl(
         connection: &mut PgConnection,
         delegation_id: Uuid,
     ) -> Result<(), AppError> {
@@ -181,7 +181,7 @@ impl PostgresStorage {
         })
     }
 
-    pub(super) fn list_reverse_zone_delegations_impl(
+    pub(in crate::storage::postgres) fn list_reverse_zone_delegations_impl(
         connection: &mut PgConnection,
         zone_name: &str,
         page: &PageRequest,
@@ -293,7 +293,7 @@ impl PostgresStorage {
         })
     }
 
-    pub(super) fn delete_reverse_zone_delegation_impl(
+    pub(in crate::storage::postgres) fn delete_reverse_zone_delegation_impl(
         connection: &mut PgConnection,
         delegation_id: Uuid,
     ) -> Result<(), AppError> {

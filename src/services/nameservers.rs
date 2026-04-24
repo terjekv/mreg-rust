@@ -1,15 +1,15 @@
 use serde_json::json;
 
 use crate::{
-    audit::actions,
+    audit::{CreateHistoryEvent, actions, actor},
     domain::{
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         pagination::{Page, PageRequest},
         types::DnsName,
     },
     errors::AppError,
-    events::EventSinkClient,
-    storage::{AuditStore, NameServerStore},
+    events::{DomainEvent, EventSinkClient},
+    storage::{DynStorage, NameServerStore},
 };
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "nameserver"))]
@@ -20,25 +20,28 @@ pub async fn list(
     store.list_nameservers(page).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "nameserver"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "nameserver"))]
 pub async fn create(
-    store: &(dyn NameServerStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateNameServer,
+    events: &EventSinkClient,
 ) -> Result<NameServer, AppError> {
-    let ns = store.create_nameserver(command).await?;
+    let (ns, history) = storage
+        .transaction(move |tx| {
+            let ns = tx.nameservers().create_nameserver(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "nameserver",
+                Some(ns.id()),
+                ns.name().as_str(),
+                actions::CREATE,
+                json!({"name": ns.name().as_str()}),
+            ))?;
+            Ok((ns, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "nameserver",
-        actions::CREATE,
-        Some(ns.id()),
-        ns.name().as_str(),
-        json!({"name": ns.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(ns)
 }
@@ -51,51 +54,59 @@ pub async fn get(
     store.get_nameserver_by_name(name).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "nameserver"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "nameserver"))]
 pub async fn update(
-    store: &(dyn NameServerStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     name: &DnsName,
     command: UpdateNameServer,
+    events: &EventSinkClient,
 ) -> Result<NameServer, AppError> {
-    let old = store.get_nameserver_by_name(name).await?;
-    let new = store.update_nameserver(name, command).await?;
+    let name_owned = name.clone();
+    let (new, history) = storage
+        .transaction(move |tx| {
+            let old = tx.nameservers().get_nameserver_by_name(&name_owned)?;
+            let new = tx.nameservers().update_nameserver(&name_owned, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "nameserver",
+                Some(new.id()),
+                new.name().as_str(),
+                actions::UPDATE,
+                json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
+            ))?;
+            Ok((new, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "nameserver",
-        actions::UPDATE,
-        Some(new.id()),
-        new.name().as_str(),
-        json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(new)
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "nameserver"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "nameserver"))]
 pub async fn delete(
-    store: &(dyn NameServerStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     name: &DnsName,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    let old = store.get_nameserver_by_name(name).await?;
-    store.delete_nameserver(name).await?;
+    let name_owned = name.clone();
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx.nameservers().get_nameserver_by_name(&name_owned)?;
+            tx.nameservers().delete_nameserver(&name_owned)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "nameserver",
+                Some(old.id()),
+                old.name().as_str(),
+                actions::DELETE,
+                json!({"name": old.name().as_str()}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "nameserver",
-        actions::DELETE,
-        Some(old.id()),
-        old.name().as_str(),
-        json!({"name": old.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }

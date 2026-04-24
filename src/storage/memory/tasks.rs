@@ -1,11 +1,13 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
     domain::{
         pagination::{Page, PageRequest},
+        exports::ExportRun,
+        imports::ImportBatchSummary,
         tasks::{CreateTask, TaskEnvelope, TaskStatus},
     },
     errors::AppError,
@@ -58,6 +60,115 @@ pub(super) fn create_task_in_state(
     )?;
     state.tasks.insert(task.id(), task.clone());
     Ok(task)
+}
+
+fn cancel_task_in_state(state: &mut MemoryState, task_id: Uuid) -> Result<TaskEnvelope, AppError> {
+    let current = state
+        .tasks
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(format!("task '{}' was not found", task_id)))?;
+    if current.status().is_terminal() {
+        return Err(AppError::conflict(format!(
+            "task '{}' is already finished and cannot be cancelled",
+            task_id
+        )));
+    }
+
+    let now = Utc::now();
+    let updated = TaskEnvelope::restore(
+        current.id(),
+        current.kind().to_string(),
+        TaskStatus::Cancelled,
+        current.payload().clone(),
+        current.progress().clone(),
+        current.result().cloned(),
+        current.error_summary().map(str::to_string),
+        current.attempts(),
+        current.max_attempts(),
+        current.available_at(),
+        current.started_at(),
+        Some(now),
+    )?;
+    state.tasks.insert(task_id, updated.clone());
+    Ok(updated)
+}
+
+fn clear_import_task_reference(
+    summary: &ImportBatchSummary,
+) -> Result<ImportBatchSummary, AppError> {
+    Ok(ImportBatchSummary::restore(
+        summary.id(),
+        None,
+        summary.status().clone(),
+        summary.requested_by().map(str::to_string),
+        summary.validation_report().cloned(),
+        summary.commit_summary().cloned(),
+        summary.created_at(),
+        summary.updated_at(),
+    ))
+}
+
+fn clear_export_task_reference(run: &ExportRun) -> Result<ExportRun, AppError> {
+    ExportRun::restore(
+        run.id(),
+        None,
+        run.template_id(),
+        run.requested_by().map(str::to_string),
+        run.scope().to_string(),
+        run.parameters().clone(),
+        run.status().clone(),
+        run.rendered_output().map(str::to_string),
+        run.artifact_metadata().cloned(),
+        run.created_at(),
+        run.updated_at(),
+    )
+}
+
+fn purge_finished_tasks_before_in_state(
+    state: &mut MemoryState,
+    cutoff: DateTime<Utc>,
+) -> Result<usize, AppError> {
+    let purged_ids: Vec<Uuid> = state
+        .tasks
+        .values()
+        .filter(|task| task.status().is_terminal())
+        .filter_map(|task| match task.finished_at() {
+            Some(finished_at) if finished_at < cutoff => Some(task.id()),
+            _ => None,
+        })
+        .collect();
+
+    if purged_ids.is_empty() {
+        return Ok(0);
+    }
+
+    for task_id in &purged_ids {
+        state.tasks.remove(task_id);
+    }
+
+    for stored in state.imports.values_mut() {
+        if stored
+            .summary
+            .task_id()
+            .is_some_and(|task_id| purged_ids.contains(&task_id))
+        {
+            let summary = stored.summary.clone();
+            stored.summary = clear_import_task_reference(&summary)?;
+        }
+    }
+
+    for run in state.export_runs.values_mut() {
+        if run
+            .task_id()
+            .is_some_and(|task_id| purged_ids.contains(&task_id))
+        {
+            let current = run.clone();
+            *run = clear_export_task_reference(&current)?;
+        }
+    }
+
+    Ok(purged_ids.len())
 }
 
 #[async_trait]
@@ -166,5 +277,15 @@ impl TaskStore for MemoryStorage {
         )?;
         state.tasks.insert(task_id, updated.clone());
         Ok(updated)
+    }
+
+    async fn cancel_task(&self, task_id: Uuid) -> Result<TaskEnvelope, AppError> {
+        let mut state = self.state.write().await;
+        cancel_task_in_state(&mut state, task_id)
+    }
+
+    async fn purge_finished_tasks_before(&self, cutoff: DateTime<Utc>) -> Result<usize, AppError> {
+        let mut state = self.state.write().await;
+        purge_finished_tasks_before_in_state(&mut state, cutoff)
     }
 }

@@ -19,6 +19,7 @@ mod networks;
 mod ptr_overrides;
 mod records;
 mod tasks;
+mod transaction;
 mod zones;
 
 use std::collections::HashMap;
@@ -39,7 +40,8 @@ use crate::{
         BacnetStore, CommunityStore, ExportStore, HostCommunityAssignmentStore, HostContactStore,
         HostGroupStore, HostPolicyStore, HostStore, HostViewStore, ImportStore, LabelStore,
         NameServerStore, NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
-        StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, ZoneStore,
+        StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, TransactionRunner,
+        ZoneStore,
     },
 };
 
@@ -184,6 +186,10 @@ impl Storage for PostgresStorage {
 
     fn host_views(&self) -> &(dyn HostViewStore + Send + Sync) {
         self
+    }
+
+    fn transaction_runner(&self) -> Option<&(dyn TransactionRunner + Send + Sync)> {
+        Some(self)
     }
 }
 

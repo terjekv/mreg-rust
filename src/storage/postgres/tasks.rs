@@ -1,7 +1,8 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use diesel::{
     ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, RunQueryDsl, SelectableHelper,
-    insert_into, sql_query, update,
+    delete, insert_into, sql_query, update,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -56,6 +57,18 @@ impl PostgresStorage {
                 other => AppError::internal(other),
             })?
             .into_domain()
+    }
+
+    pub(super) fn get_task_by_id(
+        connection: &mut PgConnection,
+        task_id: Uuid,
+    ) -> Result<Option<TaskEnvelope>, AppError> {
+        let row = tasks::table
+            .filter(tasks::id.eq(task_id))
+            .select(TaskRow::as_select())
+            .first::<TaskRow>(connection)
+            .optional()?;
+        row.map(TaskRow::into_domain).transpose()
     }
 }
 
@@ -157,6 +170,47 @@ impl TaskStore for PostgresStorage {
                         AppError::not_found(format!("task '{}' was not found", task_id))
                     })?
                     .into_domain()
+            })
+            .await
+    }
+
+    async fn cancel_task(&self, task_id: Uuid) -> Result<TaskEnvelope, AppError> {
+        self.database
+            .run(move |connection| {
+                let current = Self::get_task_by_id(connection, task_id)?.ok_or_else(|| {
+                    AppError::not_found(format!("task '{}' was not found", task_id))
+                })?;
+                if current.status().is_terminal() {
+                    return Err(AppError::conflict(format!(
+                        "task '{}' is already finished and cannot be cancelled",
+                        task_id
+                    )));
+                }
+
+                update(tasks::table.filter(tasks::id.eq(task_id)))
+                    .set((
+                        tasks::status.eq("cancelled"),
+                        tasks::finished_at.eq(diesel::dsl::now),
+                        tasks::updated_at.eq(diesel::dsl::now),
+                    ))
+                    .returning(TaskRow::as_returning())
+                    .get_result::<TaskRow>(connection)?
+                    .into_domain()
+            })
+            .await
+    }
+
+    async fn purge_finished_tasks_before(&self, cutoff: DateTime<Utc>) -> Result<usize, AppError> {
+        self.database
+            .run(move |connection| {
+                delete(
+                    tasks::table
+                        .filter(tasks::status.eq_any(["succeeded", "failed", "cancelled"]))
+                        .filter(tasks::finished_at.is_not_null())
+                        .filter(tasks::finished_at.lt(cutoff)),
+                )
+                .execute(connection)
+                .map_err(AppError::internal)
             })
             .await
     }

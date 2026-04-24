@@ -302,25 +302,277 @@ pub(super) fn create_attachment_community_assignment_in_state(
     Ok(assignment)
 }
 
+pub(super) fn list_attachments_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+) -> Result<Page<HostAttachment>, AppError> {
+    let items: Vec<HostAttachment> = state.host_attachments.values().cloned().collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["network", "mac_address"],
+        |attachment, field| match field {
+            "network" => attachment.network_cidr().as_str(),
+            "mac_address" => attachment
+                .mac_address()
+                .map(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            _ => attachment.host_name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn list_attachments_for_host_in_state(
+    state: &MemoryState,
+    host: &Hostname,
+) -> Result<Vec<HostAttachment>, AppError> {
+    Ok(state
+        .host_attachments
+        .values()
+        .filter(|attachment| attachment.host_name() == host)
+        .cloned()
+        .collect())
+}
+
+pub(super) fn list_attachments_for_hosts_in_state(
+    state: &MemoryState,
+    hosts: &[Hostname],
+) -> Result<Vec<HostAttachment>, AppError> {
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(state
+        .host_attachments
+        .values()
+        .filter(|attachment| host_names.contains(attachment.host_name().as_str()))
+        .cloned()
+        .collect())
+}
+
+pub(super) fn list_attachments_for_network_in_state(
+    state: &MemoryState,
+    network: &CidrValue,
+) -> Result<Vec<HostAttachment>, AppError> {
+    Ok(state
+        .host_attachments
+        .values()
+        .filter(|attachment| {
+            network
+                .as_inner()
+                .contains(attachment.network_cidr().as_inner())
+        })
+        .cloned()
+        .collect())
+}
+
+pub(super) fn get_attachment_in_state(
+    state: &MemoryState,
+    attachment_id: Uuid,
+) -> Result<HostAttachment, AppError> {
+    state
+        .host_attachments
+        .get(&attachment_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("host attachment was not found"))
+}
+
+pub(super) fn update_attachment_in_state(
+    state: &mut MemoryState,
+    attachment_id: Uuid,
+    command: UpdateHostAttachment,
+) -> Result<HostAttachment, AppError> {
+    let existing = state
+        .host_attachments
+        .get(&attachment_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    let now = Utc::now();
+    let updated = HostAttachment::restore(
+        existing.id(),
+        existing.host_id(),
+        existing.host_name().clone(),
+        existing.network_id(),
+        existing.network_cidr().clone(),
+        command.mac_address.resolve(existing.mac_address().cloned()),
+        command
+            .comment
+            .resolve(existing.comment().map(str::to_string)),
+        existing.created_at(),
+        now,
+    );
+    state.host_attachments.insert(updated.id(), updated.clone());
+    Ok(updated)
+}
+
+pub(super) fn delete_attachment_in_state(
+    state: &mut MemoryState,
+    attachment_id: Uuid,
+) -> Result<(), AppError> {
+    if state
+        .ip_addresses
+        .values()
+        .any(|assignment| assignment.attachment_id() == attachment_id)
+    {
+        return Err(AppError::conflict(
+            "host attachment still owns IP address reservations",
+        ));
+    }
+    state
+        .host_attachments
+        .remove(&attachment_id)
+        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    state
+        .attachment_dhcp_identifiers
+        .retain(|_, identifier| identifier.attachment_id() != attachment_id);
+    state
+        .attachment_prefix_reservations
+        .retain(|_, reservation| reservation.attachment_id() != attachment_id);
+    state
+        .attachment_community_assignments
+        .retain(|_, assignment| assignment.attachment_id() != attachment_id);
+    Ok(())
+}
+
+pub(super) fn list_attachment_dhcp_identifiers_in_state(
+    state: &MemoryState,
+    attachment_id: Uuid,
+) -> Result<Vec<AttachmentDhcpIdentifier>, AppError> {
+    Ok(state
+        .attachment_dhcp_identifiers
+        .values()
+        .filter(|identifier| identifier.attachment_id() == attachment_id)
+        .cloned()
+        .collect())
+}
+
+pub(super) fn list_attachment_dhcp_identifiers_for_attachments_in_state(
+    state: &MemoryState,
+    attachment_ids: &[Uuid],
+) -> Result<Vec<AttachmentDhcpIdentifier>, AppError> {
+    let attachment_ids = attachment_ids.iter().copied().collect::<HashSet<_>>();
+    Ok(state
+        .attachment_dhcp_identifiers
+        .values()
+        .filter(|identifier| attachment_ids.contains(&identifier.attachment_id()))
+        .cloned()
+        .collect())
+}
+
+pub(super) fn delete_attachment_dhcp_identifier_in_state(
+    state: &mut MemoryState,
+    identifier_id: Uuid,
+) -> Result<(), AppError> {
+    state
+        .attachment_dhcp_identifiers
+        .remove(&identifier_id)
+        .ok_or_else(|| AppError::not_found("attachment DHCP identifier was not found"))?;
+    Ok(())
+}
+
+pub(super) fn list_attachment_prefix_reservations_in_state(
+    state: &MemoryState,
+    attachment_id: Uuid,
+) -> Result<Vec<AttachmentPrefixReservation>, AppError> {
+    Ok(state
+        .attachment_prefix_reservations
+        .values()
+        .filter(|reservation| reservation.attachment_id() == attachment_id)
+        .cloned()
+        .collect())
+}
+
+pub(super) fn list_attachment_prefix_reservations_for_attachments_in_state(
+    state: &MemoryState,
+    attachment_ids: &[Uuid],
+) -> Result<Vec<AttachmentPrefixReservation>, AppError> {
+    let attachment_ids = attachment_ids.iter().copied().collect::<HashSet<_>>();
+    Ok(state
+        .attachment_prefix_reservations
+        .values()
+        .filter(|reservation| attachment_ids.contains(&reservation.attachment_id()))
+        .cloned()
+        .collect())
+}
+
+pub(super) fn delete_attachment_prefix_reservation_in_state(
+    state: &mut MemoryState,
+    reservation_id: Uuid,
+) -> Result<(), AppError> {
+    state
+        .attachment_prefix_reservations
+        .remove(&reservation_id)
+        .ok_or_else(|| AppError::not_found("attachment prefix reservation was not found"))?;
+    Ok(())
+}
+
+pub(super) fn list_attachment_community_assignments_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &AttachmentCommunityAssignmentFilter,
+) -> Result<Page<AttachmentCommunityAssignment>, AppError> {
+    let items: Vec<AttachmentCommunityAssignment> = state
+        .attachment_community_assignments
+        .values()
+        .filter(|assignment| {
+            filter.matches(assignment) && matches_mac_address(state, assignment, filter)
+        })
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["network", "policy_name", "community_name"],
+        |assignment, field| match field {
+            "network" => assignment.network_cidr().as_str(),
+            "policy_name" => assignment.policy_name().as_str().to_string(),
+            "community_name" => assignment.community_name().as_str().to_string(),
+            _ => assignment.host_name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn list_attachment_community_assignments_for_attachments_in_state(
+    state: &MemoryState,
+    attachment_ids: &[Uuid],
+) -> Result<Vec<AttachmentCommunityAssignment>, AppError> {
+    let attachment_ids = attachment_ids.iter().copied().collect::<HashSet<_>>();
+    Ok(state
+        .attachment_community_assignments
+        .values()
+        .filter(|assignment| attachment_ids.contains(&assignment.attachment_id()))
+        .cloned()
+        .collect())
+}
+
+pub(super) fn get_attachment_community_assignment_in_state(
+    state: &MemoryState,
+    assignment_id: Uuid,
+) -> Result<AttachmentCommunityAssignment, AppError> {
+    state
+        .attachment_community_assignments
+        .get(&assignment_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))
+}
+
+pub(super) fn delete_attachment_community_assignment_in_state(
+    state: &mut MemoryState,
+    assignment_id: Uuid,
+) -> Result<(), AppError> {
+    state
+        .attachment_community_assignments
+        .remove(&assignment_id)
+        .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))?;
+    Ok(())
+}
+
 #[async_trait]
 impl AttachmentStore for MemoryStorage {
     async fn list_attachments(&self, page: &PageRequest) -> Result<Page<HostAttachment>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<HostAttachment> = state.host_attachments.values().cloned().collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["network", "mac_address"],
-            |attachment, field| match field {
-                "network" => attachment.network_cidr().as_str(),
-                "mac_address" => attachment
-                    .mac_address()
-                    .map(|value| value.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                _ => attachment.host_name().as_str().to_string(),
-            },
-        )
+        list_attachments_in_state(&state, page)
     }
 
     async fn list_attachments_for_host(
@@ -328,29 +580,15 @@ impl AttachmentStore for MemoryStorage {
         host: &Hostname,
     ) -> Result<Vec<HostAttachment>, AppError> {
         let state = self.state.read().await;
-        Ok(state
-            .host_attachments
-            .values()
-            .filter(|attachment| attachment.host_name() == host)
-            .cloned()
-            .collect())
+        list_attachments_for_host_in_state(&state, host)
     }
 
     async fn list_attachments_for_hosts(
         &self,
         hosts: &[Hostname],
     ) -> Result<Vec<HostAttachment>, AppError> {
-        let host_names = hosts
-            .iter()
-            .map(|host| host.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
         let state = self.state.read().await;
-        Ok(state
-            .host_attachments
-            .values()
-            .filter(|attachment| host_names.contains(attachment.host_name().as_str()))
-            .cloned()
-            .collect())
+        list_attachments_for_hosts_in_state(&state, hosts)
     }
 
     async fn list_attachments_for_network(
@@ -358,16 +596,7 @@ impl AttachmentStore for MemoryStorage {
         network: &CidrValue,
     ) -> Result<Vec<HostAttachment>, AppError> {
         let state = self.state.read().await;
-        Ok(state
-            .host_attachments
-            .values()
-            .filter(|attachment| {
-                network
-                    .as_inner()
-                    .contains(attachment.network_cidr().as_inner())
-            })
-            .cloned()
-            .collect())
+        list_attachments_for_network_in_state(&state, network)
     }
 
     async fn create_attachment(
@@ -380,11 +609,7 @@ impl AttachmentStore for MemoryStorage {
 
     async fn get_attachment(&self, attachment_id: Uuid) -> Result<HostAttachment, AppError> {
         let state = self.state.read().await;
-        state
-            .host_attachments
-            .get(&attachment_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("host attachment was not found"))
+        get_attachment_in_state(&state, attachment_id)
     }
 
     async fn update_attachment(
@@ -393,54 +618,12 @@ impl AttachmentStore for MemoryStorage {
         command: UpdateHostAttachment,
     ) -> Result<HostAttachment, AppError> {
         let mut state = self.state.write().await;
-        let existing = state
-            .host_attachments
-            .get(&attachment_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
-        let now = Utc::now();
-        let updated = HostAttachment::restore(
-            existing.id(),
-            existing.host_id(),
-            existing.host_name().clone(),
-            existing.network_id(),
-            existing.network_cidr().clone(),
-            command.mac_address.resolve(existing.mac_address().cloned()),
-            command
-                .comment
-                .resolve(existing.comment().map(str::to_string)),
-            existing.created_at(),
-            now,
-        );
-        state.host_attachments.insert(updated.id(), updated.clone());
-        Ok(updated)
+        update_attachment_in_state(&mut state, attachment_id, command)
     }
 
     async fn delete_attachment(&self, attachment_id: Uuid) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        if state
-            .ip_addresses
-            .values()
-            .any(|assignment| assignment.attachment_id() == attachment_id)
-        {
-            return Err(AppError::conflict(
-                "host attachment still owns IP address reservations",
-            ));
-        }
-        state
-            .host_attachments
-            .remove(&attachment_id)
-            .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
-        state
-            .attachment_dhcp_identifiers
-            .retain(|_, identifier| identifier.attachment_id() != attachment_id);
-        state
-            .attachment_prefix_reservations
-            .retain(|_, reservation| reservation.attachment_id() != attachment_id);
-        state
-            .attachment_community_assignments
-            .retain(|_, assignment| assignment.attachment_id() != attachment_id);
-        Ok(())
+        delete_attachment_in_state(&mut state, attachment_id)
     }
 
     async fn list_attachment_dhcp_identifiers(
@@ -448,12 +631,7 @@ impl AttachmentStore for MemoryStorage {
         attachment_id: Uuid,
     ) -> Result<Vec<AttachmentDhcpIdentifier>, AppError> {
         let state = self.state.read().await;
-        Ok(state
-            .attachment_dhcp_identifiers
-            .values()
-            .filter(|identifier| identifier.attachment_id() == attachment_id)
-            .cloned()
-            .collect())
+        list_attachment_dhcp_identifiers_in_state(&state, attachment_id)
     }
 
     async fn list_attachment_dhcp_identifiers_for_attachments(
@@ -461,13 +639,7 @@ impl AttachmentStore for MemoryStorage {
         attachment_ids: &[Uuid],
     ) -> Result<Vec<AttachmentDhcpIdentifier>, AppError> {
         let state = self.state.read().await;
-        let attachment_ids = attachment_ids.iter().copied().collect::<HashSet<_>>();
-        Ok(state
-            .attachment_dhcp_identifiers
-            .values()
-            .filter(|identifier| attachment_ids.contains(&identifier.attachment_id()))
-            .cloned()
-            .collect())
+        list_attachment_dhcp_identifiers_for_attachments_in_state(&state, attachment_ids)
     }
 
     async fn create_attachment_dhcp_identifier(
@@ -480,11 +652,7 @@ impl AttachmentStore for MemoryStorage {
 
     async fn delete_attachment_dhcp_identifier(&self, identifier_id: Uuid) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .attachment_dhcp_identifiers
-            .remove(&identifier_id)
-            .ok_or_else(|| AppError::not_found("attachment DHCP identifier was not found"))?;
-        Ok(())
+        delete_attachment_dhcp_identifier_in_state(&mut state, identifier_id)
     }
 
     async fn list_attachment_prefix_reservations(
@@ -492,12 +660,7 @@ impl AttachmentStore for MemoryStorage {
         attachment_id: Uuid,
     ) -> Result<Vec<AttachmentPrefixReservation>, AppError> {
         let state = self.state.read().await;
-        Ok(state
-            .attachment_prefix_reservations
-            .values()
-            .filter(|reservation| reservation.attachment_id() == attachment_id)
-            .cloned()
-            .collect())
+        list_attachment_prefix_reservations_in_state(&state, attachment_id)
     }
 
     async fn list_attachment_prefix_reservations_for_attachments(
@@ -505,13 +668,7 @@ impl AttachmentStore for MemoryStorage {
         attachment_ids: &[Uuid],
     ) -> Result<Vec<AttachmentPrefixReservation>, AppError> {
         let state = self.state.read().await;
-        let attachment_ids = attachment_ids.iter().copied().collect::<HashSet<_>>();
-        Ok(state
-            .attachment_prefix_reservations
-            .values()
-            .filter(|reservation| attachment_ids.contains(&reservation.attachment_id()))
-            .cloned()
-            .collect())
+        list_attachment_prefix_reservations_for_attachments_in_state(&state, attachment_ids)
     }
 
     async fn create_attachment_prefix_reservation(
@@ -527,11 +684,7 @@ impl AttachmentStore for MemoryStorage {
         reservation_id: Uuid,
     ) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .attachment_prefix_reservations
-            .remove(&reservation_id)
-            .ok_or_else(|| AppError::not_found("attachment prefix reservation was not found"))?;
-        Ok(())
+        delete_attachment_prefix_reservation_in_state(&mut state, reservation_id)
     }
 }
 
@@ -543,25 +696,7 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
         filter: &AttachmentCommunityAssignmentFilter,
     ) -> Result<Page<AttachmentCommunityAssignment>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<AttachmentCommunityAssignment> = state
-            .attachment_community_assignments
-            .values()
-            .filter(|assignment| {
-                filter.matches(assignment) && matches_mac_address(&state, assignment, filter)
-            })
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["network", "policy_name", "community_name"],
-            |assignment, field| match field {
-                "network" => assignment.network_cidr().as_str(),
-                "policy_name" => assignment.policy_name().as_str().to_string(),
-                "community_name" => assignment.community_name().as_str().to_string(),
-                _ => assignment.host_name().as_str().to_string(),
-            },
-        )
+        list_attachment_community_assignments_in_state(&state, page, filter)
     }
 
     async fn list_attachment_community_assignments_for_attachments(
@@ -569,13 +704,7 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
         attachment_ids: &[Uuid],
     ) -> Result<Vec<AttachmentCommunityAssignment>, AppError> {
         let state = self.state.read().await;
-        let attachment_ids = attachment_ids.iter().copied().collect::<HashSet<_>>();
-        Ok(state
-            .attachment_community_assignments
-            .values()
-            .filter(|assignment| attachment_ids.contains(&assignment.attachment_id()))
-            .cloned()
-            .collect())
+        list_attachment_community_assignments_for_attachments_in_state(&state, attachment_ids)
     }
 
     async fn create_attachment_community_assignment(
@@ -591,11 +720,7 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
         assignment_id: Uuid,
     ) -> Result<AttachmentCommunityAssignment, AppError> {
         let state = self.state.read().await;
-        state
-            .attachment_community_assignments
-            .get(&assignment_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))
+        get_attachment_community_assignment_in_state(&state, assignment_id)
     }
 
     async fn delete_attachment_community_assignment(
@@ -603,10 +728,6 @@ impl AttachmentCommunityAssignmentStore for MemoryStorage {
         assignment_id: Uuid,
     ) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .attachment_community_assignments
-            .remove(&assignment_id)
-            .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))?;
-        Ok(())
+        delete_attachment_community_assignment_in_state(&mut state, assignment_id)
     }
 }

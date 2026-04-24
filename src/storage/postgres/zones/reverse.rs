@@ -77,7 +77,7 @@ impl PostgresStorage {
             .collect()
     }
 
-    pub(super) fn list_reverse_zones_impl(
+    pub(in crate::storage::postgres) fn list_reverse_zones_impl(
         connection: &mut PgConnection,
         page: &PageRequest,
     ) -> Result<Page<ReverseZone>, AppError> {
@@ -85,7 +85,7 @@ impl PostgresStorage {
         Ok(vec_to_page(items, page))
     }
 
-    pub(super) fn create_reverse_zone_impl(
+    pub(in crate::storage::postgres) fn create_reverse_zone_impl(
         connection: &mut PgConnection,
         command: CreateReverseZone,
     ) -> Result<ReverseZone, AppError> {
@@ -180,7 +180,7 @@ impl PostgresStorage {
         row.into_domain(nameservers)
     }
 
-    pub(super) fn update_reverse_zone_impl(
+    pub(in crate::storage::postgres) fn update_reverse_zone_impl(
         connection: &mut PgConnection,
         name: &str,
         command: UpdateReverseZone,
@@ -298,7 +298,7 @@ impl PostgresStorage {
         })
     }
 
-    pub(super) fn delete_reverse_zone_impl(
+    pub(in crate::storage::postgres) fn delete_reverse_zone_impl(
         connection: &mut PgConnection,
         name: &str,
     ) -> Result<(), AppError> {
@@ -314,7 +314,7 @@ impl PostgresStorage {
         Ok(())
     }
 
-    pub(super) fn bump_reverse_zone_serial_impl(
+    pub(in crate::storage::postgres) fn bump_reverse_zone_serial_impl(
         connection: &mut PgConnection,
         zone_id: Uuid,
     ) -> Result<ReverseZone, AppError> {

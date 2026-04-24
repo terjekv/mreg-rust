@@ -1,7 +1,7 @@
 mod common;
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use actix_web::{App, body::to_bytes, http::StatusCode, test, web};
 use argon2::{
@@ -51,6 +51,7 @@ use mreg_rust::{
     storage::build_storage,
 };
 use serde_json::{Value, json};
+use tokio::sync::Mutex;
 
 use common::TestCtx;
 
@@ -60,6 +61,11 @@ async fn postgres_ctx(test_name: &str) -> Option<TestCtx> {
         eprintln!("{}", common::postgres_skip_message(test_name));
     }
     ctx
+}
+
+fn task_queue_mutex() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn local_password_hash(password: &str) -> String {
@@ -500,6 +506,7 @@ async fn postgres_task_claiming_uses_skip_locked_under_concurrency()
     else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
 
     while let Some(task) = storage.tasks().claim_next_task().await? {
@@ -546,6 +553,15 @@ async fn postgres_task_claiming_uses_skip_locked_under_concurrency()
         [first.id(), second.id()].contains(&claimed_a.id())
             && [first.id(), second.id()].contains(&claimed_b.id())
     );
+
+    storage
+        .tasks()
+        .complete_task(claimed_a.id(), json!({ "claimed": "a" }))
+        .await?;
+    storage
+        .tasks()
+        .complete_task(claimed_b.id(), json!({ "claimed": "b" }))
+        .await?;
 
     Ok(())
 }
@@ -631,6 +647,7 @@ async fn postgres_record_registry_and_export_run_work() -> Result<(), Box<dyn st
     let Some(ctx) = postgres_ctx("postgres_record_registry_and_export_run_work").await else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
 
     let host = ctx.host("export-app");
@@ -732,6 +749,7 @@ async fn postgres_dhcp_export_scope_renders_attachment_graph()
     else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
 
     let host = ctx.host("dhcp-host");
@@ -829,6 +847,7 @@ async fn postgres_import_supports_zone_and_record_entities()
     let Some(ctx) = postgres_ctx("postgres_import_supports_zone_and_record_entities").await else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
 
     let zone = ctx.zone("import-zone");
@@ -1007,6 +1026,7 @@ async fn postgres_imports_extended_legacy_entities() -> Result<(), Box<dyn std::
     let Some(ctx) = postgres_ctx("postgres_imports_extended_legacy_entities").await else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
     let (batch, fixture) = build_extended_import_batch(&ctx, false)?;
 
@@ -1160,6 +1180,7 @@ async fn postgres_import_rolls_back_extended_legacy_batch_on_late_failure()
     else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
     let (batch, fixture) = build_extended_import_batch(&ctx, true)?;
 
@@ -2800,6 +2821,7 @@ async fn postgres_task_idempotency_key_race_allows_only_one_create()
     else {
         return Ok(());
     };
+    let _guard = task_queue_mutex().lock().await;
     let storage = ctx.storage();
     let task_kind = ctx.name("test-race");
     let idempotency_key = ctx.name("idempotency");
@@ -2839,6 +2861,10 @@ async fn postgres_task_idempotency_key_race_allows_only_one_create()
     let (result_a, result_b) = tokio::join!(create_a, create_b);
     let result_a = result_a.expect("join create a");
     let result_b = result_b.expect("join create b");
+
+    for task in [&result_a, &result_b].into_iter().flatten() {
+        storage.tasks().cancel_task(task.id()).await?;
+    }
 
     let success_count = [result_a.as_ref(), result_b.as_ref()]
         .into_iter()

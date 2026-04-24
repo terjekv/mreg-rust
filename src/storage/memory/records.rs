@@ -314,6 +314,462 @@ fn best_matching_zone_for_owner_name(state: &MemoryState, owner_name: &DnsName) 
         .map(|(zone_id, _)| zone_id)
 }
 
+pub(super) fn list_record_types_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+) -> Result<Page<RecordTypeDefinition>, AppError> {
+    let mut items: Vec<RecordTypeDefinition> = state.record_types.values().cloned().collect();
+    items.sort_by_key(|item| item.id());
+    paginate_by_cursor(items, page)
+}
+
+pub(super) fn list_rrsets_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+) -> Result<Page<RecordRrset>, AppError> {
+    let mut items: Vec<RecordRrset> = state.rrsets.values().cloned().collect();
+    items.sort_by_key(|item| item.id());
+    paginate_by_cursor(items, page)
+}
+
+pub(super) fn list_records_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &RecordFilter,
+) -> Result<Page<RecordInstance>, AppError> {
+    let items: Vec<RecordInstance> = state
+        .records
+        .iter()
+        .filter(|record| filter.matches(record))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["owner_name", "created_at"],
+        |record, field| match field {
+            "owner_name" => record.owner_name().to_string(),
+            "created_at" => record.created_at().to_rfc3339(),
+            _ => record.type_name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn create_record_type_in_state(
+    state: &mut MemoryState,
+    command: CreateRecordTypeDefinition,
+) -> Result<RecordTypeDefinition, AppError> {
+    let key = command.name().as_str().to_string();
+    if state.record_types.contains_key(&key) {
+        return Err(AppError::conflict(format!(
+            "record type '{}' already exists",
+            key
+        )));
+    }
+    let now = Utc::now();
+    let definition = RecordTypeDefinition::restore(
+        Uuid::new_v4(),
+        command.name().clone(),
+        command.dns_type(),
+        command.schema().clone(),
+        command.built_in(),
+        now,
+        now,
+    );
+    state.record_types.insert(key, definition.clone());
+    Ok(definition)
+}
+
+pub(super) fn get_record_in_state(
+    state: &MemoryState,
+    record_id: Uuid,
+) -> Result<RecordInstance, AppError> {
+    state
+        .records
+        .iter()
+        .find(|r| r.id() == record_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("record not found"))
+}
+
+pub(super) fn get_rrset_in_state(
+    state: &MemoryState,
+    rrset_id: Uuid,
+) -> Result<RecordRrset, AppError> {
+    state
+        .rrsets
+        .get(&rrset_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("rrset not found"))
+}
+
+pub(super) fn list_records_for_hosts_in_state(
+    state: &MemoryState,
+    hosts: &[Hostname],
+) -> Result<Vec<RecordInstance>, AppError> {
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(state
+        .records
+        .iter()
+        .filter(|record| {
+            record.owner_kind() == Some(&RecordOwnerKind::Host)
+                && host_names.contains(record.owner_name())
+        })
+        .cloned()
+        .collect())
+}
+
+pub(super) fn create_record_with_serial_bump_in_state(
+    state: &mut MemoryState,
+    command: CreateRecordInstance,
+) -> Result<RecordInstance, AppError> {
+    let record = create_record_in_state(state, command)?;
+    if let Some(zone_id) = record.zone_id() {
+        bump_zone_serial_in_state(state, zone_id);
+    }
+    Ok(record)
+}
+
+pub(super) fn update_record_in_state(
+    state: &mut MemoryState,
+    record_id: Uuid,
+    command: UpdateRecord,
+) -> Result<RecordInstance, AppError> {
+    let position = state
+        .records
+        .iter()
+        .position(|r| r.id() == record_id)
+        .ok_or_else(|| AppError::not_found("record not found"))?;
+    let existing = &state.records[position];
+
+    let record_type = state
+        .record_types
+        .get(existing.type_name().as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::internal(format!(
+                "record type '{}' not found for existing record",
+                existing.type_name().as_str()
+            ))
+        })?;
+
+    let new_ttl = command.ttl().resolve(existing.ttl());
+
+    let data_changed = command.data().is_some() || command.raw_rdata().is_some();
+    let new_data;
+    let new_raw_rdata;
+    let new_rendered;
+
+    if data_changed {
+        let owner_name = DnsName::new(existing.owner_name())?;
+        let validated = record_type.validate_record_input(
+            &owner_name,
+            command.data(),
+            command.raw_rdata(),
+        )?;
+
+        let same_owner_records = state
+            .records
+            .iter()
+            .filter(|r| r.owner_name() == existing.owner_name() && r.id() != record_id)
+            .map(|r| {
+                ExistingRecordSummary::new(
+                    r.type_name().clone(),
+                    r.ttl(),
+                    r.data().clone(),
+                    r.raw_rdata().cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let same_rrset_records = state
+            .records
+            .iter()
+            .filter(|r| r.rrset_id() == existing.rrset_id() && r.id() != record_id)
+            .map(|r| {
+                ExistingRecordSummary::new(
+                    r.type_name().clone(),
+                    r.ttl(),
+                    r.data().clone(),
+                    r.raw_rdata().cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let alias_owner_names = match &validated {
+            ValidatedRecordContent::Structured(normalized) => {
+                alias_target_names(normalized, record_type.name())
+            }
+            ValidatedRecordContent::RawRdata(_) => Vec::new(),
+        }
+        .into_iter()
+        .filter(|target| {
+            state
+                .records
+                .iter()
+                .any(|r| r.type_name().as_str() == "CNAME" && r.owner_name() == target.as_str())
+        })
+        .collect();
+
+        validate_record_relationships(
+            &record_type,
+            new_ttl,
+            &validated,
+            &same_owner_records,
+            &same_rrset_records,
+            &alias_owner_names,
+        )?;
+
+        new_rendered = if let (Some(template), ValidatedRecordContent::Structured(normalized)) =
+            (record_type.schema().render_template(), &validated)
+        {
+            let mut env = Environment::new();
+            env.add_template("record", template)
+                .map_err(AppError::internal)?;
+            Some(
+                env.get_template("record")
+                    .map_err(AppError::internal)?
+                    .render(minijinja::value::Value::from_serialize(normalized))
+                    .map_err(AppError::internal)?,
+            )
+        } else {
+            None
+        };
+
+        match validated {
+            ValidatedRecordContent::Structured(data) => {
+                new_data = data;
+                new_raw_rdata = None;
+            }
+            ValidatedRecordContent::RawRdata(raw) => {
+                new_data = Value::Null;
+                new_raw_rdata = Some(raw);
+            }
+        }
+    } else {
+        new_data = existing.data().clone();
+        new_raw_rdata = existing.raw_rdata().cloned();
+        new_rendered = existing.rendered().map(|s| s.to_string());
+    }
+
+    let now = Utc::now();
+    let updated = RecordInstance::restore(
+        existing.id(),
+        existing.rrset_id(),
+        existing.type_id(),
+        existing.type_name().clone(),
+        existing.owner_kind().cloned(),
+        existing.owner_id(),
+        DnsName::new(existing.owner_name())?,
+        existing.zone_id(),
+        new_ttl,
+        new_data,
+        new_raw_rdata,
+        new_rendered,
+        existing.created_at(),
+        now,
+    );
+
+    state.records[position] = updated.clone();
+    if let Some(zone_id) = updated.zone_id() {
+        bump_zone_serial_in_state(state, zone_id);
+    }
+    Ok(updated)
+}
+
+pub(super) fn delete_record_in_state(
+    state: &mut MemoryState,
+    record_id: Uuid,
+) -> Result<(), AppError> {
+    let position = state
+        .records
+        .iter()
+        .position(|r| r.id() == record_id)
+        .ok_or_else(|| AppError::not_found("record not found"))?;
+    let removed = state.records.remove(position);
+    let zone_id = removed.zone_id();
+    let rrset_id = removed.rrset_id();
+    let rrset_still_has_records = state.records.iter().any(|r| r.rrset_id() == rrset_id);
+    if !rrset_still_has_records {
+        state.rrsets.remove(&rrset_id);
+    }
+    if let Some(zone_id) = zone_id {
+        bump_zone_serial_in_state(state, zone_id);
+    }
+    Ok(())
+}
+
+pub(super) fn delete_record_type_in_state(
+    state: &mut MemoryState,
+    name: &RecordTypeName,
+) -> Result<(), AppError> {
+    let key = name.as_str().to_string();
+    let record_type = state
+        .record_types
+        .get(&key)
+        .ok_or_else(|| AppError::not_found("record type not found"))?;
+    if record_type.built_in() {
+        return Err(AppError::conflict("cannot delete built-in record type"));
+    }
+    let has_records = state
+        .records
+        .iter()
+        .any(|r| r.type_name().as_str().eq_ignore_ascii_case(name.as_str()));
+    if has_records {
+        return Err(AppError::conflict(
+            "cannot delete record type with existing records",
+        ));
+    }
+    state.record_types.remove(&key);
+    Ok(())
+}
+
+pub(super) fn delete_rrset_in_state(
+    state: &mut MemoryState,
+    rrset_id: Uuid,
+) -> Result<(), AppError> {
+    let rrset = state
+        .rrsets
+        .remove(&rrset_id)
+        .ok_or_else(|| AppError::not_found("rrset not found"))?;
+    state.records.retain(|r| r.rrset_id() != rrset_id);
+    if let Some(zone_id) = rrset.zone_id() {
+        bump_zone_serial_in_state(state, zone_id);
+    }
+    Ok(())
+}
+
+pub(super) fn find_records_by_owner_in_state(
+    state: &MemoryState,
+    owner_id: Uuid,
+) -> Result<Vec<RecordInstance>, AppError> {
+    let matches: Vec<RecordInstance> = state
+        .records
+        .iter()
+        .filter(|r| r.owner_id() == Some(owner_id))
+        .cloned()
+        .collect();
+    Ok(matches)
+}
+
+pub(super) fn delete_records_by_owner_in_state(
+    state: &mut MemoryState,
+    owner_id: Uuid,
+) -> Result<u64, AppError> {
+    let mut removed_records = Vec::new();
+    let mut kept = Vec::new();
+    for record in state.records.drain(..) {
+        if record.owner_id() == Some(owner_id) {
+            removed_records.push(record);
+        } else {
+            kept.push(record);
+        }
+    }
+    state.records = kept;
+    let count = removed_records.len() as u64;
+    let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
+    for rrset_id in rrset_ids {
+        if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
+            state.rrsets.remove(&rrset_id);
+        }
+    }
+    Ok(count)
+}
+
+pub(super) fn delete_records_by_owner_name_and_type_in_state(
+    state: &mut MemoryState,
+    owner_name: &DnsName,
+    type_name: &RecordTypeName,
+) -> Result<u64, AppError> {
+    let mut removed_records = Vec::new();
+    let mut kept = Vec::new();
+    for record in state.records.drain(..) {
+        if record
+            .owner_name()
+            .eq_ignore_ascii_case(owner_name.as_str())
+            && record.type_name() == type_name
+        {
+            removed_records.push(record);
+        } else {
+            kept.push(record);
+        }
+    }
+    state.records = kept;
+    let count = removed_records.len() as u64;
+    let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
+    for rrset_id in rrset_ids {
+        if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
+            state.rrsets.remove(&rrset_id);
+        }
+    }
+    Ok(count)
+}
+
+pub(super) fn rename_record_owner_in_state(
+    state: &mut MemoryState,
+    owner_id: Uuid,
+    new_name: &DnsName,
+) -> Result<u64, AppError> {
+    let mut count: u64 = 0;
+    state.records = state
+        .records
+        .drain(..)
+        .map(|r| {
+            if r.owner_id() == Some(owner_id) {
+                count += 1;
+                RecordInstance::restore(
+                    r.id(),
+                    r.rrset_id(),
+                    r.type_id(),
+                    r.type_name().clone(),
+                    r.owner_kind().cloned(),
+                    r.owner_id(),
+                    new_name.clone(),
+                    r.zone_id(),
+                    r.ttl(),
+                    r.data().clone(),
+                    r.raw_rdata().cloned(),
+                    r.rendered().map(|s| s.to_string()),
+                    r.created_at(),
+                    r.updated_at(),
+                )
+            } else {
+                r
+            }
+        })
+        .collect();
+    // Update rrsets where anchor_id matches
+    let rrset_ids: Vec<Uuid> = state
+        .rrsets
+        .values()
+        .filter(|rs| rs.anchor_id() == Some(owner_id))
+        .map(|rs| rs.id())
+        .collect();
+    for rrset_id in rrset_ids {
+        if let Some(rrset) = state.rrsets.remove(&rrset_id) {
+            let updated = RecordRrset::restore(
+                rrset.id(),
+                rrset.type_id(),
+                rrset.type_name().clone(),
+                rrset.dns_class().clone(),
+                new_name.clone(),
+                rrset.anchor_kind().cloned(),
+                rrset.anchor_id(),
+                Some(new_name.as_str().to_string()),
+                rrset.zone_id(),
+                rrset.ttl(),
+                rrset.created_at(),
+                rrset.updated_at(),
+            );
+            state.rrsets.insert(rrset_id, updated);
+        }
+    }
+    Ok(count)
+}
+
 #[async_trait]
 impl RecordStore for MemoryStorage {
     async fn list_record_types(
@@ -321,16 +777,12 @@ impl RecordStore for MemoryStorage {
         page: &PageRequest,
     ) -> Result<Page<RecordTypeDefinition>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<RecordTypeDefinition> = state.record_types.values().cloned().collect();
-        items.sort_by_key(|item| item.id());
-        paginate_by_cursor(items, page)
+        list_record_types_in_state(&state, page)
     }
 
     async fn list_rrsets(&self, page: &PageRequest) -> Result<Page<RecordRrset>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<RecordRrset> = state.rrsets.values().cloned().collect();
-        items.sort_by_key(|item| item.id());
-        paginate_by_cursor(items, page)
+        list_rrsets_in_state(&state, page)
     }
 
     async fn list_records(
@@ -339,22 +791,7 @@ impl RecordStore for MemoryStorage {
         filter: &RecordFilter,
     ) -> Result<Page<RecordInstance>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<RecordInstance> = state
-            .records
-            .iter()
-            .filter(|record| filter.matches(record))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["owner_name", "created_at"],
-            |record, field| match field {
-                "owner_name" => record.owner_name().to_string(),
-                "created_at" => record.created_at().to_rfc3339(),
-                _ => record.type_name().as_str().to_string(),
-            },
-        )
+        list_records_in_state(&state, page, filter)
     }
 
     async fn create_record_type(
@@ -362,64 +799,25 @@ impl RecordStore for MemoryStorage {
         command: CreateRecordTypeDefinition,
     ) -> Result<RecordTypeDefinition, AppError> {
         let mut state = self.state.write().await;
-        let key = command.name().as_str().to_string();
-        if state.record_types.contains_key(&key) {
-            return Err(AppError::conflict(format!(
-                "record type '{}' already exists",
-                key
-            )));
-        }
-        let now = Utc::now();
-        let definition = RecordTypeDefinition::restore(
-            Uuid::new_v4(),
-            command.name().clone(),
-            command.dns_type(),
-            command.schema().clone(),
-            command.built_in(),
-            now,
-            now,
-        );
-        state.record_types.insert(key, definition.clone());
-        Ok(definition)
+        create_record_type_in_state(&mut state, command)
     }
 
     async fn get_record(&self, record_id: Uuid) -> Result<RecordInstance, AppError> {
         let state = self.state.read().await;
-        state
-            .records
-            .iter()
-            .find(|r| r.id() == record_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("record not found"))
+        get_record_in_state(&state, record_id)
     }
 
     async fn get_rrset(&self, rrset_id: Uuid) -> Result<RecordRrset, AppError> {
         let state = self.state.read().await;
-        state
-            .rrsets
-            .get(&rrset_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("rrset not found"))
+        get_rrset_in_state(&state, rrset_id)
     }
 
     async fn list_records_for_hosts(
         &self,
         hosts: &[Hostname],
     ) -> Result<Vec<RecordInstance>, AppError> {
-        let host_names = hosts
-            .iter()
-            .map(|host| host.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
         let state = self.state.read().await;
-        Ok(state
-            .records
-            .iter()
-            .filter(|record| {
-                record.owner_kind() == Some(&RecordOwnerKind::Host)
-                    && host_names.contains(record.owner_name())
-            })
-            .cloned()
-            .collect())
+        list_records_for_hosts_in_state(&state, hosts)
     }
 
     async fn create_record(
@@ -427,11 +825,7 @@ impl RecordStore for MemoryStorage {
         command: CreateRecordInstance,
     ) -> Result<RecordInstance, AppError> {
         let mut state = self.state.write().await;
-        let record = create_record_in_state(&mut state, command)?;
-        if let Some(zone_id) = record.zone_id() {
-            bump_zone_serial_in_state(&mut state, zone_id);
-        }
-        Ok(record)
+        create_record_with_serial_bump_in_state(&mut state, command)
     }
 
     async fn update_record(
@@ -440,236 +834,32 @@ impl RecordStore for MemoryStorage {
         command: UpdateRecord,
     ) -> Result<RecordInstance, AppError> {
         let mut state = self.state.write().await;
-
-        let position = state
-            .records
-            .iter()
-            .position(|r| r.id() == record_id)
-            .ok_or_else(|| AppError::not_found("record not found"))?;
-        let existing = &state.records[position];
-
-        let record_type = state
-            .record_types
-            .get(existing.type_name().as_str())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::internal(format!(
-                    "record type '{}' not found for existing record",
-                    existing.type_name().as_str()
-                ))
-            })?;
-
-        let new_ttl = command.ttl().resolve(existing.ttl());
-
-        let data_changed = command.data().is_some() || command.raw_rdata().is_some();
-        let new_data;
-        let new_raw_rdata;
-        let new_rendered;
-
-        if data_changed {
-            let owner_name = DnsName::new(existing.owner_name())?;
-            let validated = record_type.validate_record_input(
-                &owner_name,
-                command.data(),
-                command.raw_rdata(),
-            )?;
-
-            let same_owner_records = state
-                .records
-                .iter()
-                .filter(|r| r.owner_name() == existing.owner_name() && r.id() != record_id)
-                .map(|r| {
-                    ExistingRecordSummary::new(
-                        r.type_name().clone(),
-                        r.ttl(),
-                        r.data().clone(),
-                        r.raw_rdata().cloned(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let same_rrset_records = state
-                .records
-                .iter()
-                .filter(|r| r.rrset_id() == existing.rrset_id() && r.id() != record_id)
-                .map(|r| {
-                    ExistingRecordSummary::new(
-                        r.type_name().clone(),
-                        r.ttl(),
-                        r.data().clone(),
-                        r.raw_rdata().cloned(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let alias_owner_names = match &validated {
-                ValidatedRecordContent::Structured(normalized) => {
-                    alias_target_names(normalized, record_type.name())
-                }
-                ValidatedRecordContent::RawRdata(_) => Vec::new(),
-            }
-            .into_iter()
-            .filter(|target| {
-                state
-                    .records
-                    .iter()
-                    .any(|r| r.type_name().as_str() == "CNAME" && r.owner_name() == target.as_str())
-            })
-            .collect();
-
-            validate_record_relationships(
-                &record_type,
-                new_ttl,
-                &validated,
-                &same_owner_records,
-                &same_rrset_records,
-                &alias_owner_names,
-            )?;
-
-            new_rendered = if let (Some(template), ValidatedRecordContent::Structured(normalized)) =
-                (record_type.schema().render_template(), &validated)
-            {
-                let mut env = Environment::new();
-                env.add_template("record", template)
-                    .map_err(AppError::internal)?;
-                Some(
-                    env.get_template("record")
-                        .map_err(AppError::internal)?
-                        .render(minijinja::value::Value::from_serialize(normalized))
-                        .map_err(AppError::internal)?,
-                )
-            } else {
-                None
-            };
-
-            match validated {
-                ValidatedRecordContent::Structured(data) => {
-                    new_data = data;
-                    new_raw_rdata = None;
-                }
-                ValidatedRecordContent::RawRdata(raw) => {
-                    new_data = Value::Null;
-                    new_raw_rdata = Some(raw);
-                }
-            }
-        } else {
-            new_data = existing.data().clone();
-            new_raw_rdata = existing.raw_rdata().cloned();
-            new_rendered = existing.rendered().map(|s| s.to_string());
-        }
-
-        let now = Utc::now();
-        let updated = RecordInstance::restore(
-            existing.id(),
-            existing.rrset_id(),
-            existing.type_id(),
-            existing.type_name().clone(),
-            existing.owner_kind().cloned(),
-            existing.owner_id(),
-            DnsName::new(existing.owner_name())?,
-            existing.zone_id(),
-            new_ttl,
-            new_data,
-            new_raw_rdata,
-            new_rendered,
-            existing.created_at(),
-            now,
-        );
-
-        state.records[position] = updated.clone();
-        if let Some(zone_id) = updated.zone_id() {
-            bump_zone_serial_in_state(&mut state, zone_id);
-        }
-        Ok(updated)
+        update_record_in_state(&mut state, record_id, command)
     }
 
     async fn delete_record(&self, record_id: Uuid) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        let position = state
-            .records
-            .iter()
-            .position(|r| r.id() == record_id)
-            .ok_or_else(|| AppError::not_found("record not found"))?;
-        let removed = state.records.remove(position);
-        let zone_id = removed.zone_id();
-        let rrset_id = removed.rrset_id();
-        let rrset_still_has_records = state.records.iter().any(|r| r.rrset_id() == rrset_id);
-        if !rrset_still_has_records {
-            state.rrsets.remove(&rrset_id);
-        }
-        if let Some(zone_id) = zone_id {
-            bump_zone_serial_in_state(&mut state, zone_id);
-        }
-        Ok(())
+        delete_record_in_state(&mut state, record_id)
     }
 
     async fn delete_record_type(&self, name: &RecordTypeName) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        let key = name.as_str().to_string();
-        let record_type = state
-            .record_types
-            .get(&key)
-            .ok_or_else(|| AppError::not_found("record type not found"))?;
-        if record_type.built_in() {
-            return Err(AppError::conflict("cannot delete built-in record type"));
-        }
-        let has_records = state
-            .records
-            .iter()
-            .any(|r| r.type_name().as_str().eq_ignore_ascii_case(name.as_str()));
-        if has_records {
-            return Err(AppError::conflict(
-                "cannot delete record type with existing records",
-            ));
-        }
-        state.record_types.remove(&key);
-        Ok(())
+        delete_record_type_in_state(&mut state, name)
     }
 
     async fn delete_rrset(&self, rrset_id: Uuid) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        let rrset = state
-            .rrsets
-            .remove(&rrset_id)
-            .ok_or_else(|| AppError::not_found("rrset not found"))?;
-        state.records.retain(|r| r.rrset_id() != rrset_id);
-        if let Some(zone_id) = rrset.zone_id() {
-            bump_zone_serial_in_state(&mut state, zone_id);
-        }
-        Ok(())
+        delete_rrset_in_state(&mut state, rrset_id)
     }
 
     async fn find_records_by_owner(&self, owner_id: Uuid) -> Result<Vec<RecordInstance>, AppError> {
         let state = self.state.read().await;
-        let matches: Vec<RecordInstance> = state
-            .records
-            .iter()
-            .filter(|r| r.owner_id() == Some(owner_id))
-            .cloned()
-            .collect();
-        Ok(matches)
+        find_records_by_owner_in_state(&state, owner_id)
     }
 
     async fn delete_records_by_owner(&self, owner_id: Uuid) -> Result<u64, AppError> {
         let mut state = self.state.write().await;
-        let mut removed_records = Vec::new();
-        let mut kept = Vec::new();
-        for record in state.records.drain(..) {
-            if record.owner_id() == Some(owner_id) {
-                removed_records.push(record);
-            } else {
-                kept.push(record);
-            }
-        }
-        state.records = kept;
-        let count = removed_records.len() as u64;
-        let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
-        for rrset_id in rrset_ids {
-            if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
-                state.rrsets.remove(&rrset_id);
-            }
-        }
-        Ok(count)
+        delete_records_by_owner_in_state(&mut state, owner_id)
     }
 
     async fn delete_records_by_owner_name_and_type(
@@ -678,28 +868,7 @@ impl RecordStore for MemoryStorage {
         type_name: &RecordTypeName,
     ) -> Result<u64, AppError> {
         let mut state = self.state.write().await;
-        let mut removed_records = Vec::new();
-        let mut kept = Vec::new();
-        for record in state.records.drain(..) {
-            if record
-                .owner_name()
-                .eq_ignore_ascii_case(owner_name.as_str())
-                && record.type_name() == type_name
-            {
-                removed_records.push(record);
-            } else {
-                kept.push(record);
-            }
-        }
-        state.records = kept;
-        let count = removed_records.len() as u64;
-        let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
-        for rrset_id in rrset_ids {
-            if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
-                state.rrsets.remove(&rrset_id);
-            }
-        }
-        Ok(count)
+        delete_records_by_owner_name_and_type_in_state(&mut state, owner_name, type_name)
     }
 
     async fn rename_record_owner(
@@ -708,60 +877,6 @@ impl RecordStore for MemoryStorage {
         new_name: &DnsName,
     ) -> Result<u64, AppError> {
         let mut state = self.state.write().await;
-        let mut count: u64 = 0;
-        state.records = state
-            .records
-            .drain(..)
-            .map(|r| {
-                if r.owner_id() == Some(owner_id) {
-                    count += 1;
-                    RecordInstance::restore(
-                        r.id(),
-                        r.rrset_id(),
-                        r.type_id(),
-                        r.type_name().clone(),
-                        r.owner_kind().cloned(),
-                        r.owner_id(),
-                        new_name.clone(),
-                        r.zone_id(),
-                        r.ttl(),
-                        r.data().clone(),
-                        r.raw_rdata().cloned(),
-                        r.rendered().map(|s| s.to_string()),
-                        r.created_at(),
-                        r.updated_at(),
-                    )
-                } else {
-                    r
-                }
-            })
-            .collect();
-        // Update rrsets where anchor_id matches
-        let rrset_ids: Vec<Uuid> = state
-            .rrsets
-            .values()
-            .filter(|rs| rs.anchor_id() == Some(owner_id))
-            .map(|rs| rs.id())
-            .collect();
-        for rrset_id in rrset_ids {
-            if let Some(rrset) = state.rrsets.remove(&rrset_id) {
-                let updated = RecordRrset::restore(
-                    rrset.id(),
-                    rrset.type_id(),
-                    rrset.type_name().clone(),
-                    rrset.dns_class().clone(),
-                    new_name.clone(),
-                    rrset.anchor_kind().cloned(),
-                    rrset.anchor_id(),
-                    Some(new_name.as_str().to_string()),
-                    rrset.zone_id(),
-                    rrset.ttl(),
-                    rrset.created_at(),
-                    rrset.updated_at(),
-                );
-                state.rrsets.insert(rrset_id, updated);
-            }
-        }
-        Ok(count)
+        rename_record_owner_in_state(&mut state, owner_id, new_name)
     }
 }

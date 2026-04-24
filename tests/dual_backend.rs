@@ -8,11 +8,15 @@ mod common;
 use std::sync::OnceLock;
 
 use actix_web::http::StatusCode;
+use chrono::{Duration, Utc};
 use serde_json::json;
 use tokio::sync::Mutex;
 
 use common::TestCtx;
-use mreg_rust::domain::tasks::{CreateTask, TaskStatus};
+use mreg_rust::domain::{
+    pagination::PageRequest,
+    tasks::{CreateTask, TaskStatus},
+};
 
 fn task_queue_mutex() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -952,6 +956,153 @@ async fn task_claiming_advances_state_scenario(ctx: &TestCtx) {
         [first.id(), second.id()].contains(&claimed_one.id())
             && [first.id(), second.id()].contains(&claimed_two.id())
     );
+
+    storage
+        .tasks()
+        .complete_task(claimed_one.id(), json!({ "claimed": 1 }))
+        .await
+        .unwrap();
+    storage
+        .tasks()
+        .complete_task(claimed_two.id(), json!({ "claimed": 2 }))
+        .await
+        .unwrap();
+}
+
+async fn task_cancel_and_purge_scenario(ctx: &TestCtx) {
+    let _guard = task_queue_mutex().lock().await;
+    drain_task_queue(ctx).await;
+
+    let storage = ctx.storage();
+    let running_seed = storage
+        .tasks()
+        .create_task(
+            CreateTask::new(
+                "import_batch",
+                Some("tester".to_string()),
+                json!({ "slot": "running" }),
+                Some(ctx.name("task-running")),
+                1,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let running = storage
+        .tasks()
+        .claim_next_task()
+        .await
+        .unwrap()
+        .expect("running task");
+    assert_eq!(running.id(), running_seed.id());
+
+    let failed_seed = storage
+        .tasks()
+        .create_task(
+            CreateTask::new(
+                "export_run",
+                Some("tester".to_string()),
+                json!({ "slot": "failed" }),
+                Some(ctx.name("task-failed")),
+                1,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let failed = storage
+        .tasks()
+        .claim_next_task()
+        .await
+        .unwrap()
+        .expect("failed task");
+    assert_eq!(failed.id(), failed_seed.id());
+
+    let completed_seed = storage
+        .tasks()
+        .create_task(
+            CreateTask::new(
+                "import_batch",
+                Some("tester".to_string()),
+                json!({ "slot": "completed" }),
+                Some(ctx.name("task-completed")),
+                1,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let completed = storage
+        .tasks()
+        .claim_next_task()
+        .await
+        .unwrap()
+        .expect("completed task");
+    assert_eq!(completed.id(), completed_seed.id());
+
+    let queued = storage
+        .tasks()
+        .create_task(
+            CreateTask::new(
+                "export_run",
+                Some("tester".to_string()),
+                json!({ "slot": "queued" }),
+                Some(ctx.name("task-queued")),
+                1,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let active = storage
+        .tasks()
+        .create_task(
+            CreateTask::new(
+                "import_batch",
+                Some("tester".to_string()),
+                json!({ "slot": "active" }),
+                Some(ctx.name("task-active")),
+                1,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let cancelled_running = storage.tasks().cancel_task(running.id()).await.unwrap();
+    let cancelled_queued = storage.tasks().cancel_task(queued.id()).await.unwrap();
+    let failed = storage
+        .tasks()
+        .fail_task(failed.id(), "boom".to_string())
+        .await
+        .unwrap();
+    let completed = storage
+        .tasks()
+        .complete_task(completed.id(), json!({ "ok": true }))
+        .await
+        .unwrap();
+
+    assert_eq!(cancelled_running.status(), &TaskStatus::Cancelled);
+    assert_eq!(cancelled_queued.status(), &TaskStatus::Cancelled);
+    assert_eq!(failed.status(), &TaskStatus::Failed);
+    assert_eq!(completed.status(), &TaskStatus::Succeeded);
+    assert!(storage.tasks().cancel_task(queued.id()).await.is_err());
+
+    let purged = storage
+        .tasks()
+        .purge_finished_tasks_before(Utc::now() + Duration::seconds(1))
+        .await
+        .unwrap();
+    assert!(purged >= 4);
+
+    let tasks = storage.tasks().list_tasks(&PageRequest::all()).await.unwrap();
+    assert!(tasks.items.iter().any(|task| task.id() == active.id()));
+    assert!(!tasks.items.iter().any(|task| task.id() == queued.id()));
+    assert!(!tasks.items.iter().any(|task| task.id() == running.id()));
+    assert!(!tasks.items.iter().any(|task| task.id() == failed.id()));
+    assert!(!tasks.items.iter().any(|task| task.id() == completed.id()));
+
+    storage.tasks().cancel_task(active.id()).await.unwrap();
 }
 
 // --- Part 1: Delete operation scenarios ---
@@ -1271,6 +1422,10 @@ dual_backend_test!(
 
 dual_backend_test!(task_claiming_advances_state, |ctx| {
     task_claiming_advances_state_scenario(&ctx).await;
+});
+
+dual_backend_test!(task_cancel_and_purge, |ctx| {
+    task_cancel_and_purge_scenario(&ctx).await;
 });
 
 dual_backend_test!(host_delete, |ctx| {

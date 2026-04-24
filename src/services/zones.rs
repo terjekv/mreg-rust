@@ -2,7 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    audit::actions,
+    audit::{CreateHistoryEvent, actions, actor},
     domain::{
         pagination::{Page, PageRequest},
         types::ZoneName,
@@ -13,8 +13,8 @@ use crate::{
         },
     },
     errors::AppError,
-    events::EventSinkClient,
-    storage::{AuditStore, ZoneStore},
+    events::{DomainEvent, EventSinkClient},
+    storage::{DynStorage, ZoneStore},
 };
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "forward_zone"))]
@@ -25,25 +25,28 @@ pub async fn list_forward(
     store.list_forward_zones(page).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "forward_zone"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "forward_zone"))]
 pub async fn create_forward(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateForwardZone,
+    events: &EventSinkClient,
 ) -> Result<ForwardZone, AppError> {
-    let zone = store.create_forward_zone(command).await?;
+    let (zone, history) = storage
+        .transaction(move |tx| {
+            let zone = tx.zones().create_forward_zone(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "forward_zone",
+                Some(zone.id()),
+                zone.name().as_str(),
+                actions::CREATE,
+                json!({"name": zone.name().as_str()}),
+            ))?;
+            Ok((zone, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "forward_zone",
-        actions::CREATE,
-        Some(zone.id()),
-        zone.name().as_str(),
-        json!({"name": zone.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(zone)
 }
@@ -56,51 +59,59 @@ pub async fn get_forward(
     store.get_forward_zone_by_name(name).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "forward_zone"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "forward_zone"))]
 pub async fn update_forward(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     name: &ZoneName,
     command: UpdateForwardZone,
+    events: &EventSinkClient,
 ) -> Result<ForwardZone, AppError> {
-    let old = store.get_forward_zone_by_name(name).await?;
-    let new = store.update_forward_zone(name, command).await?;
+    let name_owned = name.clone();
+    let (new, history) = storage
+        .transaction(move |tx| {
+            let old = tx.zones().get_forward_zone_by_name(&name_owned)?;
+            let new = tx.zones().update_forward_zone(&name_owned, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "forward_zone",
+                Some(new.id()),
+                new.name().as_str(),
+                actions::UPDATE,
+                json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
+            ))?;
+            Ok((new, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "forward_zone",
-        actions::UPDATE,
-        Some(new.id()),
-        new.name().as_str(),
-        json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(new)
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "forward_zone"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "forward_zone"))]
 pub async fn delete_forward(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     name: &ZoneName,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    let old = store.get_forward_zone_by_name(name).await?;
-    store.delete_forward_zone(name).await?;
+    let name_owned = name.clone();
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx.zones().get_forward_zone_by_name(&name_owned)?;
+            tx.zones().delete_forward_zone(&name_owned)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "forward_zone",
+                Some(old.id()),
+                old.name().as_str(),
+                actions::DELETE,
+                json!({"name": old.name().as_str()}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "forward_zone",
-        actions::DELETE,
-        Some(old.id()),
-        old.name().as_str(),
-        json!({"name": old.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }
@@ -113,25 +124,28 @@ pub async fn list_reverse(
     store.list_reverse_zones(page).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "reverse_zone"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "reverse_zone"))]
 pub async fn create_reverse(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateReverseZone,
+    events: &EventSinkClient,
 ) -> Result<ReverseZone, AppError> {
-    let zone = store.create_reverse_zone(command).await?;
+    let (zone, history) = storage
+        .transaction(move |tx| {
+            let zone = tx.zones().create_reverse_zone(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "reverse_zone",
+                Some(zone.id()),
+                zone.name().as_str(),
+                actions::CREATE,
+                json!({"name": zone.name().as_str()}),
+            ))?;
+            Ok((zone, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "reverse_zone",
-        actions::CREATE,
-        Some(zone.id()),
-        zone.name().as_str(),
-        json!({"name": zone.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(zone)
 }
@@ -144,51 +158,59 @@ pub async fn get_reverse(
     store.get_reverse_zone_by_name(name).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "reverse_zone"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "reverse_zone"))]
 pub async fn update_reverse(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     name: &ZoneName,
     command: UpdateReverseZone,
+    events: &EventSinkClient,
 ) -> Result<ReverseZone, AppError> {
-    let old = store.get_reverse_zone_by_name(name).await?;
-    let new = store.update_reverse_zone(name, command).await?;
+    let name_owned = name.clone();
+    let (new, history) = storage
+        .transaction(move |tx| {
+            let old = tx.zones().get_reverse_zone_by_name(&name_owned)?;
+            let new = tx.zones().update_reverse_zone(&name_owned, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "reverse_zone",
+                Some(new.id()),
+                new.name().as_str(),
+                actions::UPDATE,
+                json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
+            ))?;
+            Ok((new, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "reverse_zone",
-        actions::UPDATE,
-        Some(new.id()),
-        new.name().as_str(),
-        json!({"old": {"name": old.name().as_str()}, "new": {"name": new.name().as_str()}}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(new)
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "reverse_zone"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "reverse_zone"))]
 pub async fn delete_reverse(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     name: &ZoneName,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    let old = store.get_reverse_zone_by_name(name).await?;
-    store.delete_reverse_zone(name).await?;
+    let name_owned = name.clone();
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx.zones().get_reverse_zone_by_name(&name_owned)?;
+            tx.zones().delete_reverse_zone(&name_owned)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "reverse_zone",
+                Some(old.id()),
+                old.name().as_str(),
+                actions::DELETE,
+                json!({"name": old.name().as_str()}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "reverse_zone",
-        actions::DELETE,
-        Some(old.id()),
-        old.name().as_str(),
-        json!({"name": old.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }
@@ -209,54 +231,60 @@ pub async fn list_forward_delegations(
 }
 
 #[tracing::instrument(
-    skip(store, audit, events),
+    skip(storage, events),
     fields(resource_kind = "forward_zone_delegation")
 )]
 pub async fn create_forward_delegation(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateForwardZoneDelegation,
+    events: &EventSinkClient,
 ) -> Result<ForwardZoneDelegation, AppError> {
-    let delegation = store.create_forward_zone_delegation(command).await?;
+    let (delegation, history) = storage
+        .transaction(move |tx| {
+            let delegation = tx.zones().create_forward_zone_delegation(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "forward_zone_delegation",
+                Some(delegation.id()),
+                delegation.name().as_str(),
+                actions::CREATE,
+                json!({"name": delegation.name().as_str()}),
+            ))?;
+            Ok((delegation, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "forward_zone_delegation",
-        actions::CREATE,
-        Some(delegation.id()),
-        delegation.name().as_str(),
-        json!({"name": delegation.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(delegation)
 }
 
 #[tracing::instrument(
-    skip(store, audit, events),
+    skip(storage, events),
     fields(resource_kind = "forward_zone_delegation")
 )]
 pub async fn delete_forward_delegation(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     delegation_id: Uuid,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    store.delete_forward_zone_delegation(delegation_id).await?;
+    let history = storage
+        .transaction(move |tx| {
+            tx.zones().delete_forward_zone_delegation(delegation_id)?;
+            let id_str = delegation_id.to_string();
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "forward_zone_delegation",
+                Some(delegation_id),
+                id_str.clone(),
+                actions::DELETE,
+                json!({"id": id_str}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    let id_str = delegation_id.to_string();
-    super::audit_mutation(
-        audit,
-        events,
-        "forward_zone_delegation",
-        actions::DELETE,
-        Some(delegation_id),
-        &id_str,
-        json!({"id": id_str}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }
@@ -277,54 +305,60 @@ pub async fn list_reverse_delegations(
 }
 
 #[tracing::instrument(
-    skip(store, audit, events),
+    skip(storage, events),
     fields(resource_kind = "reverse_zone_delegation")
 )]
 pub async fn create_reverse_delegation(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateReverseZoneDelegation,
+    events: &EventSinkClient,
 ) -> Result<ReverseZoneDelegation, AppError> {
-    let delegation = store.create_reverse_zone_delegation(command).await?;
+    let (delegation, history) = storage
+        .transaction(move |tx| {
+            let delegation = tx.zones().create_reverse_zone_delegation(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "reverse_zone_delegation",
+                Some(delegation.id()),
+                delegation.name().as_str(),
+                actions::CREATE,
+                json!({"name": delegation.name().as_str()}),
+            ))?;
+            Ok((delegation, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "reverse_zone_delegation",
-        actions::CREATE,
-        Some(delegation.id()),
-        delegation.name().as_str(),
-        json!({"name": delegation.name().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(delegation)
 }
 
 #[tracing::instrument(
-    skip(store, audit, events),
+    skip(storage, events),
     fields(resource_kind = "reverse_zone_delegation")
 )]
 pub async fn delete_reverse_delegation(
-    store: &(dyn ZoneStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     delegation_id: Uuid,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    store.delete_reverse_zone_delegation(delegation_id).await?;
+    let history = storage
+        .transaction(move |tx| {
+            tx.zones().delete_reverse_zone_delegation(delegation_id)?;
+            let id_str = delegation_id.to_string();
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "reverse_zone_delegation",
+                Some(delegation_id),
+                id_str.clone(),
+                actions::DELETE,
+                json!({"id": id_str}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    let id_str = delegation_id.to_string();
-    super::audit_mutation(
-        audit,
-        events,
-        "reverse_zone_delegation",
-        actions::DELETE,
-        Some(delegation_id),
-        &id_str,
-        json!({"id": id_str}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }

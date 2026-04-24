@@ -9,6 +9,9 @@ pub(crate) mod has_id;
 // Shared import helpers (used by both backends)
 pub(crate) mod import_helpers;
 
+// Transaction-scoped sub-store traits
+pub mod tx;
+
 // Trait definition modules
 mod attachment_community_assignments;
 mod attachments;
@@ -59,6 +62,14 @@ pub use zones::ZoneStore;
 
 pub use readable::ReadableStorage;
 
+pub use tx::{
+    ErasedTxWork, TransactionRunner, TxAttachmentCommunityAssignmentStore, TxAttachmentStore,
+    TxAuditStore, TxBacnetStore, TxCommunityStore, TxHostCommunityAssignmentStore,
+    TxHostContactStore, TxHostGroupStore, TxHostPolicyStore, TxHostStore, TxLabelStore,
+    TxNameServerStore, TxNetworkPolicyStore, TxNetworkStore, TxPtrOverrideStore, TxRecordStore,
+    TxStorage, TxZoneStore,
+};
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -71,7 +82,70 @@ use crate::{
 };
 
 /// Thread-safe shared storage handle used across HTTP handlers.
-pub type DynStorage = Arc<dyn Storage>;
+///
+/// Wraps `Arc<dyn Storage>` as a thin newtype so we can hang a generic
+/// inherent [`DynStorage::transaction`] helper off the handle while keeping
+/// the underlying [`Storage`] trait object-safe. All `Storage` accessors
+/// (`storage.hosts()`, `storage.capabilities()`, ...) work via `Deref`.
+#[derive(Clone)]
+pub struct DynStorage(Arc<dyn Storage>);
+
+impl std::ops::Deref for DynStorage {
+    type Target = dyn Storage;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl DynStorage {
+    pub fn new<S>(storage: S) -> Self
+    where
+        S: Storage + 'static,
+    {
+        Self(Arc::new(storage))
+    }
+
+    pub fn from_arc(storage: Arc<dyn Storage>) -> Self {
+        Self(storage)
+    }
+
+    /// Clone the inner trait-object handle. Useful for decorator patterns
+    /// (e.g. test fault injection) that want to wrap the live storage in a
+    /// new `Storage` impl while sharing the same underlying state.
+    pub fn arc(&self) -> Arc<dyn Storage> {
+        Arc::clone(&self.0)
+    }
+
+    /// Run `work` inside a single backend transaction. The closure receives a
+    /// [`TxStorage`] view over which sub-stores expose the same operations as
+    /// the async [`Storage`] accessors, but synchronously and bound to the
+    /// in-progress transaction. Cross-store mutations made inside the closure
+    /// commit atomically; any error rolls everything back.
+    ///
+    /// Errors with [`AppError::unavailable`] if the backend doesn't support
+    /// transactions. Check `storage.capabilities().strong_transactions` to
+    /// gate calls when targeting unknown backends.
+    pub async fn transaction<T, F>(&self, work: F) -> Result<T, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&dyn TxStorage) -> Result<T, AppError> + Send + 'static,
+    {
+        let runner = self.transaction_runner().ok_or_else(|| {
+            AppError::unavailable(
+                "this storage backend does not support transactions; \
+                 check capabilities().strong_transactions before calling",
+            )
+        })?;
+
+        let erased: Box<dyn ErasedTxWork> = Box::new(tx::ClosureTxWork::new(work));
+        let value = runner.run_transaction(erased).await?;
+        value
+            .downcast::<T>()
+            .map(|boxed| *boxed)
+            .map_err(|_| AppError::internal("transaction result type mismatch"))
+    }
+}
 
 // Type aliases for consumer convenience
 pub type DynAttachmentStore = dyn AttachmentStore + Send + Sync;
@@ -159,12 +233,21 @@ pub trait Storage: Send + Sync {
     fn auth_sessions(&self) -> &(dyn AuthSessionStore + Send + Sync);
     fn host_policy(&self) -> &(dyn HostPolicyStore + Send + Sync);
     fn host_views(&self) -> &(dyn HostViewStore + Send + Sync);
+
+    /// Backends that support atomic multi-store mutations return their
+    /// [`TransactionRunner`] here. Backends that don't return `None` (the
+    /// default), and callers fall back to the per-store async API.
+    ///
+    /// Use [`DynStorage::transaction`] rather than calling this directly.
+    fn transaction_runner(&self) -> Option<&(dyn TransactionRunner + Send + Sync)> {
+        None
+    }
 }
 
 /// Construct the storage backend based on configuration (auto, memory, or postgres).
 pub fn build_storage(config: &Config) -> Result<DynStorage, AppError> {
     match config.storage_backend.resolve(config) {
-        StorageBackendKind::Memory => Ok(Arc::new(memory::MemoryStorage::new())),
+        StorageBackendKind::Memory => Ok(DynStorage::new(memory::MemoryStorage::new())),
         StorageBackendKind::Postgres => {
             let database = Database::connect(config)?;
             if !database.is_configured() {
@@ -172,7 +255,7 @@ pub fn build_storage(config: &Config) -> Result<DynStorage, AppError> {
                     "postgres storage selected but MREG_DATABASE_URL is not configured",
                 ));
             }
-            Ok(Arc::new(postgres::PostgresStorage::new(database)))
+            Ok(DynStorage::new(postgres::PostgresStorage::new(database)))
         }
     }
 }
