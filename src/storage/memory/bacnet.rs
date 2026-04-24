@@ -49,6 +49,62 @@ pub(super) fn create_bacnet_id_in_state(
     Ok(assignment)
 }
 
+pub(super) fn list_bacnet_ids_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &BacnetIdFilter,
+) -> Result<Page<BacnetIdAssignment>, AppError> {
+    let items: Vec<BacnetIdAssignment> = state
+        .bacnet_ids
+        .values()
+        .filter(|item| filter.matches(item))
+        .cloned()
+        .collect();
+    Ok(paginate_simple(items, page))
+}
+
+pub(super) fn get_bacnet_id_in_state(
+    state: &MemoryState,
+    bacnet_id: BacnetIdentifier,
+) -> Result<BacnetIdAssignment, AppError> {
+    state
+        .bacnet_ids
+        .get(&bacnet_id.as_u32())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("bacnet id '{}' was not found", bacnet_id.as_u32()))
+        })
+}
+
+pub(super) fn list_bacnet_ids_for_hosts_in_state(
+    state: &MemoryState,
+    hosts: &[Hostname],
+) -> Result<Vec<BacnetIdAssignment>, AppError> {
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(state
+        .bacnet_ids
+        .values()
+        .filter(|assignment| host_names.contains(assignment.host_name().as_str()))
+        .cloned()
+        .collect())
+}
+
+pub(super) fn delete_bacnet_id_in_state(
+    state: &mut MemoryState,
+    bacnet_id: BacnetIdentifier,
+) -> Result<(), AppError> {
+    state
+        .bacnet_ids
+        .remove(&bacnet_id.as_u32())
+        .map(|_| ())
+        .ok_or_else(|| {
+            AppError::not_found(format!("bacnet id '{}' was not found", bacnet_id.as_u32()))
+        })
+}
+
 #[async_trait]
 impl BacnetStore for MemoryStorage {
     async fn list_bacnet_ids(
@@ -57,13 +113,7 @@ impl BacnetStore for MemoryStorage {
         filter: &BacnetIdFilter,
     ) -> Result<Page<BacnetIdAssignment>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<BacnetIdAssignment> = state
-            .bacnet_ids
-            .values()
-            .filter(|item| filter.matches(item))
-            .cloned()
-            .collect();
-        Ok(paginate_simple(items, page))
+        list_bacnet_ids_in_state(&state, page, filter)
     }
 
     async fn create_bacnet_id(
@@ -79,40 +129,19 @@ impl BacnetStore for MemoryStorage {
         bacnet_id: BacnetIdentifier,
     ) -> Result<BacnetIdAssignment, AppError> {
         let state = self.state.read().await;
-        state
-            .bacnet_ids
-            .get(&bacnet_id.as_u32())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!("bacnet id '{}' was not found", bacnet_id.as_u32()))
-            })
+        get_bacnet_id_in_state(&state, bacnet_id)
     }
 
     async fn list_bacnet_ids_for_hosts(
         &self,
         hosts: &[Hostname],
     ) -> Result<Vec<BacnetIdAssignment>, AppError> {
-        let host_names = hosts
-            .iter()
-            .map(|host| host.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
         let state = self.state.read().await;
-        Ok(state
-            .bacnet_ids
-            .values()
-            .filter(|assignment| host_names.contains(assignment.host_name().as_str()))
-            .cloned()
-            .collect())
+        list_bacnet_ids_for_hosts_in_state(&state, hosts)
     }
 
     async fn delete_bacnet_id(&self, bacnet_id: BacnetIdentifier) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .bacnet_ids
-            .remove(&bacnet_id.as_u32())
-            .map(|_| ())
-            .ok_or_else(|| {
-                AppError::not_found(format!("bacnet id '{}' was not found", bacnet_id.as_u32()))
-            })
+        delete_bacnet_id_in_state(&mut state, bacnet_id)
     }
 }

@@ -15,6 +15,12 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+impl TaskStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct TaskEnvelope {
     id: Uuid,

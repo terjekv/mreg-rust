@@ -1,14 +1,15 @@
 use serde_json::json;
 
 use crate::{
-    audit::actions,
+    audit::{CreateHistoryEvent, actions, actor},
     domain::{
         label::{CreateLabel, Label, UpdateLabel},
         pagination::{Page, PageRequest},
+        types::LabelName,
     },
     errors::AppError,
-    events::EventSinkClient,
-    storage::{AuditStore, LabelStore},
+    events::{DomainEvent, EventSinkClient},
+    storage::{DynStorage, LabelStore},
 };
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "label"))]
@@ -19,25 +20,28 @@ pub async fn list(
     store.list_labels(page).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "label"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "label"))]
 pub async fn create(
-    store: &(dyn LabelStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateLabel,
+    events: &EventSinkClient,
 ) -> Result<Label, AppError> {
-    let label = store.create_label(command).await?;
+    let (label, history) = storage
+        .transaction(move |tx| {
+            let label = tx.labels().create_label(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "label",
+                Some(label.id()),
+                label.name().as_str(),
+                actions::CREATE,
+                json!({"name": label.name().as_str(), "description": label.description()}),
+            ))?;
+            Ok((label, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "label",
-        actions::CREATE,
-        Some(label.id()),
-        label.name().as_str(),
-        json!({"name": label.name().as_str(), "description": label.description()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(label)
 }
@@ -45,56 +49,67 @@ pub async fn create(
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "label"))]
 pub async fn get(
     store: &(dyn LabelStore + Send + Sync),
-    name: &crate::domain::types::LabelName,
+    name: &LabelName,
 ) -> Result<Label, AppError> {
     store.get_label_by_name(name).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "label"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "label"))]
 pub async fn update(
-    store: &(dyn LabelStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
-    name: &crate::domain::types::LabelName,
+    storage: &DynStorage,
+    name: &LabelName,
     command: UpdateLabel,
+    events: &EventSinkClient,
 ) -> Result<Label, AppError> {
-    let old = store.get_label_by_name(name).await?;
-    let new = store.update_label(name, command).await?;
+    let name_owned = name.clone();
+    let (new, history) = storage
+        .transaction(move |tx| {
+            let old = tx.labels().get_label_by_name(&name_owned)?;
+            let new = tx.labels().update_label(&name_owned, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "label",
+                Some(new.id()),
+                new.name().as_str(),
+                actions::UPDATE,
+                json!({
+                    "old": {"description": old.description()},
+                    "new": {"description": new.description()}
+                }),
+            ))?;
+            Ok((new, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "label",
-        actions::UPDATE,
-        Some(new.id()),
-        new.name().as_str(),
-        json!({"old": {"description": old.description()}, "new": {"description": new.description()}}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(new)
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "label"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "label"))]
 pub async fn delete(
-    store: &(dyn LabelStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
+    storage: &DynStorage,
+    name: &LabelName,
     events: &EventSinkClient,
-    name: &crate::domain::types::LabelName,
 ) -> Result<(), AppError> {
-    let old = store.get_label_by_name(name).await?;
-    store.delete_label(name).await?;
+    let name_owned = name.clone();
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx.labels().get_label_by_name(&name_owned)?;
+            tx.labels().delete_label(&name_owned)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "label",
+                Some(old.id()),
+                old.name().as_str(),
+                actions::DELETE,
+                json!({"name": old.name().as_str(), "description": old.description()}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "label",
-        actions::DELETE,
-        Some(old.id()),
-        old.name().as_str(),
-        json!({"name": old.name().as_str(), "description": old.description()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }

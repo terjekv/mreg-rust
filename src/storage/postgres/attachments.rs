@@ -749,7 +749,274 @@ impl AttachmentStore for PostgresStorage {
 }
 
 impl PostgresStorage {
-    fn update_attachment_tx(
+    pub(in crate::storage::postgres) fn list_attachments_in_conn(
+        connection: &mut PgConnection,
+        page: &PageRequest,
+    ) -> Result<Page<HostAttachment>, AppError> {
+        let items = Self::query_attachments(connection)?;
+        Ok(vec_to_page(items, page))
+    }
+
+    pub(in crate::storage::postgres) fn list_attachments_for_host_in_conn(
+        connection: &mut PgConnection,
+        host: &Hostname,
+    ) -> Result<Vec<HostAttachment>, AppError> {
+        let rows = sql_query(
+            "SELECT a.id,
+                    a.host_id,
+                    h.name::text AS host_name,
+                    a.network_id,
+                    n.network::text AS network_cidr,
+                    a.mac_address,
+                    a.comment,
+                    a.created_at,
+                    a.updated_at
+             FROM host_attachments a
+             JOIN hosts h ON h.id = a.host_id
+             JOIN networks n ON n.id = a.network_id
+             WHERE h.name = $1
+             ORDER BY n.network, a.mac_address NULLS LAST",
+        )
+        .bind::<Text, _>(host.as_str())
+        .load::<HostAttachmentRow>(connection)?;
+        rows.into_iter()
+            .map(HostAttachmentRow::into_domain)
+            .collect()
+    }
+
+    pub(in crate::storage::postgres) fn list_attachments_for_hosts_in_conn(
+        connection: &mut PgConnection,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostAttachment>, AppError> {
+        if hosts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str().to_string())
+            .collect::<Vec<_>>();
+        let rows = sql_query(
+            "SELECT a.id,
+                    a.host_id,
+                    h.name::text AS host_name,
+                    a.network_id,
+                    n.network::text AS network_cidr,
+                    a.mac_address,
+                    a.comment,
+                    a.created_at,
+                    a.updated_at
+             FROM host_attachments a
+             JOIN hosts h ON h.id = a.host_id
+             JOIN networks n ON n.id = a.network_id
+             WHERE h.name = ANY($1::text[])
+             ORDER BY h.name, n.network, a.mac_address NULLS LAST",
+        )
+        .bind::<Array<Text>, _>(&host_names)
+        .load::<HostAttachmentRow>(connection)?;
+        rows.into_iter()
+            .map(HostAttachmentRow::into_domain)
+            .collect()
+    }
+
+    pub(in crate::storage::postgres) fn list_attachments_for_network_in_conn(
+        connection: &mut PgConnection,
+        network: &CidrValue,
+    ) -> Result<Vec<HostAttachment>, AppError> {
+        let rows = sql_query(
+            "SELECT a.id,
+                    a.host_id,
+                    h.name::text AS host_name,
+                    a.network_id,
+                    n.network::text AS network_cidr,
+                    a.mac_address,
+                    a.comment,
+                    a.created_at,
+                    a.updated_at
+             FROM host_attachments a
+             JOIN hosts h ON h.id = a.host_id
+             JOIN networks n ON n.id = a.network_id
+             WHERE $1::cidr >>= n.network
+             ORDER BY h.name, a.mac_address NULLS LAST",
+        )
+        .bind::<Text, _>(network.as_str())
+        .load::<HostAttachmentRow>(connection)?;
+        rows.into_iter()
+            .map(HostAttachmentRow::into_domain)
+            .collect()
+    }
+
+    pub(in crate::storage::postgres) fn delete_attachment_in_conn(
+        connection: &mut PgConnection,
+        attachment_id: Uuid,
+    ) -> Result<(), AppError> {
+        let ip_count = ip_addresses::table
+            .filter(ip_addresses::attachment_id.eq(attachment_id))
+            .count()
+            .get_result::<i64>(connection)?;
+        if ip_count > 0 {
+            return Err(AppError::conflict(
+                "host attachment still owns IP address reservations",
+            ));
+        }
+        let deleted = diesel::delete(
+            host_attachments::table.filter(host_attachments::id.eq(attachment_id)),
+        )
+        .execute(connection)?;
+        if deleted == 0 {
+            return Err(AppError::not_found("host attachment was not found"));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn delete_attachment_dhcp_identifier_in_conn(
+        connection: &mut PgConnection,
+        identifier_id: Uuid,
+    ) -> Result<(), AppError> {
+        let deleted = diesel::delete(
+            attachment_dhcp_identifiers::table
+                .filter(attachment_dhcp_identifiers::id.eq(identifier_id)),
+        )
+        .execute(connection)?;
+        if deleted == 0 {
+            return Err(AppError::not_found(
+                "attachment DHCP identifier was not found",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn delete_attachment_prefix_reservation_in_conn(
+        connection: &mut PgConnection,
+        reservation_id: Uuid,
+    ) -> Result<(), AppError> {
+        let deleted = diesel::delete(
+            attachment_prefix_reservations::table
+                .filter(attachment_prefix_reservations::id.eq(reservation_id)),
+        )
+        .execute(connection)?;
+        if deleted == 0 {
+            return Err(AppError::not_found(
+                "attachment prefix reservation was not found",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn list_attachment_community_assignments_in_conn(
+        connection: &mut PgConnection,
+        page: &PageRequest,
+        filter: &AttachmentCommunityAssignmentFilter,
+    ) -> Result<Page<AttachmentCommunityAssignment>, AppError> {
+        let (clauses, values) = filter.sql_conditions();
+        let mut query = String::from(
+            "SELECT aca.id,
+                    aca.attachment_id,
+                    a.host_id,
+                    h.name::text AS host_name,
+                    a.network_id,
+                    n.network::text AS network_cidr,
+                    c.id AS community_id,
+                    c.name::text AS community_name,
+                    np.name::text AS policy_name,
+                    aca.created_at,
+                    aca.updated_at
+             FROM attachment_community_assignments aca
+             JOIN host_attachments a ON a.id = aca.attachment_id
+             JOIN hosts h ON h.id = a.host_id
+             JOIN networks n ON n.id = a.network_id
+             JOIN communities c ON c.id = aca.community_id
+             JOIN network_policies np ON np.id = c.policy_id",
+        );
+        if !clauses.is_empty() {
+            query.push_str(" WHERE ");
+            query.push_str(&clauses.join(" AND "));
+        }
+        let order_col = match page.sort_by() {
+            Some("network") => "n.network::text",
+            Some("policy_name") => "np.name::text",
+            Some("community_name") => "c.name::text",
+            None => "h.name::text",
+            Some(other) => {
+                return Err(AppError::validation(format!(
+                    "unsupported sort_by field for attachments: {other}"
+                )));
+            }
+        };
+        let order_dir = match page.sort_direction() {
+            crate::domain::pagination::SortDirection::Asc => "ASC",
+            crate::domain::pagination::SortDirection::Desc => "DESC",
+        };
+        let count_sql = format!("SELECT COUNT(*) AS count FROM ({query}) AS _c");
+        let total = run_count_query(connection, &count_sql, &values)?;
+
+        let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+            format!(" LIMIT {}", page.limit() + 1)
+        } else {
+            String::new()
+        };
+        query.push_str(&format!(
+            " ORDER BY {order_col} {order_dir}, aca.id{limit_clause}"
+        ));
+
+        let rows = run_dynamic_query::<AttachmentCommunityAssignmentRow>(
+            connection, &query, &values,
+        )?;
+        let items = rows
+            .into_iter()
+            .map(AttachmentCommunityAssignmentRow::into_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows_to_page(items, page, total))
+    }
+
+    pub(in crate::storage::postgres) fn get_attachment_community_assignment_in_conn(
+        connection: &mut PgConnection,
+        assignment_id: Uuid,
+    ) -> Result<AttachmentCommunityAssignment, AppError> {
+        sql_query(
+            "SELECT aca.id,
+                    aca.attachment_id,
+                    a.host_id,
+                    h.name::text AS host_name,
+                    a.network_id,
+                    n.network::text AS network_cidr,
+                    c.id AS community_id,
+                    c.name::text AS community_name,
+                    np.name::text AS policy_name,
+                    aca.created_at,
+                    aca.updated_at
+             FROM attachment_community_assignments aca
+             JOIN host_attachments a ON a.id = aca.attachment_id
+             JOIN hosts h ON h.id = a.host_id
+             JOIN networks n ON n.id = a.network_id
+             JOIN communities c ON c.id = aca.community_id
+             JOIN network_policies np ON np.id = c.policy_id
+             WHERE aca.id = $1",
+        )
+        .bind::<SqlUuid, _>(assignment_id)
+        .get_result::<AttachmentCommunityAssignmentRow>(connection)
+        .optional()?
+        .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))?
+        .into_domain()
+    }
+
+    pub(in crate::storage::postgres) fn delete_attachment_community_assignment_in_conn(
+        connection: &mut PgConnection,
+        assignment_id: Uuid,
+    ) -> Result<(), AppError> {
+        let deleted = diesel::delete(
+            attachment_community_assignments::table
+                .filter(attachment_community_assignments::id.eq(assignment_id)),
+        )
+        .execute(connection)?;
+        if deleted == 0 {
+            return Err(AppError::not_found(
+                "attachment community assignment was not found",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn update_attachment_tx(
         connection: &mut PgConnection,
         attachment_id: Uuid,
         command: UpdateHostAttachment,

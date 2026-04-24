@@ -62,6 +62,72 @@ pub(super) fn create_community_in_state(
     Ok(community)
 }
 
+pub(super) fn list_communities_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &CommunityFilter,
+) -> Result<Page<Community>, AppError> {
+    let items: Vec<Community> = state
+        .communities
+        .values()
+        .filter(|community| filter.matches(community))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["policy_name", "created_at"],
+        |community, field| match field {
+            "policy_name" => community.policy_name().as_str().to_string(),
+            "created_at" => community.created_at().to_rfc3339(),
+            _ => community.name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn get_community_in_state(
+    state: &MemoryState,
+    community_id: Uuid,
+) -> Result<Community, AppError> {
+    state
+        .communities
+        .get(&community_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(format!("community '{}' was not found", community_id)))
+}
+
+pub(super) fn delete_community_in_state(
+    state: &mut MemoryState,
+    community_id: Uuid,
+) -> Result<(), AppError> {
+    state
+        .communities
+        .remove(&community_id)
+        .map(|_| ())
+        .ok_or_else(|| AppError::not_found(format!("community '{}' was not found", community_id)))
+}
+
+pub(super) fn find_community_by_names_in_state(
+    state: &MemoryState,
+    policy_name: &NetworkPolicyName,
+    community_name: &CommunityName,
+) -> Result<Community, AppError> {
+    state
+        .communities
+        .values()
+        .find(|community| {
+            community.policy_name() == policy_name && community.name() == community_name
+        })
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "community '{}:{}' was not found",
+                policy_name.as_str(),
+                community_name.as_str()
+            ))
+        })
+}
+
 #[async_trait]
 impl CommunityStore for MemoryStorage {
     async fn list_communities(
@@ -70,22 +136,7 @@ impl CommunityStore for MemoryStorage {
         filter: &CommunityFilter,
     ) -> Result<Page<Community>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<Community> = state
-            .communities
-            .values()
-            .filter(|community| filter.matches(community))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["policy_name", "created_at"],
-            |community, field| match field {
-                "policy_name" => community.policy_name().as_str().to_string(),
-                "created_at" => community.created_at().to_rfc3339(),
-                _ => community.name().as_str().to_string(),
-            },
-        )
+        list_communities_in_state(&state, page, filter)
     }
 
     async fn create_community(&self, command: CreateCommunity) -> Result<Community, AppError> {
@@ -95,24 +146,12 @@ impl CommunityStore for MemoryStorage {
 
     async fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         let state = self.state.read().await;
-        state
-            .communities
-            .get(&community_id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!("community '{}' was not found", community_id))
-            })
+        get_community_in_state(&state, community_id)
     }
 
     async fn delete_community(&self, community_id: Uuid) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .communities
-            .remove(&community_id)
-            .map(|_| ())
-            .ok_or_else(|| {
-                AppError::not_found(format!("community '{}' was not found", community_id))
-            })
+        delete_community_in_state(&mut state, community_id)
     }
 
     async fn find_community_by_names(
@@ -121,19 +160,6 @@ impl CommunityStore for MemoryStorage {
         community_name: &CommunityName,
     ) -> Result<Community, AppError> {
         let state = self.state.read().await;
-        state
-            .communities
-            .values()
-            .find(|community| {
-                community.policy_name() == policy_name && community.name() == community_name
-            })
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!(
-                    "community '{}:{}' was not found",
-                    policy_name.as_str(),
-                    community_name.as_str()
-                ))
-            })
+        find_community_by_names_in_state(&state, policy_name, community_name)
     }
 }

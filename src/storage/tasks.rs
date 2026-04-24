@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 use crate::{
     domain::{
@@ -8,7 +9,7 @@ use crate::{
     errors::AppError,
 };
 
-/// Asynchronous task queue operations (create, claim, complete, fail).
+/// Asynchronous task queue operations (create, claim, complete, fail, cancel, purge).
 #[async_trait]
 pub trait TaskStore: Send + Sync {
     async fn list_tasks(&self, page: &PageRequest) -> Result<Page<TaskEnvelope>, AppError>;
@@ -24,4 +25,6 @@ pub trait TaskStore: Send + Sync {
         task_id: uuid::Uuid,
         error_summary: String,
     ) -> Result<TaskEnvelope, AppError>;
+    async fn cancel_task(&self, task_id: uuid::Uuid) -> Result<TaskEnvelope, AppError>;
+    async fn purge_finished_tasks_before(&self, cutoff: DateTime<Utc>) -> Result<usize, AppError>;
 }

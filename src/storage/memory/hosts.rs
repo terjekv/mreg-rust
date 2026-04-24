@@ -32,7 +32,10 @@ use super::{
     sort_and_paginate,
 };
 
-fn create_host_in_state(state: &mut MemoryState, command: CreateHost) -> Result<Host, AppError> {
+fn insert_host_record_in_state(
+    state: &mut MemoryState,
+    command: CreateHost,
+) -> Result<Host, AppError> {
     let key = command.name().as_str().to_string();
     if state.hosts.contains_key(&key) {
         return Err(AppError::conflict(format!("host '{}' already exists", key)));
@@ -299,6 +302,502 @@ fn allocate_random_address_in_network(
     }
 }
 
+// ---------------------------------------------------------------------
+// Synchronous, in-state bodies for HostStore methods. The async impls
+// just acquire the lock and call into these. The TxHostStore impl on
+// MemTxStorage calls them directly against the snapshot state.
+// ---------------------------------------------------------------------
+
+pub(super) fn list_hosts_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &HostFilter,
+) -> Result<Page<Host>, AppError> {
+    let items: Vec<Host> = state
+        .hosts
+        .values()
+        .filter(|host| filter.matches(host, &state.ip_addresses))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["name", "comment", "created_at", "updated_at"],
+        |host, field| match field {
+            "comment" => host.comment().to_string(),
+            "created_at" => host.created_at().to_rfc3339(),
+            "updated_at" => host.updated_at().to_rfc3339(),
+            _ => host.name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn create_host_in_state(
+    state: &mut MemoryState,
+    command: CreateHost,
+) -> Result<Host, AppError> {
+    let ip_specs = command.ip_assignments().to_vec();
+    let host = insert_host_record_in_state(state, command)?;
+
+    // Process IP assignments. If any assignment fails, roll back the host
+    // and any partial IP assignments to simulate transactional semantics
+    // for callers that aren't running inside a transaction.
+    let result = (|| -> Result<(), AppError> {
+        for spec in &ip_specs {
+            let assign_cmd = if *spec.allocation() == AllocationPolicy::Random {
+                if let Some(network_cidr) = spec.network() {
+                    let network = state
+                        .networks
+                        .get(&network_cidr.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            AppError::not_found(format!(
+                                "network '{}' was not found",
+                                network_cidr.as_str()
+                            ))
+                        })?;
+                    let address = allocate_random_address_in_network(state, &network)?;
+                    let cmd = AssignIpAddress::new(
+                        host.name().clone(),
+                        Some(address),
+                        None,
+                        spec.mac_address().cloned(),
+                    )?;
+                    cmd.with_auto_dhcp(spec.auto_v4_client_id(), spec.auto_v6_duid_ll())
+                } else {
+                    spec.clone().into_assign_command(host.name().clone())?
+                }
+            } else {
+                spec.clone().into_assign_command(host.name().clone())?
+            };
+            let host_name = host.name().clone();
+            let assignment = assign_ip_in_state(state, assign_cmd)?;
+
+            // Auto-create A/AAAA record
+            let rtype = if assignment.family() == 4 {
+                record_type_names::a()
+            } else {
+                record_type_names::aaaa()
+            };
+            let record_cmd = CreateRecordInstance::new(
+                rtype,
+                RecordOwnerKind::Host,
+                host_name.as_str(),
+                None,
+                json!({ "address": assignment.address().as_str() }),
+            );
+            if let Ok(cmd) = record_cmd {
+                create_record_in_state(state, cmd)?;
+            }
+
+            // Auto-create PTR record if a matching reverse zone exists
+            let ptr_name = ip_to_ptr_name(assignment.address());
+            let has_matching_rz = state.reverse_zones.values().any(|rz| {
+                rz.network()
+                    .is_some_and(|net| net.as_inner().contains(&assignment.address().as_inner()))
+            });
+            if has_matching_rz {
+                let ptr_cmd = CreateRecordInstance::new(
+                    record_type_names::ptr(),
+                    RecordOwnerKind::ReverseZone,
+                    &ptr_name,
+                    None,
+                    json!({ "ptrdname": host_name.as_str() }),
+                );
+                match ptr_cmd {
+                    Ok(cmd) => {
+                        if let Err(err) = create_record_in_state(state, cmd) {
+                            tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to construct cascading PTR record command");
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(err) = result {
+        let host_id = host.id();
+        state.ip_addresses.retain(|_, a| a.host_id() != host_id);
+        delete_records_by_owner_in_state(state, host_id);
+        state.hosts.remove(host.name().as_str());
+        return Err(err);
+    }
+
+    Ok(host)
+}
+
+pub(super) fn get_host_by_name_in_state(
+    state: &MemoryState,
+    name: &Hostname,
+) -> Result<Host, AppError> {
+    state
+        .hosts
+        .get(name.as_str())
+        .cloned()
+        .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name.as_str())))
+}
+
+pub(super) fn list_hosts_by_names_in_state(
+    state: &MemoryState,
+    names: &[Hostname],
+) -> Result<Vec<Host>, AppError> {
+    names
+        .iter()
+        .map(|name| {
+            state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+                AppError::not_found(format!("host '{}' was not found", name.as_str()))
+            })
+        })
+        .collect()
+}
+
+pub(super) fn get_host_auth_context_in_state(
+    state: &MemoryState,
+    name: &Hostname,
+) -> Result<HostAuthContext, AppError> {
+    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+        AppError::not_found(format!("host '{}' was not found", name.as_str()))
+    })?;
+
+    let mut addresses = Vec::new();
+    let mut seen_networks = std::collections::BTreeSet::new();
+    let mut networks = Vec::new();
+    for assignment in state.ip_addresses.values() {
+        if assignment.host_id() != host.id() {
+            continue;
+        }
+        addresses.push(*assignment.address());
+        if seen_networks.insert(assignment.network_id()) {
+            let cidr = state
+                .networks
+                .values()
+                .find(|network| network.id() == assignment.network_id())
+                .ok_or_else(|| {
+                    AppError::internal(format!(
+                        "host '{}' references unknown network id '{}'",
+                        name.as_str(),
+                        assignment.network_id()
+                    ))
+                })?;
+            networks.push(cidr.cidr().clone());
+        }
+    }
+    addresses.sort_by_key(|address| address.as_str());
+    networks.sort_by_key(|network| network.as_str().to_string());
+
+    Ok(HostAuthContext::new(host, addresses, networks))
+}
+
+pub(super) fn update_host_in_state(
+    state: &mut MemoryState,
+    name: &Hostname,
+    command: UpdateHost,
+) -> Result<Host, AppError> {
+    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+        AppError::not_found(format!("host '{}' was not found", name.as_str()))
+    })?;
+    let now = Utc::now();
+    let new_name = command.name.unwrap_or_else(|| host.name().clone());
+    let ttl = command.ttl.resolve(host.ttl());
+    let comment = command
+        .comment
+        .unwrap_or_else(|| host.comment().to_string());
+    let zone = command.zone.resolve(host.zone().cloned());
+    if let Some(ref z) = zone
+        && !state.forward_zones.contains_key(z.as_str())
+    {
+        return Err(AppError::not_found(format!(
+            "forward zone '{}' was not found",
+            z.as_str()
+        )));
+    }
+    let updated = Host::restore(
+        host.id(),
+        new_name.clone(),
+        zone,
+        ttl,
+        comment,
+        host.created_at(),
+        now,
+    )?;
+    if new_name.as_str() != name.as_str() {
+        state.hosts.remove(name.as_str());
+        if let Ok(new_dns_name) = DnsName::new(new_name.as_str()) {
+            let now = Utc::now();
+            for record in &mut state.records {
+                if record.owner_id() == Some(host.id()) {
+                    *record = RecordInstance::restore(
+                        record.id(),
+                        record.rrset_id(),
+                        record.type_id(),
+                        record.type_name().clone(),
+                        record.owner_kind().cloned(),
+                        record.owner_id(),
+                        new_dns_name.clone(),
+                        record.zone_id(),
+                        record.ttl(),
+                        record.data().clone(),
+                        record.raw_rdata().cloned(),
+                        record.rendered().map(str::to_string),
+                        record.created_at(),
+                        now,
+                    );
+                }
+            }
+            let rrset_ids: Vec<Uuid> = state
+                .rrsets
+                .values()
+                .filter(|rs| rs.anchor_id() == Some(host.id()))
+                .map(|rs| rs.id())
+                .collect();
+            for rrset_id in rrset_ids {
+                if let Some(rrset) = state.rrsets.remove(&rrset_id) {
+                    let updated_rrset = RecordRrset::restore(
+                        rrset.id(),
+                        rrset.type_id(),
+                        rrset.type_name().clone(),
+                        rrset.dns_class().clone(),
+                        new_dns_name.clone(),
+                        rrset.anchor_kind().cloned(),
+                        rrset.anchor_id(),
+                        Some(new_name.as_str().to_string()),
+                        rrset.zone_id(),
+                        rrset.ttl(),
+                        rrset.created_at(),
+                        rrset.updated_at(),
+                    );
+                    state.rrsets.insert(rrset_id, updated_rrset);
+                }
+            }
+        }
+        if let Some(zone_name) = updated.zone() {
+            let zone_id = state.forward_zones.get(zone_name.as_str()).map(|z| z.id());
+            if let Some(zone_id) = zone_id {
+                bump_zone_serial_in_state(state, zone_id);
+            }
+        }
+    }
+    state
+        .hosts
+        .insert(new_name.as_str().to_string(), updated.clone());
+    Ok(updated)
+}
+
+pub(super) fn delete_host_in_state(
+    state: &mut MemoryState,
+    name: &Hostname,
+) -> Result<(), AppError> {
+    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+        AppError::not_found(format!("host '{}' was not found", name.as_str()))
+    })?;
+    delete_records_by_owner_in_state(state, host.id());
+    if let Some(zone_name) = host.zone()
+        && let Some(zone) = state.forward_zones.get(zone_name.as_str())
+    {
+        let zone_id = zone.id();
+        bump_zone_serial_in_state(state, zone_id);
+    }
+    state.hosts.remove(name.as_str());
+    state
+        .ip_addresses
+        .retain(|_, assignment| assignment.host_id() != host.id());
+    Ok(())
+}
+
+pub(super) fn list_ip_addresses_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+) -> Result<Page<IpAddressAssignment>, AppError> {
+    let mut items: Vec<IpAddressAssignment> = state.ip_addresses.values().cloned().collect();
+    items.sort_by_key(|item| item.id());
+    paginate_by_cursor(items, page)
+}
+
+pub(super) fn list_ip_addresses_for_host_in_state(
+    state: &MemoryState,
+    host: &Hostname,
+    page: &PageRequest,
+) -> Result<Page<IpAddressAssignment>, AppError> {
+    let host = state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
+        AppError::not_found(format!("host '{}' was not found", host.as_str()))
+    })?;
+    let mut items: Vec<IpAddressAssignment> = state
+        .ip_addresses
+        .values()
+        .filter(|assignment| assignment.host_id() == host.id())
+        .cloned()
+        .collect();
+    items.sort_by_key(|item| item.id());
+    paginate_by_cursor(items, page)
+}
+
+pub(super) fn list_ip_addresses_for_hosts_in_state(
+    state: &MemoryState,
+    hosts: &[Hostname],
+) -> Result<Vec<IpAddressAssignment>, AppError> {
+    let host_ids = hosts
+        .iter()
+        .map(|host| {
+            state
+                .hosts
+                .get(host.as_str())
+                .map(|value| value.id())
+                .ok_or_else(|| {
+                    AppError::not_found(format!("host '{}' was not found", host.as_str()))
+                })
+        })
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    let mut items: Vec<IpAddressAssignment> = state
+        .ip_addresses
+        .values()
+        .filter(|assignment| host_ids.contains(&assignment.host_id()))
+        .cloned()
+        .collect();
+    items.sort_by_key(|item| item.id());
+    Ok(items)
+}
+
+pub(super) fn get_ip_address_in_state(
+    state: &MemoryState,
+    address: &IpAddressValue,
+) -> Result<IpAddressAssignment, AppError> {
+    let key = address.as_str();
+    state
+        .ip_addresses
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(format!("IP address {key}")))
+}
+
+pub(super) fn assign_ip_address_in_state(
+    state: &mut MemoryState,
+    command: AssignIpAddress,
+) -> Result<IpAddressAssignment, AppError> {
+    let host_name = command.host_name().clone();
+    let assignment = assign_ip_in_state(state, command)?;
+
+    let rtype = if assignment.family() == 4 {
+        record_type_names::a()
+    } else {
+        record_type_names::aaaa()
+    };
+    let record_cmd = CreateRecordInstance::new(
+        rtype,
+        RecordOwnerKind::Host,
+        host_name.as_str(),
+        None,
+        json!({ "address": assignment.address().as_str() }),
+    );
+    if let Ok(cmd) = record_cmd {
+        create_record_in_state(state, cmd)?;
+    }
+
+    let ptr_name = ip_to_ptr_name(assignment.address());
+    let has_matching_rz = state.reverse_zones.values().any(|rz| {
+        rz.network()
+            .is_some_and(|net| net.as_inner().contains(&assignment.address().as_inner()))
+    });
+    if has_matching_rz {
+        let ptr_cmd = CreateRecordInstance::new(
+            record_type_names::ptr(),
+            RecordOwnerKind::ReverseZone,
+            &ptr_name,
+            None,
+            json!({ "ptrdname": host_name.as_str() }),
+        );
+        match ptr_cmd {
+            Ok(cmd) => {
+                if let Err(err) = create_record_in_state(state, cmd) {
+                    tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to construct cascading PTR record command");
+            }
+        }
+    }
+
+    Ok(assignment)
+}
+
+pub(super) fn update_ip_address_in_state(
+    state: &mut MemoryState,
+    address: &IpAddressValue,
+    command: UpdateIpAddress,
+) -> Result<IpAddressAssignment, AppError> {
+    let key = address.as_str();
+    let existing = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
+        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    })?;
+    let now = Utc::now();
+    let mac = command.mac_address.resolve(existing.mac_address().cloned());
+    let updated = IpAddressAssignment::restore(
+        existing.id(),
+        existing.host_id(),
+        existing.attachment_id(),
+        *existing.address(),
+        existing.network_id(),
+        mac,
+        existing.created_at(),
+        now,
+    )?;
+    state.ip_addresses.insert(key.clone(), updated.clone());
+    Ok(updated)
+}
+
+pub(super) fn unassign_ip_address_in_state(
+    state: &mut MemoryState,
+    address: &IpAddressValue,
+) -> Result<IpAddressAssignment, AppError> {
+    let key = address.as_str();
+    let assignment = state.ip_addresses.remove(&key).ok_or_else(|| {
+        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    })?;
+
+    let host_name = state
+        .hosts
+        .values()
+        .find(|h| h.id() == assignment.host_id())
+        .map(|h| h.name().as_str().to_string());
+
+    if let Some(host_name) = host_name {
+        let type_name = if assignment.family() == 4 { "A" } else { "AAAA" };
+        let addr_str = assignment.address().as_str();
+        let mut kept = Vec::new();
+        let mut removed = Vec::new();
+        for record in state.records.drain(..) {
+            if record.owner_name().eq_ignore_ascii_case(&host_name)
+                && record.type_name().as_str() == type_name
+                && record
+                    .data()
+                    .get("address")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|a| a == addr_str)
+            {
+                removed.push(record);
+            } else {
+                kept.push(record);
+            }
+        }
+        state.records = kept;
+        let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
+        for rrset_id in rrset_ids {
+            if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
+                state.rrsets.remove(&rrset_id);
+            }
+        }
+    }
+
+    let ptr_name = ip_to_ptr_name(assignment.address());
+    delete_records_by_name_and_type_in_state(state, &ptr_name, "PTR");
+
+    Ok(assignment)
+}
+
 #[async_trait]
 impl HostStore for MemoryStorage {
     async fn list_hosts(
@@ -307,292 +806,37 @@ impl HostStore for MemoryStorage {
         filter: &HostFilter,
     ) -> Result<Page<Host>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<Host> = state
-            .hosts
-            .values()
-            .filter(|host| filter.matches(host, &state.ip_addresses))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["name", "comment", "created_at", "updated_at"],
-            |host, field| match field {
-                "comment" => host.comment().to_string(),
-                "created_at" => host.created_at().to_rfc3339(),
-                "updated_at" => host.updated_at().to_rfc3339(),
-                _ => host.name().as_str().to_string(),
-            },
-        )
+        list_hosts_in_state(&state, page, filter)
     }
 
     async fn create_host(&self, command: CreateHost) -> Result<Host, AppError> {
         let mut state = self.state.write().await;
-        let ip_specs = command.ip_assignments().to_vec();
-        let host = create_host_in_state(&mut state, command)?;
-
-        // Process IP assignments atomically within the same write lock.
-        // If any assignment fails, roll back the host and any partial IP
-        // assignments to simulate transactional semantics.
-        let result = (|| -> Result<(), AppError> {
-            for spec in &ip_specs {
-                let assign_cmd = if *spec.allocation() == AllocationPolicy::Random {
-                    if let Some(network_cidr) = spec.network() {
-                        let network = state
-                            .networks
-                            .get(&network_cidr.as_str())
-                            .cloned()
-                            .ok_or_else(|| {
-                                AppError::not_found(format!(
-                                    "network '{}' was not found",
-                                    network_cidr.as_str()
-                                ))
-                            })?;
-                        let address = allocate_random_address_in_network(&state, &network)?;
-                        let cmd = AssignIpAddress::new(
-                            host.name().clone(),
-                            Some(address),
-                            None,
-                            spec.mac_address().cloned(),
-                        )?;
-                        cmd.with_auto_dhcp(spec.auto_v4_client_id(), spec.auto_v6_duid_ll())
-                    } else {
-                        spec.clone().into_assign_command(host.name().clone())?
-                    }
-                } else {
-                    spec.clone().into_assign_command(host.name().clone())?
-                };
-                let host_name = host.name().clone();
-                let assignment = assign_ip_in_state(&mut state, assign_cmd)?;
-
-                // Auto-create A/AAAA record
-                let rtype = if assignment.family() == 4 {
-                    record_type_names::a()
-                } else {
-                    record_type_names::aaaa()
-                };
-                let record_cmd = CreateRecordInstance::new(
-                    rtype,
-                    RecordOwnerKind::Host,
-                    host_name.as_str(),
-                    None,
-                    json!({ "address": assignment.address().as_str() }),
-                );
-                if let Ok(cmd) = record_cmd {
-                    create_record_in_state(&mut state, cmd)?;
-                }
-
-                // Auto-create PTR record if a matching reverse zone exists
-                let ptr_name = ip_to_ptr_name(assignment.address());
-                let has_matching_rz = state.reverse_zones.values().any(|rz| {
-                    rz.network().is_some_and(|net| {
-                        net.as_inner().contains(&assignment.address().as_inner())
-                    })
-                });
-                if has_matching_rz {
-                    let ptr_cmd = CreateRecordInstance::new(
-                        record_type_names::ptr(),
-                        RecordOwnerKind::ReverseZone,
-                        &ptr_name,
-                        None,
-                        json!({ "ptrdname": host_name.as_str() }),
-                    );
-                    match ptr_cmd {
-                        Ok(cmd) => {
-                            if let Err(err) = create_record_in_state(&mut state, cmd) {
-                                tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
-                            }
-                        }
-                        Err(err) => {
-                            tracing::warn!(error = %err, "failed to construct cascading PTR record command");
-                        }
-                    }
-                }
-            }
-            Ok(())
-        })();
-
-        if let Err(err) = result {
-            // Roll back: remove any IP assignments and the host itself
-            let host_id = host.id();
-            state.ip_addresses.retain(|_, a| a.host_id() != host_id);
-            delete_records_by_owner_in_state(&mut state, host_id);
-            state.hosts.remove(host.name().as_str());
-            return Err(err);
-        }
-
-        Ok(host)
+        create_host_in_state(&mut state, command)
     }
 
     async fn get_host_by_name(&self, name: &Hostname) -> Result<Host, AppError> {
         let state = self.state.read().await;
-        state
-            .hosts
-            .get(name.as_str())
-            .cloned()
-            .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name.as_str())))
+        get_host_by_name_in_state(&state, name)
     }
 
     async fn list_hosts_by_names(&self, names: &[Hostname]) -> Result<Vec<Host>, AppError> {
         let state = self.state.read().await;
-        names
-            .iter()
-            .map(|name| {
-                state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-                    AppError::not_found(format!("host '{}' was not found", name.as_str()))
-                })
-            })
-            .collect()
+        list_hosts_by_names_in_state(&state, names)
     }
 
     async fn get_host_auth_context(&self, name: &Hostname) -> Result<HostAuthContext, AppError> {
         let state = self.state.read().await;
-        let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-            AppError::not_found(format!("host '{}' was not found", name.as_str()))
-        })?;
-
-        let mut addresses = Vec::new();
-        let mut seen_networks = std::collections::BTreeSet::new();
-        let mut networks = Vec::new();
-        for assignment in state.ip_addresses.values() {
-            if assignment.host_id() != host.id() {
-                continue;
-            }
-            addresses.push(*assignment.address());
-            if seen_networks.insert(assignment.network_id()) {
-                let cidr = state
-                    .networks
-                    .values()
-                    .find(|network| network.id() == assignment.network_id())
-                    .ok_or_else(|| {
-                        AppError::internal(format!(
-                            "host '{}' references unknown network id '{}'",
-                            name.as_str(),
-                            assignment.network_id()
-                        ))
-                    })?;
-                networks.push(cidr.cidr().clone());
-            }
-        }
-        addresses.sort_by_key(|address| address.as_str());
-        networks.sort_by_key(|network| network.as_str().to_string());
-
-        Ok(HostAuthContext::new(host, addresses, networks))
+        get_host_auth_context_in_state(&state, name)
     }
 
     async fn update_host(&self, name: &Hostname, command: UpdateHost) -> Result<Host, AppError> {
         let mut state = self.state.write().await;
-        let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-            AppError::not_found(format!("host '{}' was not found", name.as_str()))
-        })?;
-        let now = Utc::now();
-        let new_name = command.name.unwrap_or_else(|| host.name().clone());
-        let ttl = command.ttl.resolve(host.ttl());
-        let comment = command
-            .comment
-            .unwrap_or_else(|| host.comment().to_string());
-        let zone = command.zone.resolve(host.zone().cloned());
-        if let Some(ref z) = zone
-            && !state.forward_zones.contains_key(z.as_str())
-        {
-            return Err(AppError::not_found(format!(
-                "forward zone '{}' was not found",
-                z.as_str()
-            )));
-        }
-        let updated = Host::restore(
-            host.id(),
-            new_name.clone(),
-            zone,
-            ttl,
-            comment,
-            host.created_at(),
-            now,
-        )?;
-        if new_name.as_str() != name.as_str() {
-            state.hosts.remove(name.as_str());
-            // Cascade rename to records and rrsets
-            if let Ok(new_dns_name) = DnsName::new(new_name.as_str()) {
-                let now = Utc::now();
-                for record in &mut state.records {
-                    if record.owner_id() == Some(host.id()) {
-                        *record = RecordInstance::restore(
-                            record.id(),
-                            record.rrset_id(),
-                            record.type_id(),
-                            record.type_name().clone(),
-                            record.owner_kind().cloned(),
-                            record.owner_id(),
-                            new_dns_name.clone(),
-                            record.zone_id(),
-                            record.ttl(),
-                            record.data().clone(),
-                            record.raw_rdata().cloned(),
-                            record.rendered().map(str::to_string),
-                            record.created_at(),
-                            now,
-                        );
-                    }
-                }
-                let rrset_ids: Vec<Uuid> = state
-                    .rrsets
-                    .values()
-                    .filter(|rs| rs.anchor_id() == Some(host.id()))
-                    .map(|rs| rs.id())
-                    .collect();
-                for rrset_id in rrset_ids {
-                    if let Some(rrset) = state.rrsets.remove(&rrset_id) {
-                        let updated_rrset = RecordRrset::restore(
-                            rrset.id(),
-                            rrset.type_id(),
-                            rrset.type_name().clone(),
-                            rrset.dns_class().clone(),
-                            new_dns_name.clone(),
-                            rrset.anchor_kind().cloned(),
-                            rrset.anchor_id(),
-                            Some(new_name.as_str().to_string()),
-                            rrset.zone_id(),
-                            rrset.ttl(),
-                            rrset.created_at(),
-                            rrset.updated_at(),
-                        );
-                        state.rrsets.insert(rrset_id, updated_rrset);
-                    }
-                }
-            }
-            // Bump zone serial after rename (DNS-visible change)
-            if let Some(zone_name) = updated.zone() {
-                let zone_id = state.forward_zones.get(zone_name.as_str()).map(|z| z.id());
-                if let Some(zone_id) = zone_id {
-                    bump_zone_serial_in_state(&mut state, zone_id);
-                }
-            }
-        }
-        state
-            .hosts
-            .insert(new_name.as_str().to_string(), updated.clone());
-        Ok(updated)
+        update_host_in_state(&mut state, name, command)
     }
 
     async fn delete_host(&self, name: &Hostname) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-            AppError::not_found(format!("host '{}' was not found", name.as_str()))
-        })?;
-        // Cascade: delete all records owned by this host
-        delete_records_by_owner_in_state(&mut state, host.id());
-        // Cascade: bump zone serial
-        if let Some(zone_name) = host.zone()
-            && let Some(zone) = state.forward_zones.get(zone_name.as_str())
-        {
-            let zone_id = zone.id();
-            bump_zone_serial_in_state(&mut state, zone_id);
-        }
-        state.hosts.remove(name.as_str());
-        state
-            .ip_addresses
-            .retain(|_, assignment| assignment.host_id() != host.id());
-        Ok(())
+        delete_host_in_state(&mut state, name)
     }
 
     async fn list_ip_addresses(
@@ -600,9 +844,7 @@ impl HostStore for MemoryStorage {
         page: &PageRequest,
     ) -> Result<Page<IpAddressAssignment>, AppError> {
         let state = self.state.read().await;
-        let mut items: Vec<IpAddressAssignment> = state.ip_addresses.values().cloned().collect();
-        items.sort_by_key(|item| item.id());
-        paginate_by_cursor(items, page)
+        list_ip_addresses_in_state(&state, page)
     }
 
     async fn list_ip_addresses_for_host(
@@ -611,17 +853,7 @@ impl HostStore for MemoryStorage {
         page: &PageRequest,
     ) -> Result<Page<IpAddressAssignment>, AppError> {
         let state = self.state.read().await;
-        let host = state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
-            AppError::not_found(format!("host '{}' was not found", host.as_str()))
-        })?;
-        let mut items: Vec<IpAddressAssignment> = state
-            .ip_addresses
-            .values()
-            .filter(|assignment| assignment.host_id() == host.id())
-            .cloned()
-            .collect();
-        items.sort_by_key(|item| item.id());
-        paginate_by_cursor(items, page)
+        list_ip_addresses_for_host_in_state(&state, host, page)
     }
 
     async fn list_ip_addresses_for_hosts(
@@ -629,26 +861,7 @@ impl HostStore for MemoryStorage {
         hosts: &[Hostname],
     ) -> Result<Vec<IpAddressAssignment>, AppError> {
         let state = self.state.read().await;
-        let host_ids = hosts
-            .iter()
-            .map(|host| {
-                state
-                    .hosts
-                    .get(host.as_str())
-                    .map(|value| value.id())
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("host '{}' was not found", host.as_str()))
-                    })
-            })
-            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-        let mut items: Vec<IpAddressAssignment> = state
-            .ip_addresses
-            .values()
-            .filter(|assignment| host_ids.contains(&assignment.host_id()))
-            .cloned()
-            .collect();
-        items.sort_by_key(|item| item.id());
-        Ok(items)
+        list_ip_addresses_for_hosts_in_state(&state, hosts)
     }
 
     async fn get_ip_address(
@@ -656,12 +869,7 @@ impl HostStore for MemoryStorage {
         address: &IpAddressValue,
     ) -> Result<IpAddressAssignment, AppError> {
         let state = self.state.read().await;
-        let key = address.as_str();
-        state
-            .ip_addresses
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| AppError::not_found(format!("IP address {key}")))
+        get_ip_address_in_state(&state, address)
     }
 
     async fn assign_ip_address(
@@ -669,53 +877,7 @@ impl HostStore for MemoryStorage {
         command: AssignIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
         let mut state = self.state.write().await;
-        let host_name = command.host_name().clone();
-        let assignment = assign_ip_in_state(&mut state, command)?;
-
-        // Auto-create A/AAAA record
-        let rtype = if assignment.family() == 4 {
-            record_type_names::a()
-        } else {
-            record_type_names::aaaa()
-        };
-        let record_cmd = CreateRecordInstance::new(
-            rtype,
-            RecordOwnerKind::Host,
-            host_name.as_str(),
-            None,
-            json!({ "address": assignment.address().as_str() }),
-        );
-        if let Ok(cmd) = record_cmd {
-            create_record_in_state(&mut state, cmd)?;
-        }
-
-        // Auto-create PTR record if a matching reverse zone exists
-        let ptr_name = ip_to_ptr_name(assignment.address());
-        let has_matching_rz = state.reverse_zones.values().any(|rz| {
-            rz.network()
-                .is_some_and(|net| net.as_inner().contains(&assignment.address().as_inner()))
-        });
-        if has_matching_rz {
-            let ptr_cmd = CreateRecordInstance::new(
-                record_type_names::ptr(),
-                RecordOwnerKind::ReverseZone,
-                &ptr_name,
-                None,
-                json!({ "ptrdname": host_name.as_str() }),
-            );
-            match ptr_cmd {
-                Ok(cmd) => {
-                    if let Err(err) = create_record_in_state(&mut state, cmd) {
-                        tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed to construct cascading PTR record command");
-                }
-            }
-        }
-
-        Ok(assignment)
+        assign_ip_address_in_state(&mut state, command)
     }
 
     async fn update_ip_address(
@@ -724,24 +886,7 @@ impl HostStore for MemoryStorage {
         command: UpdateIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
         let mut state = self.state.write().await;
-        let key = address.as_str();
-        let existing = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
-            AppError::not_found(format!("IP address assignment '{}' was not found", key))
-        })?;
-        let now = Utc::now();
-        let mac = command.mac_address.resolve(existing.mac_address().cloned());
-        let updated = IpAddressAssignment::restore(
-            existing.id(),
-            existing.host_id(),
-            existing.attachment_id(),
-            *existing.address(),
-            existing.network_id(),
-            mac,
-            existing.created_at(),
-            now,
-        )?;
-        state.ip_addresses.insert(key.clone(), updated.clone());
-        Ok(updated)
+        update_ip_address_in_state(&mut state, address, command)
     }
 
     async fn unassign_ip_address(
@@ -749,56 +894,7 @@ impl HostStore for MemoryStorage {
         address: &IpAddressValue,
     ) -> Result<IpAddressAssignment, AppError> {
         let mut state = self.state.write().await;
-        let key = address.as_str();
-        let assignment = state.ip_addresses.remove(&key).ok_or_else(|| {
-            AppError::not_found(format!("IP address assignment '{}' was not found", key))
-        })?;
-
-        // Find the host name for record cleanup
-        let host_name = state
-            .hosts
-            .values()
-            .find(|h| h.id() == assignment.host_id())
-            .map(|h| h.name().as_str().to_string());
-
-        if let Some(host_name) = host_name {
-            // Delete matching A/AAAA record (only the one with matching address data)
-            let type_name = if assignment.family() == 4 {
-                "A"
-            } else {
-                "AAAA"
-            };
-            let addr_str = assignment.address().as_str();
-            let mut kept = Vec::new();
-            let mut removed = Vec::new();
-            for record in state.records.drain(..) {
-                if record.owner_name().eq_ignore_ascii_case(&host_name)
-                    && record.type_name().as_str() == type_name
-                    && record
-                        .data()
-                        .get("address")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|a| a == addr_str)
-                {
-                    removed.push(record);
-                } else {
-                    kept.push(record);
-                }
-            }
-            state.records = kept;
-            let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
-            for rrset_id in rrset_ids {
-                if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
-                    state.rrsets.remove(&rrset_id);
-                }
-            }
-        }
-
-        // Delete PTR record for this address
-        let ptr_name = ip_to_ptr_name(assignment.address());
-        delete_records_by_name_and_type_in_state(&mut state, &ptr_name, "PTR");
-
-        Ok(assignment)
+        unassign_ip_address_in_state(&mut state, address)
     }
 }
 
