@@ -364,6 +364,17 @@ impl TestCtx {
         assert_eq!(status, StatusCode::CREATED);
     }
 
+    pub async fn assign_network_policy(&self, cidr: &str, policy_name: &str) {
+        let encoded_cidr = cidr.replace('/', "%2F");
+        let status = self
+            .patch(
+                &format!("/inventory/networks/{encoded_cidr}"),
+                serde_json::json!({"policy_name": policy_name}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
     /// Assert that an audit event with the given resource_kind, resource_name, and action
     /// exists in the history. Does NOT assume ordering — safe for parallel tests.
     pub async fn assert_audit_exists(
