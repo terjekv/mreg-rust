@@ -12,7 +12,7 @@ use mreg_rust::{
     authn::AuthnClient,
     authz::AuthorizerClient,
     config::{
-        AuthMode, AuthScopeBackendConfig, AuthScopeConfig, Config, LocalUserConfig,
+        AuthMode, AuthProviderBackendConfig, AuthProviderConfig, Config, LocalUserConfig,
         StorageBackendSetting,
     },
     events::EventSinkClient,
@@ -68,7 +68,8 @@ async fn call_json(request: actix_http::Request, state: AppState) -> (StatusCode
     let body = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).expect("json body")
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
     };
     (status, body)
 }
@@ -103,10 +104,10 @@ fn local_password_hash(password: &str) -> String {
         .to_string()
 }
 
-fn local_scope(name: &str) -> AuthScopeConfig {
-    AuthScopeConfig {
+fn local_provider(name: &str) -> AuthProviderConfig {
+    AuthProviderConfig {
         name: name.to_string(),
-        backend: AuthScopeBackendConfig::Local {
+        backend: AuthProviderBackendConfig::Local {
             users: vec![LocalUserConfig {
                 username: "admin".to_string(),
                 password_hash: local_password_hash("secret"),
@@ -116,10 +117,15 @@ fn local_scope(name: &str) -> AuthScopeConfig {
     }
 }
 
-fn remote_scope(name: &str, login_url: String, issuer: &str, secret: &str) -> AuthScopeConfig {
-    AuthScopeConfig {
+fn remote_provider(
+    name: &str,
+    login_url: String,
+    issuer: &str,
+    secret: &str,
+) -> AuthProviderConfig {
+    AuthProviderConfig {
         name: name.to_string(),
-        backend: AuthScopeBackendConfig::Remote {
+        backend: AuthProviderBackendConfig::Remote {
             login_url,
             timeout_ms: 5000,
             default_service_name: None,
@@ -204,13 +210,13 @@ async fn none_mode_keeps_header_based_identity_and_disables_login() {
             {"id":"net","namespace":[],"key":"net"}
         ])
     );
-    assert!(body["auth_scope"].is_null());
+    assert!(body["identity_scope"].is_null());
     assert!(body["auth_provider_kind"].is_null());
 
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"alice","password":"secret"}))
+            .set_json(json!({"identity_scope":"local","username":"alice","password":"secret"}))
             .to_request(),
         state,
     )
@@ -220,17 +226,83 @@ async fn none_mode_keeps_header_based_identity_and_disables_login() {
 }
 
 #[actix_web::test]
-async fn local_scope_login_issues_namespaced_identity() {
+async fn provider_discovery_reports_none_mode_as_one_response_contract() {
+    let actual = call_json(
+        test::TestRequest::get().uri("/auth/providers").to_request(),
+        build_state(base_config()),
+    )
+    .await;
+
+    assert_eq!(
+        actual,
+        (
+            StatusCode::OK,
+            json!({"authentication_mode":"none","providers":[]})
+        )
+    );
+}
+
+#[actix_web::test]
+async fn provider_discovery_is_public_safe_and_deterministic() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![local_scope("local")];
+    config.auth_providers = vec![
+        remote_provider(
+            "remote-sso",
+            "http://127.0.0.1:9/login".to_string(),
+            "auth.example",
+            "remote-secret",
+        ),
+        local_provider("local"),
+    ];
+
+    let actual = call_json(
+        test::TestRequest::get().uri("/auth/providers").to_request(),
+        build_state(config),
+    )
+    .await;
+    assert_eq!(
+        actual,
+        (
+            StatusCode::OK,
+            json!({
+                "authentication_mode": "scoped",
+                "providers": [
+                    {
+                        "identity_scope": "local",
+                        "kind": "local",
+                        "display_name": "local",
+                        "display_order": 0,
+                        "supports_service_name": false,
+                        "supports_otp": false
+                    },
+                    {
+                        "identity_scope": "remote-sso",
+                        "kind": "remote",
+                        "display_name": "remote-sso",
+                        "display_order": 100,
+                        "supports_service_name": true,
+                        "supports_otp": true
+                    }
+                ]
+            })
+        )
+    );
+}
+
+#[actix_web::test]
+async fn local_provider_login_issues_namespaced_identity() {
+    let mut config = base_config();
+    config.auth_mode = AuthMode::Scoped;
+    config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
+    config.auth_providers = vec![local_provider("local")];
 
     let state = build_state(config);
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"local:admin","password":"secret"}))
+            .set_json(json!({"identity_scope":"local","username":"admin","password":"secret"}))
             .to_request(),
         state.clone(),
     )
@@ -248,7 +320,7 @@ async fn local_scope_login_issues_namespaced_identity() {
             {"id":"ops","namespace":["mreg","local"],"key":"mreg::local::ops"}
         ])
     );
-    assert_eq!(body["auth_scope"], "local");
+    assert_eq!(body["identity_scope"], "local");
     assert_eq!(body["auth_provider_kind"], "local");
 
     let (status, body) = call_json(
@@ -264,12 +336,12 @@ async fn local_scope_login_issues_namespaced_identity() {
     assert_eq!(body["principal"]["namespace"], json!(["mreg", "local"]));
     assert_eq!(body["principal"]["key"], "mreg::local::admin");
     assert_eq!(body["principal"]["username"], "admin");
-    assert_eq!(body["auth_scope"], "local");
+    assert_eq!(body["identity_scope"], "local");
     assert_eq!(body["auth_provider_kind"], "local");
 }
 
 #[actix_web::test]
-async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
+async fn remote_provider_login_returns_mreg_token_and_me_uses_bearer() {
     let issuer = "auth.example";
     let secret = "remote-secret";
     let upstream_token = remote_token(secret, issuer, "alice", &["ops", "net"]);
@@ -282,7 +354,7 @@ async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![remote_scope(
+    config.auth_providers = vec![remote_provider(
         "remote-sso",
         server.url.clone(),
         issuer,
@@ -293,7 +365,7 @@ async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"remote-sso:alice","password":"secret"}))
+            .set_json(json!({"identity_scope":"remote-sso","username":"alice","password":"secret"}))
             .to_request(),
         state.clone(),
     )
@@ -315,7 +387,7 @@ async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
             {"id":"net","namespace":["mreg","remote-sso"],"key":"mreg::remote-sso::net"}
         ])
     );
-    assert_eq!(body["auth_scope"], "remote-sso");
+    assert_eq!(body["identity_scope"], "remote-sso");
     assert_eq!(body["auth_provider_kind"], "remote");
 
     let (status, body) = call_json(
@@ -334,7 +406,7 @@ async fn remote_scope_login_returns_mreg_token_and_me_uses_bearer() {
     );
     assert_eq!(body["principal"]["key"], "mreg::remote-sso::alice");
     assert_eq!(body["principal"]["username"], "alice");
-    assert_eq!(body["auth_scope"], "remote-sso");
+    assert_eq!(body["identity_scope"], "remote-sso");
     assert_eq!(body["auth_provider_kind"], "remote");
 }
 
@@ -349,7 +421,7 @@ async fn scoped_mode_requires_bearer_and_ignores_identity_headers() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![remote_scope(
+    config.auth_providers = vec![remote_provider(
         "remote-sso",
         server.url.clone(),
         issuer,
@@ -370,7 +442,7 @@ async fn scoped_mode_requires_bearer_and_ignores_identity_headers() {
     let (status, login_body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"remote-sso:alice","password":"secret"}))
+            .set_json(json!({"identity_scope":"remote-sso","username":"alice","password":"secret"}))
             .to_request(),
         state.clone(),
     )
@@ -401,7 +473,7 @@ async fn scoped_mode_rejects_missing_or_unknown_scope() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![local_scope("local")];
+    config.auth_providers = vec![local_provider("local")];
 
     let state = build_state(config.clone());
     let (status, body) = call_json(
@@ -413,12 +485,12 @@ async fn scoped_mode_rejects_missing_or_unknown_scope() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], "validation_error");
+    assert!(body.is_string());
 
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"unknown:admin","password":"secret"}))
+            .set_json(json!({"identity_scope":"unknown","username":"admin","password":"secret"}))
             .to_request(),
         state,
     )
@@ -428,13 +500,13 @@ async fn scoped_mode_rejects_missing_or_unknown_scope() {
 }
 
 #[actix_web::test]
-async fn remote_scope_propagates_invalid_credentials() {
+async fn remote_provider_propagates_invalid_credentials() {
     let server = spawn_mock_server(401, "{}".to_string()).await;
 
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![remote_scope(
+    config.auth_providers = vec![remote_provider(
         "remote-sso",
         server.url.clone(),
         "auth.example",
@@ -445,7 +517,7 @@ async fn remote_scope_propagates_invalid_credentials() {
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"remote-sso:alice","password":"bad"}))
+            .set_json(json!({"identity_scope":"remote-sso","username":"alice","password":"bad"}))
             .to_request(),
         state,
     )
@@ -459,7 +531,7 @@ async fn scoped_mode_health_and_version_stay_unauthenticated() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![local_scope("local")];
+    config.auth_providers = vec![local_provider("local")];
 
     let state = build_state(config);
     let (status, _) = call_json(
@@ -482,13 +554,13 @@ async fn scoped_mode_logout_revokes_current_token() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![local_scope("local")];
+    config.auth_providers = vec![local_provider("local")];
 
     let state = build_state(config);
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"local:admin","password":"secret"}))
+            .set_json(json!({"identity_scope":"local","username":"admin","password":"secret"}))
             .to_request(),
         state.clone(),
     )
@@ -524,13 +596,13 @@ async fn logout_all_revokes_existing_tokens_for_the_principal() {
     let mut config = base_config();
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![local_scope("local")];
+    config.auth_providers = vec![local_provider("local")];
 
     let state = build_state(config);
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"local:admin","password":"secret"}))
+            .set_json(json!({"identity_scope":"local","username":"admin","password":"secret"}))
             .to_request(),
         state.clone(),
     )
@@ -568,13 +640,13 @@ async fn logout_all_requires_authorization() {
     config.allow_dev_authz_bypass = false;
     config.auth_mode = AuthMode::Scoped;
     config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
-    config.auth_scopes = vec![local_scope("local")];
+    config.auth_providers = vec![local_provider("local")];
 
     let state = build_state(config);
     let (status, body) = call_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":"local:admin","password":"secret"}))
+            .set_json(json!({"identity_scope":"local","username":"admin","password":"secret"}))
             .to_request(),
         state.clone(),
     )

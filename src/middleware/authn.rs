@@ -110,9 +110,11 @@ fn is_exempt_path(path: &str) -> bool {
     matches!(
         path,
         "/api/v1/auth/login"
+            | "/api/v1/auth/providers"
             | "/api/v1/system/health"
             | "/api/v1/system/version"
             | "/auth/login"
+            | "/auth/providers"
             | "/system/health"
             | "/system/version"
     ) || path.starts_with("/swagger-ui/")

@@ -50,6 +50,8 @@ redis = { version = "0.27", features = ["tokio-comp", "streams"], optional = tru
 jsonwebtoken = "9.3.1"
 ldap3 = { version = "0.12.1", optional = true, default-features = false, features = ["tls-rustls-ring"] }
 rand = "0.8"
+regex = "1"
+toml = "0.9"
 
 [dev-dependencies]
 actix-http = "3"

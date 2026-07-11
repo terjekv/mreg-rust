@@ -29,7 +29,7 @@ pub struct LocalJwtClaims {
     pub principal_namespace: Vec<String>,
     pub username: String,
     pub groups: Vec<LocalJwtGroupClaim>,
-    pub auth_scope: String,
+    pub identity_scope: String,
     pub auth_provider_kind: String,
     pub iat: i64,
     pub exp: i64,
@@ -56,7 +56,7 @@ impl LocalJwtIssuer {
         &self,
         principal: &Principal,
         raw_username: &str,
-        auth_scope: &str,
+        identity_scope: &str,
         auth_provider_kind: &str,
         max_expires_at: Option<DateTime<Utc>>,
     ) -> Result<(String, DateTime<Utc>), AppError> {
@@ -81,7 +81,7 @@ impl LocalJwtIssuer {
                     namespace: group.namespace.clone(),
                 })
                 .collect(),
-            auth_scope: auth_scope.to_string(),
+            identity_scope: identity_scope.to_string(),
             auth_provider_kind: auth_provider_kind.to_string(),
             // Store iat as milliseconds for sub-second revocation precision.
             // This is non-standard (RFC 7519 uses seconds) but allows logout_all
@@ -143,7 +143,7 @@ impl LocalJwtValidator {
         Ok(PrincipalContext::scoped(
             principal,
             data.claims.username,
-            data.claims.auth_scope,
+            data.claims.identity_scope,
             data.claims.auth_provider_kind,
             expires_at,
         )
@@ -446,7 +446,7 @@ mod tests {
         );
         assert_eq!(context.principal.key(), "mreg::local::alice");
         assert_eq!(context.username, "alice");
-        assert_eq!(context.auth_scope.as_deref(), Some("local"));
+        assert_eq!(context.identity_scope.as_deref(), Some("local"));
         assert_eq!(context.auth_provider_kind.as_deref(), Some("local"));
         assert_eq!(context.principal.groups.len(), 1);
         assert_eq!(context.principal.groups[0].id, "ops");
@@ -517,6 +517,7 @@ mod tests {
     #[test]
     fn login_request_debug_redacts_password() {
         let req = super::super::LoginRequest {
+            identity_scope: super::super::IdentityScopeName::new("local").unwrap(),
             username: "alice".to_string(),
             password: "s3cret".to_string(),
             service_name: None,

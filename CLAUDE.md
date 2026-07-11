@@ -16,6 +16,7 @@ Rust reimplementation of the Django-based [mreg](https://github.com/unioslo/mreg
 - Keep invariants close to the data they protect. Constructors and setters should reject invalid states rather than relying on callers to remember preconditions.
 - Use small, explicit APIs. Expose only what callers need, and keep representation details private unless there is a strong reason not to.
 - Prefer `use` imports over inline fully qualified paths for functions, types, and macros. Only fully qualify a path inline when needed to resolve a genuine name ambiguity, or for a one-off reference where a `use` would mislead.
+- Prefer one assertion per test. Use `rstest` cases for multiple inputs or outcomes, and split unrelated response properties into separate tests unless they form one cohesive assertion.
 
 ## Commands
 
@@ -66,7 +67,7 @@ src/db/            → Diesel schema.rs (auto-generated), models.rs (row types)
 
 **Service-layer audit + events:** Audit recording and event emission are enforced at the service layer (`src/services/`), not inside storage backends. This guarantees every mutation is audited and emits a `DomainEvent` regardless of backend. Events are fire-and-forget via `EventSink` trait (`src/events/`), with webhook, AMQP, and Redis backends. AMQP and Redis are behind feature flags. See `docs/event-system.md`.
 
-**Authentication:** Configurable via `MREG_AUTH_MODE` (none/scoped). In `none` mode, identity is trusted from `X-Mreg-User`/`X-Mreg-Groups` headers. In `scoped` mode, named auth scopes (local, remote, LDAP) provide `POST /api/v1/auth/login` with JWT issuance. Actix middleware validates bearer tokens and populates `PrincipalContext` in request extensions. `extract_principal()` reads from extensions first, falling back to headers in none mode. Token revocation is supported via `AuthSessionStore`. See `docs/authentication.md`.
+**Authentication:** Configurable via `MREG_AUTH_MODE` (none/scoped). In `none` mode, identity is trusted from `X-Mreg-User`/`X-Mreg-Groups` headers. In `scoped` mode, a provider registry owns named local, remote, and LDAP providers; login selects one with a separate `identity_scope` field and issues an mreg JWT. Actix middleware validates bearer tokens and populates `PrincipalContext` in request extensions. `extract_principal()` reads from extensions first, falling back to headers in none mode. Token revocation is supported via `AuthSessionStore`. See `docs/authentication.md`.
 
 **Structured logging:** Uses `tracing` with per-request spans containing `request_id`, `principal`, `http.method`, `http.target`, `http.status_code`. Service functions are instrumented with `#[tracing::instrument]` and `resource_kind` fields. Errors are logged automatically (WARN for 4xx, ERROR for 5xx). JSON output via `MREG_JSON_LOGS=true`. See `docs/logging.md`.
 

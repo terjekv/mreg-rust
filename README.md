@@ -31,10 +31,10 @@ cp .env.docker.local .env
 
 See [docs/configuration.md](docs/configuration.md) for all environment variables.
 
-For scoped authentication, copy the scope registry template too:
+For scoped authentication, copy the provider registry template too:
 
 ```bash
-cp auth-scopes.example.json auth-scopes.local.json
+cp auth-providers.example.toml auth-providers.local.toml
 ```
 
 ### Run migrations and start

@@ -4,9 +4,9 @@ use serde::Deserialize;
 use crate::errors::AppError;
 
 use super::jwt::{ForwardJwtValidator, ForwardJwtValidatorConfig};
-use super::{AuthenticatedIdentity, BackendLoginRequest, ScopeAuthenticator};
+use super::{AuthProviderBackend, AuthenticatedIdentity, BackendLoginRequest};
 
-pub struct RemoteScopeConfig {
+pub struct RemoteProviderConfig {
     pub login_url: String,
     pub timeout_ms: u64,
     pub default_service_name: Option<String>,
@@ -20,7 +20,7 @@ pub struct RemoteScopeConfig {
 }
 
 #[derive(Clone)]
-pub struct RemoteScopeAuthenticator {
+pub struct RemoteAuthProvider {
     client: reqwest::Client,
     login_url: String,
     default_service_name: Option<String>,
@@ -35,8 +35,8 @@ struct RemoteLoginResponse {
     token: Option<String>,
 }
 
-impl RemoteScopeAuthenticator {
-    pub fn new(config: RemoteScopeConfig) -> Result<Self, AppError> {
+impl RemoteAuthProvider {
+    pub fn new(config: RemoteProviderConfig) -> Result<Self, AppError> {
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_millis(config.timeout_ms))
@@ -59,8 +59,8 @@ impl RemoteScopeAuthenticator {
 }
 
 #[async_trait]
-impl ScopeAuthenticator for RemoteScopeAuthenticator {
-    async fn login(
+impl AuthProviderBackend for RemoteAuthProvider {
+    async fn authenticate(
         &self,
         mut credentials: BackendLoginRequest,
     ) -> Result<AuthenticatedIdentity, AppError> {

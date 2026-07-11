@@ -50,7 +50,7 @@ In `auth_mode=scoped`, the principal is namespace-aware both internally and at t
 - group id: `ops`
 - group namespace: `["mreg", "local"]`
 
-Authorization should key on namespace plus id, not on a string-encoded `scope:username` identifier.
+Authorization should key on namespace plus id. Provider selection and username are separate login inputs, while the resulting canonical identity remains namespace-aware.
 
 ## Action and resource model
 

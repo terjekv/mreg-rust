@@ -42,7 +42,7 @@ X-Mreg-Groups: ops,net
 
 ### `scoped`
 
-In `scoped` mode, mreg-rust loads one or more named authentication scopes at startup from `MREG_AUTH_SCOPES_FILE`.
+In `scoped` mode, mreg-rust loads one or more named authentication scopes at startup from `MREG_AUTH_CONFIG_PATH`.
 
 Each scope has:
 
@@ -50,11 +50,8 @@ Each scope has:
 - a scope kind: `local`, `ldap`, or `remote`
 - backend-specific settings
 
-Clients log in with `username` in `scope:username` form:
-
-- `local:admin`
-- `ldap-primary:bob`
-- `remote-sso:alice`
+Clients select the provider explicitly with `identity_scope`; the provider-owned
+`username` remains a separate value.
 
 All authenticated sessions use the same mreg-issued bearer token format, regardless of backend type.
 
@@ -70,7 +67,7 @@ Important behavior:
 
 ### `local`
 
-`local` scopes define static users directly in the scopes file.
+`local` providers define static users directly in the provider file.
 
 Each local user has:
 
@@ -82,14 +79,20 @@ Each local user has:
 
 ### `ldap`
 
-`ldap` scopes authenticate directly against LDAP with search -> bind -> group lookup.
+`ldap` scopes authenticate directly against LDAP with search -> bind and configurable
+attribute-to-group mapping.
 
 Login flow:
 
 1. mreg-rust looks up the user with the configured search base and filter.
 2. mreg-rust binds as that user with the supplied password.
-3. After a successful bind, mreg-rust performs group lookup.
-4. mreg-rust canonicalizes the result and issues a local JWT.
+3. After a successful bind, mreg-rust maps configured user attributes to groups.
+4. Group mapping rules extract canonical names from raw attribute values.
+5. Group filters evaluate the extracted names and discard names that do not match.
+6. mreg-rust canonicalizes the result and issues a local JWT.
+
+LDAP connections always use verified TLS. `ldaps://` uses implicit TLS, while
+`ldap://` is upgraded with StartTLS before any bind or search.
 
 LDAP support is compile-gated behind the `ldap` feature.
 
@@ -129,11 +132,9 @@ Each successful login resolves to:
 - principal key: serialized namespace plus id, for example `mreg::local::admin`
 - group key: serialized namespace plus id, for example `mreg::local::ops`
 
-The login input still uses `scope:username`, but that is only the login syntax. It is not the stored authenticated identity.
-
 Examples:
 
-- login input: `local:admin`
+- login input: `identity_scope="local", username="admin"`
 - authenticated principal: `id="admin", namespace=["mreg","local"]`
 - principal key: `mreg::local::admin`
 
@@ -147,7 +148,8 @@ Request body:
 
 ```json
 {
-  "username": "local:admin",
+  "identity_scope": "local",
+  "username": "admin",
   "password": "secret",
   "service_name": "mreg",
   "otp_code": "123456"
@@ -156,6 +158,7 @@ Request body:
 
 Fields:
 
+- `identity_scope`: required configured provider name
 - `username`: required
 - `password`: required
 - `service_name`: optional
@@ -188,7 +191,7 @@ Success response:
       }
     ]
   },
-  "auth_scope": "local",
+  "identity_scope": "local",
   "auth_provider_kind": "local"
 }
 ```
@@ -196,8 +199,18 @@ Success response:
 Behavior notes:
 
 - in `none` mode, login is disabled
-- in `scoped` mode, malformed or unknown `scope:username` values return `400`
+- malformed or unknown `identity_scope` values return `400`
 - invalid credentials for a known scope return `401`
+
+### `GET /api/v1/auth/providers`
+
+Returns safe metadata for configured authentication providers without requiring a
+bearer token. Provider results are ordered deterministically and include the identity
+scope, kind, display metadata, and supported optional login fields. Backend URLs,
+bind identities, search settings, and verification secrets are never exposed.
+
+In `none` mode, the endpoint reports `authentication_mode="none"` and an empty
+provider list.
 
 ### `GET /api/v1/auth/me`
 
@@ -209,11 +222,11 @@ In `scoped` mode, the response includes:
 - stable principal key
 - raw username
 - namespace-aware groups
-- `auth_scope`
+- `identity_scope`
 - `auth_provider_kind`
 - token expiry
 
-In `none` mode, `auth_scope` and `auth_provider_kind` are `null`.
+In `none` mode, `identity_scope` and `auth_provider_kind` are `null`.
 
 ### `POST /api/v1/auth/logout`
 
@@ -254,6 +267,7 @@ These endpoints remain unauthenticated:
 
 - `GET /api/v1/system/health`
 - `GET /api/v1/system/version`
+- `GET /api/v1/auth/providers`
 - `POST /api/v1/auth/login`
 
 ## Identity headers
@@ -277,38 +291,24 @@ Common:
 - `MREG_AUTH_TOKEN_TTL_SECONDS`
 - `MREG_AUTH_JWT_SIGNING_KEY`
 - `MREG_AUTH_JWT_ISSUER`
-- `MREG_AUTH_SCOPES_FILE`
+- `MREG_AUTH_CONFIG_PATH`
 
-The scopes file defines one or more named `local`, `ldap`, or `remote` scopes.
+The TOML provider file defines one or more named `local`, `ldap`, or `remote` scopes.
 
 Example:
 
-```json
-{
-  "scopes": [
-    {
-      "name": "local",
-      "kind": "local",
-      "users": [
-        {
-          "username": "admin",
-          "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$...",
-          "groups": ["ops", "net"]
-        }
-      ]
-    },
-    {
-      "name": "remote-sso",
-      "kind": "remote",
-      "login_url": "https://auth.example/login",
-      "jwt_issuer": "auth.example",
-      "jwt_hmac_secret": "change-me"
-    }
-  ]
-}
+```toml
+[[providers]]
+scope = "local"
+kind = "local"
+
+[[providers.users]]
+username = "admin"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+groups = ["ops", "net"]
 ```
 
-For a complete example, see [../auth-scopes.example.json](../auth-scopes.example.json).
+For a complete example, see [../auth-providers.example.toml](../auth-providers.example.toml).
 
 ## Current limitations
 

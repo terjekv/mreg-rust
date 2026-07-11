@@ -7,8 +7,9 @@ use utoipa::ToSchema;
 use super::authz::require;
 use crate::{
     AppState,
-    authn::{self, PrincipalContext},
+    authn::{self, AuthProviderDescriptor, IdentityScopeName, PrincipalContext},
     authz::actions,
+    config::AuthMode,
     errors::AppError,
 };
 
@@ -72,6 +73,7 @@ pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
             .wrap(Governor::new(&login_conf))
             .route(web::post().to(login_handler)),
     )
+    .service(providers)
     .service(me)
     .service(logout)
     .service(logout_all);
@@ -79,6 +81,8 @@ pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
+    #[schema(value_type = String)]
+    pub identity_scope: IdentityScopeName,
     pub username: String,
     pub password: String,
     pub service_name: Option<String>,
@@ -107,16 +111,43 @@ pub struct LoginResponse {
     pub token_type: String,
     pub expires_at: DateTime<Utc>,
     pub principal: PrincipalResponse,
-    pub auth_scope: String,
+    pub identity_scope: String,
     pub auth_provider_kind: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MeResponse {
     pub principal: PrincipalResponse,
-    pub auth_scope: Option<String>,
+    pub identity_scope: Option<String>,
     pub auth_provider_kind: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthProvidersResponse {
+    pub authentication_mode: String,
+    pub providers: Vec<AuthProviderDescriptor>,
+}
+
+/// List configured authentication providers.
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/providers",
+    responses(
+        (status = 200, description = "Configured authentication providers", body = AuthProvidersResponse)
+    ),
+    tag = "Authentication"
+)]
+#[get("/auth/providers")]
+pub(crate) async fn providers(state: web::Data<AppState>) -> HttpResponse {
+    let authentication_mode = match state.authn.mode() {
+        AuthMode::None => "none",
+        AuthMode::Scoped => "scoped",
+    };
+    HttpResponse::Ok().json(AuthProvidersResponse {
+        authentication_mode: authentication_mode.to_string(),
+        providers: state.authn.providers(),
+    })
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -153,6 +184,7 @@ async fn login_handler(
     let session = state
         .authn
         .login(authn::LoginRequest {
+            identity_scope: body.identity_scope.clone(),
             username: body.username.clone(),
             password: body.password.clone(),
             service_name: body.service_name.clone(),
@@ -164,7 +196,7 @@ async fn login_handler(
         token_type: session.token_type.to_string(),
         expires_at: session.expires_at,
         principal: principal_response(&session.principal, &session.username),
-        auth_scope: session.auth_scope,
+        identity_scope: session.identity_scope,
         auth_provider_kind: session.auth_provider_kind,
     }))
 }
@@ -187,7 +219,7 @@ pub(crate) async fn me(
     let (context, expires_at) = current_principal_context(&req, &state)?;
     Ok(HttpResponse::Ok().json(MeResponse {
         principal: principal_response(&context.principal, &context.username),
-        auth_scope: context.auth_scope.clone(),
+        identity_scope: context.identity_scope.clone(),
         auth_provider_kind: context.auth_provider_kind.clone(),
         expires_at,
     }))

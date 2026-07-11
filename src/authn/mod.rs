@@ -1,14 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use actix_web::{HttpMessage, HttpRequest};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use utoipa::ToSchema;
 
 use crate::{
     authz::{Group, Principal, scoped_identity_namespace},
-    config::{AuthMode, AuthScopeBackendConfig, AuthScopeKind, Config},
+    config::{AuthMode, AuthProviderBackendConfig, AuthProviderKind, Config},
     errors::AppError,
     storage::DynStorage,
 };
@@ -21,8 +22,49 @@ mod local;
 
 pub use self::jwt::{LocalJwtIssuer, LocalJwtValidator};
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, ToSchema)]
+#[serde(transparent)]
+pub struct IdentityScopeName(String);
+
+impl IdentityScopeName {
+    pub fn new(value: impl Into<String>) -> Result<Self, AppError> {
+        let value = value.into();
+        if value.is_empty()
+            || !value.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+        {
+            return Err(AppError::validation(
+                "identity_scope must contain only lowercase letters, digits, and hyphens",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for IdentityScopeName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for IdentityScopeName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct LoginRequest {
+    pub identity_scope: IdentityScopeName,
     pub username: String,
     pub password: String,
     #[serde(default)]
@@ -34,6 +76,7 @@ pub struct LoginRequest {
 impl std::fmt::Debug for LoginRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoginRequest")
+            .field("identity_scope", &self.identity_scope)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
             .field("service_name", &self.service_name)
@@ -49,7 +92,7 @@ pub struct AuthenticatedSession {
     pub expires_at: DateTime<Utc>,
     pub principal: Principal,
     pub username: String,
-    pub auth_scope: String,
+    pub identity_scope: String,
     pub auth_provider_kind: String,
 }
 
@@ -57,7 +100,7 @@ pub struct AuthenticatedSession {
 pub struct PrincipalContext {
     pub principal: Principal,
     pub username: String,
-    pub auth_scope: Option<String>,
+    pub identity_scope: Option<String>,
     pub auth_provider_kind: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub issued_at: Option<DateTime<Utc>>,
@@ -68,14 +111,14 @@ impl PrincipalContext {
     pub fn scoped(
         principal: Principal,
         username: String,
-        auth_scope: String,
+        identity_scope: String,
         auth_provider_kind: String,
         expires_at: DateTime<Utc>,
     ) -> Self {
         Self {
             principal,
             username,
-            auth_scope: Some(auth_scope),
+            identity_scope: Some(identity_scope),
             auth_provider_kind: Some(auth_provider_kind),
             expires_at,
             issued_at: None,
@@ -87,7 +130,7 @@ impl PrincipalContext {
         Self {
             username: principal.id.clone(),
             principal,
-            auth_scope: None,
+            identity_scope: None,
             auth_provider_kind: None,
             expires_at: now,
             issued_at: None,
@@ -101,16 +144,77 @@ impl PrincipalContext {
     }
 }
 
-#[derive(Clone)]
-struct ScopeEntry {
-    name: String,
-    kind: AuthScopeKind,
-    authenticator: Arc<dyn ScopeAuthenticator>,
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AuthProviderDescriptor {
+    #[schema(value_type = String)]
+    pub identity_scope: IdentityScopeName,
+    pub kind: AuthProviderKind,
+    pub display_name: String,
+    pub display_order: u16,
+    pub supports_service_name: bool,
+    pub supports_otp: bool,
+}
+
+struct RegisteredAuthProvider {
+    descriptor: AuthProviderDescriptor,
+    backend: Arc<dyn AuthProviderBackend>,
+}
+
+struct AuthProviderRegistry {
+    providers: HashMap<IdentityScopeName, RegisteredAuthProvider>,
+}
+
+impl AuthProviderRegistry {
+    fn new() -> Self {
+        Self {
+            providers: HashMap::new(),
+        }
+    }
+
+    fn register(&mut self, provider: RegisteredAuthProvider) -> Result<(), AppError> {
+        let identity_scope = provider.descriptor.identity_scope.clone();
+        if self
+            .providers
+            .insert(identity_scope.clone(), provider)
+            .is_some()
+        {
+            return Err(AppError::config(format!(
+                "duplicate auth provider `{identity_scope}`"
+            )));
+        }
+        Ok(())
+    }
+
+    fn provider(
+        &self,
+        identity_scope: &IdentityScopeName,
+    ) -> Result<&RegisteredAuthProvider, AppError> {
+        self.providers.get(identity_scope).ok_or_else(|| {
+            AppError::validation(format!("unknown identity_scope `{identity_scope}`"))
+        })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &RegisteredAuthProvider> {
+        self.providers.values()
+    }
+
+    fn descriptors(&self) -> Vec<AuthProviderDescriptor> {
+        let mut providers = self
+            .iter()
+            .map(|provider| provider.descriptor.clone())
+            .collect::<Vec<_>>();
+        providers.sort_unstable_by(|left, right| {
+            left.display_order
+                .cmp(&right.display_order)
+                .then_with(|| left.identity_scope.cmp(&right.identity_scope))
+        });
+        providers
+    }
 }
 
 #[derive(Clone)]
 struct ScopedAuthnClient {
-    scopes: Arc<HashMap<String, ScopeEntry>>,
+    providers: Arc<AuthProviderRegistry>,
     issuer: LocalJwtIssuer,
     validator: LocalJwtValidator,
 }
@@ -149,8 +253,8 @@ pub(crate) struct AuthenticatedIdentity {
 }
 
 #[async_trait]
-pub(crate) trait ScopeAuthenticator: Send + Sync {
-    async fn login(
+pub(crate) trait AuthProviderBackend: Send + Sync {
+    async fn authenticate(
         &self,
         credentials: BackendLoginRequest,
     ) -> Result<AuthenticatedIdentity, AppError>;
@@ -170,13 +274,13 @@ impl AuthnClient {
                     .auth_jwt_signing_key
                     .as_ref()
                     .ok_or_else(|| AppError::config("missing MREG_AUTH_JWT_SIGNING_KEY"))?;
-                let mut scopes = HashMap::new();
-                for scope in &config.auth_scopes {
-                    let authenticator: Arc<dyn ScopeAuthenticator> = match &scope.backend {
-                        AuthScopeBackendConfig::Local { users } => {
-                            Arc::new(local::LocalScopeAuthenticator::new(users.clone()))
+                let mut providers = AuthProviderRegistry::new();
+                for scope in &config.auth_providers {
+                    let backend: Arc<dyn AuthProviderBackend> = match &scope.backend {
+                        AuthProviderBackendConfig::Local { users } => {
+                            Arc::new(local::LocalAuthProvider::new(users.clone()))
                         }
-                        AuthScopeBackendConfig::Remote {
+                        AuthProviderBackendConfig::Remote {
                             login_url,
                             timeout_ms,
                             default_service_name,
@@ -187,8 +291,8 @@ impl AuthnClient {
                             jwt_hmac_secret,
                             username_claim,
                             groups_claim,
-                        } => Arc::new(forward::RemoteScopeAuthenticator::new(
-                            forward::RemoteScopeConfig {
+                        } => Arc::new(forward::RemoteAuthProvider::new(
+                            forward::RemoteProviderConfig {
                                 login_url: login_url.clone(),
                                 timeout_ms: *timeout_ms,
                                 default_service_name: default_service_name.clone(),
@@ -201,61 +305,93 @@ impl AuthnClient {
                                 groups_claim: groups_claim.clone(),
                             },
                         )?),
-                        AuthScopeBackendConfig::Ldap {
+                        AuthProviderBackendConfig::Ldap {
                             url,
-                            timeout_ms,
-                            user_search_base,
-                            user_search_filter,
-                            group_search_base,
-                            group_search_filter,
                             bind_dn,
                             bind_password,
+                            connect_timeout_seconds,
+                            operation_timeout_seconds,
+                            user_base_dn,
+                            user_filter,
+                            user_scope,
+                            username_attribute,
+                            subject_attribute,
+                            display_name_attribute,
+                            email_attribute,
+                            group_attributes,
+                            group_filters,
+                            group_rules,
                         } => {
                             #[cfg(feature = "ldap")]
                             {
-                                Arc::new(ldap::LdapScopeAuthenticator::new(
+                                Arc::new(ldap::LdapAuthProvider::new(
                                     ldap::LdapAuthenticatorConfig {
                                         url: url.clone(),
-                                        timeout_ms: *timeout_ms,
-                                        user_search_base: user_search_base.clone(),
-                                        user_search_filter: user_search_filter.clone(),
-                                        group_search_base: group_search_base.clone(),
-                                        group_search_filter: group_search_filter.clone(),
                                         bind_dn: bind_dn.clone(),
                                         bind_password: bind_password.clone(),
+                                        connect_timeout_seconds: *connect_timeout_seconds,
+                                        operation_timeout_seconds: *operation_timeout_seconds,
+                                        user_base_dn: user_base_dn.clone(),
+                                        user_filter: user_filter.clone(),
+                                        user_scope: *user_scope,
+                                        username_attribute: username_attribute.clone(),
+                                        subject_attribute: subject_attribute.clone(),
+                                        display_name_attribute: display_name_attribute.clone(),
+                                        email_attribute: email_attribute.clone(),
+                                        group_attributes: group_attributes.clone(),
+                                        group_filters: group_filters.clone(),
+                                        group_rules: group_rules.clone(),
                                     },
-                                ))
+                                )?)
                             }
                             #[cfg(not(feature = "ldap"))]
                             {
                                 let _ = (
                                     url,
-                                    timeout_ms,
-                                    user_search_base,
-                                    user_search_filter,
-                                    group_search_base,
-                                    group_search_filter,
                                     bind_dn,
                                     bind_password,
+                                    connect_timeout_seconds,
+                                    operation_timeout_seconds,
+                                    user_base_dn,
+                                    user_filter,
+                                    user_scope,
+                                    username_attribute,
+                                    subject_attribute,
+                                    display_name_attribute,
+                                    email_attribute,
+                                    group_attributes,
+                                    group_filters,
+                                    group_rules,
                                 );
                                 return Err(AppError::config(
-                                    "ldap auth scopes require the `ldap` feature",
+                                    "LDAP auth providers require the `ldap` feature",
                                 ));
                             }
                         }
                     };
-                    scopes.insert(
-                        scope.name.clone(),
-                        ScopeEntry {
-                            name: scope.name.clone(),
-                            kind: scope.kind(),
-                            authenticator,
+                    let kind = scope.kind();
+                    let identity_scope = IdentityScopeName::new(scope.name.clone())
+                        .map_err(|error| AppError::config(error.to_string()))?;
+                    let is_remote = matches!(kind, AuthProviderKind::Remote);
+                    providers.register(RegisteredAuthProvider {
+                        descriptor: AuthProviderDescriptor {
+                            display_name: scope.name.clone(),
+                            display_order: if matches!(kind, AuthProviderKind::Local) {
+                                0
+                            } else {
+                                100
+                            },
+                            identity_scope,
+                            kind,
+                            supports_service_name: is_remote,
+                            supports_otp: is_remote,
                         },
-                    );
+                        backend,
+                    })?;
                 }
 
                 Some(ScopedAuthnClient {
-                    scopes: Arc::new(scopes),
+                    providers: Arc::new(providers),
                     issuer: LocalJwtIssuer::new(
                         signing_key,
                         config.auth_jwt_issuer.clone(),
@@ -281,19 +417,22 @@ impl AuthnClient {
         !matches!(self.mode, AuthMode::None)
     }
 
+    pub fn providers(&self) -> Vec<AuthProviderDescriptor> {
+        self.scoped
+            .as_ref()
+            .map(|scoped| scoped.providers.descriptors())
+            .unwrap_or_default()
+    }
+
     pub async fn login(&self, credentials: LoginRequest) -> Result<AuthenticatedSession, AppError> {
         let scoped = self.scoped.as_ref().ok_or_else(|| {
             AppError::unavailable("authentication is disabled in auth mode `none`")
         })?;
-        let (scope_name, raw_username) = split_scoped_username(&credentials.username)?;
-        let scope = scoped
-            .scopes
-            .get(scope_name)
-            .ok_or_else(|| AppError::validation(format!("unknown auth scope `{scope_name}`")))?;
-        let identity = scope
-            .authenticator
-            .login(BackendLoginRequest {
-                username: raw_username.to_string(),
+        let provider = scoped.providers.provider(&credentials.identity_scope)?;
+        let identity = provider
+            .backend
+            .authenticate(BackendLoginRequest {
+                username: credentials.username,
                 password: credentials.password,
                 service_name: credentials.service_name,
                 otp_code: credentials.otp_code,
@@ -305,12 +444,14 @@ impl AuthnClient {
             validate_backend_identity_component(group, "group")?;
         }
 
-        let principal = canonical_principal(&scope.name, &scope.kind, &identity);
+        let identity_scope = provider.descriptor.identity_scope.as_str();
+        let provider_kind = provider.descriptor.kind;
+        let principal = canonical_principal(identity_scope, &identity);
         let (access_token, expires_at) = scoped.issuer.issue_access_token(
             &principal,
             &identity.username,
-            &scope.name,
-            scope.kind.as_str(),
+            identity_scope,
+            provider_kind.as_str(),
             identity.max_expires_at,
         )?;
 
@@ -320,8 +461,8 @@ impl AuthnClient {
             expires_at,
             principal,
             username: identity.username,
-            auth_scope: scope.name.clone(),
-            auth_provider_kind: scope.kind.as_str().to_string(),
+            identity_scope: identity_scope.to_string(),
+            auth_provider_kind: provider_kind.as_str().to_string(),
         })
     }
 
@@ -383,24 +524,7 @@ impl AuthnClient {
     }
 }
 
-fn split_scoped_username(value: &str) -> Result<(&str, &str), AppError> {
-    let (scope, username) = value
-        .split_once(':')
-        .ok_or_else(|| AppError::validation("username must be in `scope:username` form"))?;
-    if scope.trim().is_empty() || username.trim().is_empty() {
-        return Err(AppError::validation(
-            "username must be in `scope:username` form",
-        ));
-    }
-    Ok((scope.trim(), username.trim()))
-}
-
-fn canonical_principal(
-    scope_name: &str,
-    scope_kind: &AuthScopeKind,
-    identity: &AuthenticatedIdentity,
-) -> Principal {
-    let _ = scope_kind;
+fn canonical_principal(scope_name: &str, identity: &AuthenticatedIdentity) -> Principal {
     let namespace = scoped_identity_namespace(scope_name);
     Principal {
         id: identity.username.clone(),
@@ -491,31 +615,19 @@ pub fn token_fingerprint(token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn split_scoped_username_trims_whitespace() {
-        let (scope, username) = split_scoped_username(" local : alice ").unwrap();
-        assert_eq!(scope, "local");
-        assert_eq!(username, "alice");
-    }
-
-    #[test]
-    fn split_scoped_username_with_clean_input() {
-        let (scope, username) = split_scoped_username("local:alice").unwrap();
-        assert_eq!(scope, "local");
-        assert_eq!(username, "alice");
-    }
-
-    #[test]
-    fn split_scoped_username_rejects_missing_colon() {
-        assert!(split_scoped_username("localAlice").is_err());
+    #[rstest]
+    #[case("ldap-primary", true)]
+    #[case("LDAP Primary", false)]
+    fn identity_scope_name_validation_cases(#[case] value: &str, #[case] valid: bool) {
+        assert_eq!(IdentityScopeName::new(value).is_ok(), valid);
     }
 
     #[test]
     fn canonical_principal_uses_namespace_aware_identity() {
         let principal = canonical_principal(
             "local",
-            &AuthScopeKind::Local,
             &AuthenticatedIdentity {
                 username: "alice".to_string(),
                 groups: vec!["ops".to_string()],

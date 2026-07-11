@@ -1,0 +1,42 @@
+[[providers]]
+scope = "local"
+kind = "local"
+
+[[providers.users]]
+username = "admin"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$replace-with-a-real-hash"
+groups = ["ops", "net"]
+
+[[providers]]
+scope = "ldap-primary"
+kind = "ldap"
+url = "ldaps://ldap.example.org"
+bind_dn = "cn=readonly,dc=example,dc=org"
+bind_password = "configure-outside-version-control"
+connect_timeout_seconds = 5
+operation_timeout_seconds = 10
+user_base_dn = "ou=people,dc=example,dc=org"
+user_filter = "(uid={username})"
+user_scope = "subtree"
+username_attribute = "uid"
+subject_attribute = "entryUUID"
+display_name_attribute = "cn"
+email_attribute = "mail"
+group_attributes = ["memberOf"]
+group_filters = ["^mreg-", "^admin$"]
+
+[[providers.group_rules]]
+pattern = "^cn=([^,]+),ou=groups,dc=example,dc=org$"
+name = "$1"
+
+[[providers]]
+scope = "remote-sso"
+kind = "remote"
+login_url = "https://auth.example.org/api/login"
+timeout_ms = 5000
+default_service_name = "mreg"
+jwt_issuer = "auth.example.org"
+jwt_audience = "mreg-rust"
+jwt_hmac_secret = "configure-outside-version-control"
+username_claim = "sub"
+groups_claim = "groups"

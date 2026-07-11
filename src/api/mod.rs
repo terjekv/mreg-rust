@@ -19,6 +19,7 @@ pub mod v1;
         v1::system::history,
         // Authentication
         v1::auth::login,
+        v1::auth::providers,
         v1::auth::me,
         v1::auth::logout,
         v1::auth::logout_all,
@@ -166,6 +167,7 @@ pub mod v1;
         v1::system::VersionResponse,
         v1::system::StatusResponse,
         // Authentication
+        v1::auth::AuthProvidersResponse,
         v1::auth::LoginRequest,
         v1::auth::LoginResponse,
         v1::auth::MeResponse,
@@ -288,4 +290,27 @@ pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
         web::scope("/api/v1").configure(move |cfg| v1::configure(cfg, trust_proxy_headers)),
     )
     .service(SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", ApiDoc::openapi()));
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+    use utoipa::OpenApi;
+
+    use super::ApiDoc;
+
+    #[test]
+    fn authentication_openapi_exposes_provider_discovery_and_string_scope() {
+        let document = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        let actual = (
+            document
+                .pointer("/components/schemas/LoginRequest/properties/identity_scope/type")
+                .and_then(Value::as_str),
+            document
+                .pointer("/paths/~1api~1v1~1auth~1providers/get")
+                .is_some(),
+        );
+
+        assert_eq!(actual, (Some("string"), true));
+    }
 }
