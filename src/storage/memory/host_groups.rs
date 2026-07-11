@@ -60,6 +60,77 @@ pub(super) fn create_host_group_in_state(
     Ok(group)
 }
 
+pub(super) fn list_host_groups_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &HostGroupFilter,
+) -> Result<Page<HostGroup>, AppError> {
+    let items: Vec<HostGroup> = state
+        .host_groups
+        .values()
+        .filter(|group| filter.matches(group))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["description", "created_at", "updated_at"],
+        |group, field| match field {
+            "description" => group.description().to_string(),
+            "created_at" => group.created_at().to_rfc3339(),
+            "updated_at" => group.updated_at().to_rfc3339(),
+            _ => group.name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn get_host_group_by_name_in_state(
+    state: &MemoryState,
+    name: &HostGroupName,
+) -> Result<HostGroup, AppError> {
+    state
+        .host_groups
+        .get(name.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("host group '{}' was not found", name.as_str()))
+        })
+}
+
+pub(super) fn list_host_groups_for_hosts_in_state(
+    state: &MemoryState,
+    hosts: &[Hostname],
+) -> Result<Vec<HostGroup>, AppError> {
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(state
+        .host_groups
+        .values()
+        .filter(|group| {
+            group
+                .hosts()
+                .iter()
+                .any(|host| host_names.contains(host.as_str()))
+        })
+        .cloned()
+        .collect())
+}
+
+pub(super) fn delete_host_group_in_state(
+    state: &mut MemoryState,
+    name: &HostGroupName,
+) -> Result<(), AppError> {
+    state
+        .host_groups
+        .remove(name.as_str())
+        .map(|_| ())
+        .ok_or_else(|| {
+            AppError::not_found(format!("host group '{}' was not found", name.as_str()))
+        })
+}
+
 #[async_trait]
 impl HostGroupStore for MemoryStorage {
     async fn list_host_groups(
@@ -68,23 +139,7 @@ impl HostGroupStore for MemoryStorage {
         filter: &HostGroupFilter,
     ) -> Result<Page<HostGroup>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<HostGroup> = state
-            .host_groups
-            .values()
-            .filter(|group| filter.matches(group))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["description", "created_at", "updated_at"],
-            |group, field| match field {
-                "description" => group.description().to_string(),
-                "created_at" => group.created_at().to_rfc3339(),
-                "updated_at" => group.updated_at().to_rfc3339(),
-                _ => group.name().as_str().to_string(),
-            },
-        )
+        list_host_groups_in_state(&state, page, filter)
     }
 
     async fn create_host_group(&self, command: CreateHostGroup) -> Result<HostGroup, AppError> {
@@ -94,45 +149,19 @@ impl HostGroupStore for MemoryStorage {
 
     async fn get_host_group_by_name(&self, name: &HostGroupName) -> Result<HostGroup, AppError> {
         let state = self.state.read().await;
-        state
-            .host_groups
-            .get(name.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!("host group '{}' was not found", name.as_str()))
-            })
+        get_host_group_by_name_in_state(&state, name)
     }
 
     async fn list_host_groups_for_hosts(
         &self,
         hosts: &[Hostname],
     ) -> Result<Vec<HostGroup>, AppError> {
-        let host_names = hosts
-            .iter()
-            .map(|host| host.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
         let state = self.state.read().await;
-        Ok(state
-            .host_groups
-            .values()
-            .filter(|group| {
-                group
-                    .hosts()
-                    .iter()
-                    .any(|host| host_names.contains(host.as_str()))
-            })
-            .cloned()
-            .collect())
+        list_host_groups_for_hosts_in_state(&state, hosts)
     }
 
     async fn delete_host_group(&self, name: &HostGroupName) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .host_groups
-            .remove(name.as_str())
-            .map(|_| ())
-            .ok_or_else(|| {
-                AppError::not_found(format!("host group '{}' was not found", name.as_str()))
-            })
+        delete_host_group_in_state(&mut state, name)
     }
 }

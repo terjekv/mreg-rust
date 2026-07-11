@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -49,4 +50,20 @@ pub async fn fail(
     error_summary: String,
 ) -> Result<TaskEnvelope, AppError> {
     store.fail_task(task_id, error_summary).await
+}
+
+#[tracing::instrument(skip(store), fields(resource_kind = "task"))]
+pub async fn cancel(
+    store: &(dyn TaskStore + Send + Sync),
+    task_id: Uuid,
+) -> Result<TaskEnvelope, AppError> {
+    store.cancel_task(task_id).await
+}
+
+#[tracing::instrument(skip(store), fields(resource_kind = "task"))]
+pub async fn purge_finished_before(
+    store: &(dyn TaskStore + Send + Sync),
+    cutoff: DateTime<Utc>,
+) -> Result<usize, AppError> {
+    store.purge_finished_tasks_before(cutoff).await
 }

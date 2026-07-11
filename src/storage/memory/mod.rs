@@ -18,6 +18,7 @@ mod networks;
 mod ptr_overrides;
 mod records;
 mod tasks;
+mod transaction;
 mod zones;
 
 use std::{
@@ -64,8 +65,8 @@ use crate::{
         BacnetStore, CommunityStore, ExportStore, HostCommunityAssignmentStore, HostContactStore,
         HostGroupStore, HostPolicyStore, HostStore, HostViewStore, ImportStore, LabelStore,
         NameServerStore, NetworkPolicyStore, NetworkStore, PtrOverrideStore, RecordStore, Storage,
-        StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, ZoneStore,
-        has_id::HasId,
+        StorageBackendKind, StorageCapabilities, StorageHealthReport, TaskStore, TransactionRunner,
+        ZoneStore, has_id::HasId,
     },
 };
 
@@ -357,7 +358,7 @@ impl Storage for MemoryStorage {
     fn capabilities(&self) -> StorageCapabilities {
         StorageCapabilities {
             persistent: false,
-            strong_transactions: false,
+            strong_transactions: true,
             native_network_types: false,
             skip_locked_task_claiming: false,
             intended_for: vec![
@@ -465,5 +466,9 @@ impl Storage for MemoryStorage {
 
     fn host_views(&self) -> &(dyn HostViewStore + Send + Sync) {
         self
+    }
+
+    fn transaction_runner(&self) -> Option<&(dyn TransactionRunner + Send + Sync)> {
+        Some(self)
     }
 }

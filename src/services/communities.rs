@@ -2,7 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    audit::actions,
+    audit::{CreateHistoryEvent, actions, actor},
     domain::{
         community::{Community, CreateCommunity},
         filters::CommunityFilter,
@@ -10,8 +10,8 @@ use crate::{
         types::{CommunityName, NetworkPolicyName},
     },
     errors::AppError,
-    events::EventSinkClient,
-    storage::{AuditStore, CommunityStore},
+    events::{DomainEvent, EventSinkClient},
+    storage::{CommunityStore, DynStorage},
 };
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "community"))]
@@ -23,25 +23,28 @@ pub async fn list_communities(
     store.list_communities(page, filter).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "community"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "community"))]
 pub async fn create_community(
-    store: &(dyn CommunityStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateCommunity,
+    events: &EventSinkClient,
 ) -> Result<Community, AppError> {
-    let item = store.create_community(command).await?;
+    let (item, history) = storage
+        .transaction(move |tx| {
+            let item = tx.communities().create_community(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "community",
+                Some(item.id()),
+                item.name().as_str(),
+                actions::CREATE,
+                json!({"name": item.name().as_str(), "policy_name": item.policy_name().as_str(), "description": item.description()}),
+            ))?;
+            Ok((item, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "community",
-        actions::CREATE,
-        Some(item.id()),
-        item.name().as_str(),
-        json!({"name": item.name().as_str(), "policy_name": item.policy_name().as_str(), "description": item.description()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(item)
 }
@@ -54,26 +57,29 @@ pub async fn get_community(
     store.get_community(community_id).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "community"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "community"))]
 pub async fn delete_community(
-    store: &(dyn CommunityStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     community_id: Uuid,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    let old = store.get_community(community_id).await?;
-    store.delete_community(community_id).await?;
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx.communities().get_community(community_id)?;
+            tx.communities().delete_community(community_id)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "community",
+                Some(old.id()),
+                old.name().as_str(),
+                actions::DELETE,
+                json!({"name": old.name().as_str(), "policy_name": old.policy_name().as_str(), "description": old.description()}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "community",
-        actions::DELETE,
-        Some(old.id()),
-        old.name().as_str(),
-        json!({"name": old.name().as_str(), "policy_name": old.policy_name().as_str(), "description": old.description()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }

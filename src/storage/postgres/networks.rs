@@ -246,6 +246,314 @@ impl PostgresStorage {
         ))
     }
 
+    pub(in crate::storage::postgres) fn list_networks_in_conn(
+        connection: &mut PgConnection,
+        page: &PageRequest,
+        filter: &NetworkFilter,
+    ) -> Result<Page<Network>, AppError> {
+        let base = "SELECT n.id, n.network::text AS network, n.description, \
+                n.vlan, n.dns_delegated, n.category, n.location, n.frozen, \
+                n.reserved, n.created_at, n.updated_at \
+                FROM networks n";
+
+        let (clauses, values) = filter.sql_conditions();
+        let where_str = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let order_col = match page.sort_by() {
+            Some("description") => "n.description",
+            Some("created_at") => "n.created_at",
+            Some("updated_at") => "n.updated_at",
+            None => "n.network::text",
+            Some(other) => {
+                return Err(AppError::validation(format!(
+                    "unsupported sort_by field for networks: {other}"
+                )));
+            }
+        };
+        let order_dir = match page.sort_direction() {
+            crate::domain::pagination::SortDirection::Asc => "ASC",
+            crate::domain::pagination::SortDirection::Desc => "DESC",
+        };
+        let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
+        let total = run_count_query(connection, &count_sql, &values)?;
+
+        let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+            format!(" LIMIT {}", page.limit() + 1)
+        } else {
+            String::new()
+        };
+        let query_str = format!(
+            "{base}{where_str} ORDER BY {order_col} {order_dir}, n.id{limit_clause}"
+        );
+
+        let rows = run_dynamic_query::<NetworkRow>(connection, &query_str, &values)?;
+        let all_items: Vec<Network> = rows
+            .into_iter()
+            .map(NetworkRow::into_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows_to_page(all_items, page, total))
+    }
+
+    pub(in crate::storage::postgres) fn create_network_in_conn(
+        connection: &mut PgConnection,
+        command: CreateNetwork,
+    ) -> Result<Network, AppError> {
+        let cidr = command.cidr().as_str();
+        let description = command.description().to_string();
+        let vlan = command.vlan().map(|v| v.as_i32());
+        let dns_delegated = command.dns_delegated();
+        let category = command.category().to_string();
+        let location = command.location().to_string();
+        let frozen = command.frozen();
+        let reserved = command.reserved().as_i32();
+        sql_query(
+            "INSERT INTO networks (network, description, vlan, dns_delegated, category, location, frozen, reserved)
+             VALUES ($1::cidr, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at",
+        )
+        .bind::<Text, _>(cidr)
+        .bind::<Text, _>(description)
+        .bind::<Nullable<Integer>, _>(vlan)
+        .bind::<diesel::sql_types::Bool, _>(dns_delegated)
+        .bind::<Text, _>(category)
+        .bind::<Text, _>(location)
+        .bind::<diesel::sql_types::Bool, _>(frozen)
+        .bind::<Integer, _>(reserved)
+        .get_result::<NetworkRow>(connection)
+        .map_err(map_unique("network already exists"))?
+        .into_domain()
+    }
+
+    pub(in crate::storage::postgres) fn update_network_in_conn(
+        connection: &mut PgConnection,
+        cidr: &CidrValue,
+        command: UpdateNetwork,
+    ) -> Result<Network, AppError> {
+        connection.transaction::<Network, AppError, _>(|connection| {
+            let old = Self::query_network_by_cidr(connection, cidr)?;
+            let description = command
+                .description
+                .unwrap_or_else(|| old.description().to_string());
+            let vlan: Option<i32> = command.vlan.resolve(old.vlan()).map(|v| v.as_i32());
+            let dns_delegated = command.dns_delegated.unwrap_or(old.dns_delegated());
+            let category = command
+                .category
+                .unwrap_or_else(|| old.category().to_string());
+            let location = command
+                .location
+                .unwrap_or_else(|| old.location().to_string());
+            let frozen = command.frozen.unwrap_or(old.frozen());
+            let reserved: i32 = command.reserved.unwrap_or(old.reserved()).as_i32();
+
+            sql_query(
+                "UPDATE networks SET description = $1, vlan = $2, dns_delegated = $3, \
+                 category = $4, location = $5, frozen = $6, reserved = $7, updated_at = now() \
+                 WHERE network = $8::cidr \
+                 RETURNING id, network::text AS network, description, vlan, dns_delegated, \
+                 category, location, frozen, reserved, created_at, updated_at",
+            )
+            .bind::<Text, _>(description)
+            .bind::<Nullable<Integer>, _>(vlan)
+            .bind::<diesel::sql_types::Bool, _>(dns_delegated)
+            .bind::<Text, _>(category)
+            .bind::<Text, _>(location)
+            .bind::<diesel::sql_types::Bool, _>(frozen)
+            .bind::<Integer, _>(reserved)
+            .bind::<Text, _>(cidr.as_str())
+            .get_result::<NetworkRow>(connection)
+            .map_err(|_| {
+                AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
+            })?
+            .into_domain()
+        })
+    }
+
+    pub(in crate::storage::postgres) fn delete_network_in_conn(
+        connection: &mut PgConnection,
+        cidr: &CidrValue,
+    ) -> Result<(), AppError> {
+        let cidr_str = cidr.as_str();
+        let deleted = sql_query("DELETE FROM networks WHERE network = $1::cidr")
+            .bind::<Text, _>(cidr_str.clone())
+            .execute(connection)
+            .map_err(|error| match error {
+                diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                    _,
+                ) => AppError::conflict("network is still referenced by other resources"),
+                other => AppError::internal(other),
+            })?;
+        if deleted == 0 {
+            return Err(AppError::not_found(format!(
+                "network '{}' was not found",
+                cidr_str
+            )));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn list_excluded_ranges_in_conn(
+        connection: &mut PgConnection,
+        network: &CidrValue,
+        page: &PageRequest,
+    ) -> Result<Page<ExcludedRange>, AppError> {
+        let items = Self::query_excluded_ranges(connection, network)?;
+        Ok(vec_to_page(items, page))
+    }
+
+    pub(in crate::storage::postgres) fn add_excluded_range_in_conn(
+        connection: &mut PgConnection,
+        network: &CidrValue,
+        command: CreateExcludedRange,
+    ) -> Result<ExcludedRange, AppError> {
+        let start_ip = command.start_ip().as_str();
+        let end_ip = command.end_ip().as_str();
+        let description = command.description().to_string();
+        connection.transaction::<ExcludedRange, AppError, _>(|connection| {
+            let network_row = Self::query_network_by_cidr(connection, network)?;
+            if !network_row.contains(command.start_ip())
+                || !network_row.contains(command.end_ip())
+            {
+                return Err(AppError::validation(
+                    "excluded range must be fully contained inside the network",
+                ));
+            }
+            let overlap = sql_query(
+                "SELECT id
+                 FROM network_excluded_ranges
+                 WHERE network_id = $1
+                   AND start_ip <= $3::inet
+                   AND end_ip >= $2::inet
+                 LIMIT 1",
+            )
+            .bind::<SqlUuid, _>(network_row.id())
+            .bind::<Text, _>(start_ip.clone())
+            .bind::<Text, _>(end_ip.clone())
+            .get_result::<UuidRow>(connection)
+            .optional()?;
+            if overlap.is_some() {
+                return Err(AppError::conflict(
+                    "excluded range overlaps an existing excluded range",
+                ));
+            }
+            sql_query(
+                "INSERT INTO network_excluded_ranges (network_id, start_ip, end_ip, description)
+                 VALUES ($1, $2::inet, $3::inet, $4)
+                RETURNING id, network_id, host(start_ip) AS start_ip, host(end_ip) AS end_ip,
+                          description, created_at, updated_at",
+            )
+            .bind::<SqlUuid, _>(network_row.id())
+            .bind::<Text, _>(start_ip)
+            .bind::<Text, _>(end_ip)
+            .bind::<Text, _>(description)
+            .get_result::<ExcludedRangeRow>(connection)
+            .map_err(map_unique("excluded range already exists"))?
+            .into_domain()
+        })
+    }
+
+    pub(in crate::storage::postgres) fn list_used_addresses_in_conn(
+        connection: &mut PgConnection,
+        cidr: &CidrValue,
+    ) -> Result<Vec<IpAddressAssignment>, AppError> {
+        let rows = sql_query(
+            "SELECT ia.id, ia.host_id, ia.attachment_id, host(ia.address) AS address, ia.family::int AS family, \
+             nw.id AS network_id, ia.mac_address, ia.created_at, ia.updated_at \
+             FROM ip_addresses ia \
+             JOIN LATERAL ( \
+               SELECT id FROM networks WHERE ia.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
+             ) nw ON true \
+             JOIN networks n ON ia.address <<= n.network \
+             WHERE n.network = $1::cidr \
+             ORDER BY ia.address",
+        )
+        .bind::<Text, _>(cidr.as_str())
+        .load::<IpAddressAssignmentRow>(connection)?;
+
+        rows.into_iter()
+            .map(IpAddressAssignmentRow::into_domain)
+            .collect()
+    }
+
+    pub(in crate::storage::postgres) fn list_unused_addresses_in_conn(
+        connection: &mut PgConnection,
+        cidr: &CidrValue,
+        limit: Option<u32>,
+    ) -> Result<Vec<IpAddressValue>, AppError> {
+        let network = Self::query_network_by_cidr(connection, cidr)?;
+        let limit = limit.unwrap_or(100) as usize;
+        let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+        let allocated = Self::allocated_addresses_in_network(connection, &network)?;
+        let allocated_set: std::collections::HashSet<u128> =
+            allocated.iter().map(|a| ip_to_u128(a.as_inner())).collect();
+        let excluded = Self::query_excluded_ranges(connection, cidr)?;
+
+        let mut result = Vec::new();
+        match network.cidr().as_inner() {
+            ipnet::IpNet::V4(_) => {
+                for candidate in first..=last {
+                    if result.len() >= limit {
+                        break;
+                    }
+                    if allocated_set.contains(&candidate) {
+                        continue;
+                    }
+                    let addr = IpAddressValue::new(
+                        std::net::Ipv4Addr::from(candidate as u32).to_string(),
+                    )?;
+                    if excluded.iter().any(|r| r.contains(&addr)) {
+                        continue;
+                    }
+                    result.push(addr);
+                }
+            }
+            ipnet::IpNet::V6(_) => {
+                for candidate in first..=last {
+                    if result.len() >= limit {
+                        break;
+                    }
+                    if allocated_set.contains(&candidate) {
+                        continue;
+                    }
+                    let addr =
+                        IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
+                    if excluded.iter().any(|r| r.contains(&addr)) {
+                        continue;
+                    }
+                    result.push(addr);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    pub(in crate::storage::postgres) fn count_unused_addresses_in_conn(
+        connection: &mut PgConnection,
+        cidr: &CidrValue,
+    ) -> Result<u64, AppError> {
+        let network = Self::query_network_by_cidr(connection, cidr)?;
+        let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+        let usable_span = last.saturating_sub(first).saturating_add(1);
+        let allocated =
+            Self::count_allocated_addresses_in_network(connection, &network)? as u128;
+        let excluded = Self::query_excluded_ranges(connection, cidr)?;
+        let excluded_count = excluded
+            .iter()
+            .map(|range| {
+                let start = ip_to_u128(range.start_ip().as_inner()).max(first);
+                let end = ip_to_u128(range.end_ip().as_inner()).min(last);
+                if start > end { 0 } else { end - start + 1 }
+            })
+            .sum::<u128>();
+        Ok(usable_span
+            .saturating_sub(allocated)
+            .saturating_sub(excluded_count) as u64)
+    }
+
     /// Allocate a random usable address from the network.
     ///
     /// Locks the network row with SELECT FOR UPDATE to prevent concurrent

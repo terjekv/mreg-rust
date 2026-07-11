@@ -15,6 +15,77 @@ use crate::{
 
 use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
+pub(super) fn list_host_contacts_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &HostContactFilter,
+) -> Result<Page<HostContact>, AppError> {
+    let items: Vec<HostContact> = state
+        .host_contacts
+        .values()
+        .filter(|contact| filter.matches(contact))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["display_name", "created_at", "updated_at"],
+        |contact, field| match field {
+            "display_name" => contact.display_name().unwrap_or("").to_string(),
+            "created_at" => contact.created_at().to_rfc3339(),
+            "updated_at" => contact.updated_at().to_rfc3339(),
+            _ => contact.email().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn get_host_contact_by_email_in_state(
+    state: &MemoryState,
+    email: &EmailAddressValue,
+) -> Result<HostContact, AppError> {
+    state
+        .host_contacts
+        .get(email.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("host contact '{}' was not found", email.as_str()))
+        })
+}
+
+pub(super) fn list_host_contacts_for_hosts_in_state(
+    state: &MemoryState,
+    hosts: &[Hostname],
+) -> Result<Vec<HostContact>, AppError> {
+    let host_names = hosts
+        .iter()
+        .map(|host| host.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(state
+        .host_contacts
+        .values()
+        .filter(|contact| {
+            contact
+                .hosts()
+                .iter()
+                .any(|host| host_names.contains(host.as_str()))
+        })
+        .cloned()
+        .collect())
+}
+
+pub(super) fn delete_host_contact_in_state(
+    state: &mut MemoryState,
+    email: &EmailAddressValue,
+) -> Result<(), AppError> {
+    state
+        .host_contacts
+        .remove(email.as_str())
+        .map(|_| ())
+        .ok_or_else(|| {
+            AppError::not_found(format!("host contact '{}' was not found", email.as_str()))
+        })
+}
+
 pub(super) fn create_host_contact_in_state(
     state: &mut MemoryState,
     command: CreateHostContact,
@@ -55,23 +126,7 @@ impl HostContactStore for MemoryStorage {
         filter: &HostContactFilter,
     ) -> Result<Page<HostContact>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<HostContact> = state
-            .host_contacts
-            .values()
-            .filter(|contact| filter.matches(contact))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["display_name", "created_at", "updated_at"],
-            |contact, field| match field {
-                "display_name" => contact.display_name().unwrap_or("").to_string(),
-                "created_at" => contact.created_at().to_rfc3339(),
-                "updated_at" => contact.updated_at().to_rfc3339(),
-                _ => contact.email().as_str().to_string(),
-            },
-        )
+        list_host_contacts_in_state(&state, page, filter)
     }
 
     async fn create_host_contact(
@@ -87,45 +142,19 @@ impl HostContactStore for MemoryStorage {
         email: &EmailAddressValue,
     ) -> Result<HostContact, AppError> {
         let state = self.state.read().await;
-        state
-            .host_contacts
-            .get(email.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!("host contact '{}' was not found", email.as_str()))
-            })
+        get_host_contact_by_email_in_state(&state, email)
     }
 
     async fn list_host_contacts_for_hosts(
         &self,
         hosts: &[Hostname],
     ) -> Result<Vec<HostContact>, AppError> {
-        let host_names = hosts
-            .iter()
-            .map(|host| host.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
         let state = self.state.read().await;
-        Ok(state
-            .host_contacts
-            .values()
-            .filter(|contact| {
-                contact
-                    .hosts()
-                    .iter()
-                    .any(|host| host_names.contains(host.as_str()))
-            })
-            .cloned()
-            .collect())
+        list_host_contacts_for_hosts_in_state(&state, hosts)
     }
 
     async fn delete_host_contact(&self, email: &EmailAddressValue) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .host_contacts
-            .remove(email.as_str())
-            .map(|_| ())
-            .ok_or_else(|| {
-                AppError::not_found(format!("host contact '{}' was not found", email.as_str()))
-            })
+        delete_host_contact_in_state(&mut state, email)
     }
 }

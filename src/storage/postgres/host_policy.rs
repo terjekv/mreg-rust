@@ -93,59 +93,402 @@ fn map_unique(message: &'static str) -> impl FnOnce(diesel::result::Error) -> Ap
     }
 }
 
+impl PostgresStorage {
+    pub(in crate::storage::postgres) fn list_atoms_in_conn(
+        c: &mut diesel::PgConnection,
+        page: &PageRequest,
+    ) -> Result<Page<HostPolicyAtom>, AppError> {
+        let rows = sql_query(
+            "SELECT id, name, description, created_at, updated_at
+             FROM host_policy_atoms ORDER BY name ASC",
+        )
+        .load::<AtomRow>(c)?;
+        let items: Result<Vec<_>, _> = rows.into_iter().map(AtomRow::into_domain).collect();
+        Ok(vec_to_page(items?, page))
+    }
+
+    pub(in crate::storage::postgres) fn create_atom_in_conn(
+        c: &mut diesel::PgConnection,
+        command: CreateHostPolicyAtom,
+    ) -> Result<HostPolicyAtom, AppError> {
+        let name = command.name().as_str().to_string();
+        let description = command.description().to_string();
+        let row = sql_query(
+            "INSERT INTO host_policy_atoms (name, description)
+             VALUES ($1, $2)
+             RETURNING id, name, description, created_at, updated_at",
+        )
+        .bind::<Text, _>(&name)
+        .bind::<Text, _>(&description)
+        .get_result::<AtomRow>(c)
+        .map_err(map_unique("host policy atom already exists"))?;
+        row.into_domain()
+    }
+
+    pub(in crate::storage::postgres) fn get_atom_by_name_in_conn(
+        c: &mut diesel::PgConnection,
+        name: &HostPolicyName,
+    ) -> Result<HostPolicyAtom, AppError> {
+        let name = name.as_str().to_string();
+        let row = sql_query(
+            "SELECT id, name, description, created_at, updated_at
+             FROM host_policy_atoms WHERE name = $1",
+        )
+        .bind::<Text, _>(&name)
+        .get_results::<AtomRow>(c)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::not_found(format!("host policy atom '{}' was not found", name)))?;
+        row.into_domain()
+    }
+
+    pub(in crate::storage::postgres) fn update_atom_in_conn(
+        c: &mut diesel::PgConnection,
+        name: &HostPolicyName,
+        command: UpdateHostPolicyAtom,
+    ) -> Result<HostPolicyAtom, AppError> {
+        let name = name.as_str().to_string();
+        if let Some(ref description) = command.description {
+            let row = sql_query(
+                "UPDATE host_policy_atoms SET description = $2, updated_at = now()
+                 WHERE name = $1
+                 RETURNING id, name, description, created_at, updated_at",
+            )
+            .bind::<Text, _>(&name)
+            .bind::<Text, _>(description)
+            .get_results::<AtomRow>(c)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AppError::not_found(format!("host policy atom '{}' was not found", name))
+            })?;
+            row.into_domain()
+        } else {
+            let row = sql_query(
+                "SELECT id, name, description, created_at, updated_at
+                 FROM host_policy_atoms WHERE name = $1",
+            )
+            .bind::<Text, _>(&name)
+            .get_results::<AtomRow>(c)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AppError::not_found(format!("host policy atom '{}' was not found", name))
+            })?;
+            row.into_domain()
+        }
+    }
+
+    pub(in crate::storage::postgres) fn delete_atom_in_conn(
+        c: &mut diesel::PgConnection,
+        name: &HostPolicyName,
+    ) -> Result<(), AppError> {
+        let name = name.as_str().to_string();
+        let result = sql_query("DELETE FROM host_policy_atoms WHERE name = $1")
+            .bind::<Text, _>(&name)
+            .execute(c)
+            .map_err(map_fk_violation(
+                "host policy atom is in use by a role and cannot be deleted",
+            ))?;
+        if result == 0 {
+            return Err(AppError::not_found(format!(
+                "host policy atom '{}' was not found",
+                name
+            )));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn list_roles_in_conn(
+        c: &mut diesel::PgConnection,
+        page: &PageRequest,
+    ) -> Result<Page<HostPolicyRole>, AppError> {
+        let rows = sql_query(
+            "SELECT id, name, description, created_at, updated_at
+             FROM host_policy_roles ORDER BY name ASC",
+        )
+        .load::<RoleRow>(c)?;
+        Ok(vec_to_page(build_roles_from_rows(c, rows)?, page))
+    }
+
+    pub(in crate::storage::postgres) fn list_roles_for_host_in_conn(
+        c: &mut diesel::PgConnection,
+        host_name: &Hostname,
+    ) -> Result<Vec<HostPolicyRole>, AppError> {
+        let rows = sql_query(
+            "SELECT DISTINCT r.id, r.name, r.description, r.created_at, r.updated_at
+             FROM host_policy_roles r
+             JOIN host_policy_role_hosts rh ON rh.role_id = r.id
+             JOIN hosts h ON h.id = rh.host_id
+             WHERE h.name = $1
+             ORDER BY r.name ASC",
+        )
+        .bind::<Text, _>(host_name.as_str())
+        .load::<RoleRow>(c)?;
+        build_roles_from_rows(c, rows)
+    }
+
+    pub(in crate::storage::postgres) fn list_roles_for_hosts_in_conn(
+        c: &mut diesel::PgConnection,
+        hosts: &[Hostname],
+    ) -> Result<Vec<HostPolicyRole>, AppError> {
+        if hosts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let host_names = hosts
+            .iter()
+            .map(|host| host.as_str().to_string())
+            .collect::<Vec<_>>();
+        let rows = sql_query(
+            "SELECT DISTINCT r.id, r.name, r.description, r.created_at, r.updated_at
+             FROM host_policy_roles r
+             JOIN host_policy_role_hosts rh ON rh.role_id = r.id
+             JOIN hosts h ON h.id = rh.host_id
+             WHERE h.name = ANY($1::text[])
+             ORDER BY r.name ASC",
+        )
+        .bind::<diesel::sql_types::Array<Text>, _>(&host_names)
+        .load::<RoleRow>(c)?;
+        build_roles_from_rows(c, rows)
+    }
+
+    pub(in crate::storage::postgres) fn create_role_in_conn(
+        c: &mut diesel::PgConnection,
+        command: CreateHostPolicyRole,
+    ) -> Result<HostPolicyRole, AppError> {
+        let name = command.name().as_str().to_string();
+        let description = command.description().to_string();
+        let row = sql_query(
+            "INSERT INTO host_policy_roles (name, description)
+             VALUES ($1, $2)
+             RETURNING id, name, description, created_at, updated_at",
+        )
+        .bind::<Text, _>(&name)
+        .bind::<Text, _>(&description)
+        .get_result::<RoleRow>(c)
+        .map_err(map_unique("host policy role already exists"))?;
+        build_role_from_row(c, row)
+    }
+
+    pub(in crate::storage::postgres) fn get_role_by_name_in_conn(
+        c: &mut diesel::PgConnection,
+        name: &HostPolicyName,
+    ) -> Result<HostPolicyRole, AppError> {
+        let name = name.as_str().to_string();
+        let row = sql_query(
+            "SELECT id, name, description, created_at, updated_at
+             FROM host_policy_roles WHERE name = $1",
+        )
+        .bind::<Text, _>(&name)
+        .get_results::<RoleRow>(c)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::not_found(format!("host policy role '{}' was not found", name)))?;
+        build_role_from_row(c, row)
+    }
+
+    pub(in crate::storage::postgres) fn update_role_in_conn(
+        c: &mut diesel::PgConnection,
+        name: &HostPolicyName,
+        command: UpdateHostPolicyRole,
+    ) -> Result<HostPolicyRole, AppError> {
+        let name = name.as_str().to_string();
+        let row = if let Some(ref description) = command.description {
+            sql_query(
+                "UPDATE host_policy_roles SET description = $2, updated_at = now()
+                 WHERE name = $1
+                 RETURNING id, name, description, created_at, updated_at",
+            )
+            .bind::<Text, _>(&name)
+            .bind::<Text, _>(description)
+            .get_results::<RoleRow>(c)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AppError::not_found(format!("host policy role '{}' was not found", name))
+            })?
+        } else {
+            sql_query(
+                "SELECT id, name, description, created_at, updated_at
+                 FROM host_policy_roles WHERE name = $1",
+            )
+            .bind::<Text, _>(&name)
+            .get_results::<RoleRow>(c)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AppError::not_found(format!("host policy role '{}' was not found", name))
+            })?
+        };
+        build_role_from_row(c, row)
+    }
+
+    pub(in crate::storage::postgres) fn delete_role_in_conn(
+        c: &mut diesel::PgConnection,
+        name: &HostPolicyName,
+    ) -> Result<(), AppError> {
+        let name = name.as_str().to_string();
+        let result = sql_query("DELETE FROM host_policy_roles WHERE name = $1")
+            .bind::<Text, _>(&name)
+            .execute(c)?;
+        if result == 0 {
+            return Err(AppError::not_found(format!(
+                "host policy role '{}' was not found",
+                name
+            )));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn add_atom_to_role_in_conn(
+        c: &mut diesel::PgConnection,
+        role_name: &HostPolicyName,
+        atom_name: &HostPolicyName,
+    ) -> Result<(), AppError> {
+        sql_query(
+            "INSERT INTO host_policy_role_atoms (role_id, atom_id)
+             SELECT r.id, a.id
+             FROM host_policy_roles r, host_policy_atoms a
+             WHERE r.name = $1 AND a.name = $2",
+        )
+        .bind::<Text, _>(role_name.as_str())
+        .bind::<Text, _>(atom_name.as_str())
+        .execute(c)
+        .map_err(map_fk_violation(
+            "atom or role not found, or already assigned",
+        ))?;
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn remove_atom_from_role_in_conn(
+        c: &mut diesel::PgConnection,
+        role_name: &HostPolicyName,
+        atom_name: &HostPolicyName,
+    ) -> Result<(), AppError> {
+        let deleted = sql_query(
+            "DELETE FROM host_policy_role_atoms
+             WHERE role_id = (SELECT id FROM host_policy_roles WHERE name = $1)
+               AND atom_id = (SELECT id FROM host_policy_atoms WHERE name = $2)",
+        )
+        .bind::<Text, _>(role_name.as_str())
+        .bind::<Text, _>(atom_name.as_str())
+        .execute(c)?;
+        if deleted == 0 {
+            return Err(AppError::not_found(format!(
+                "atom '{}' is not in role '{}'",
+                atom_name.as_str(),
+                role_name.as_str()
+            )));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn add_host_to_role_in_conn(
+        c: &mut diesel::PgConnection,
+        role_name: &HostPolicyName,
+        host_name: &str,
+    ) -> Result<(), AppError> {
+        sql_query(
+            "INSERT INTO host_policy_role_hosts (role_id, host_id)
+             SELECT r.id, h.id
+             FROM host_policy_roles r, hosts h
+             WHERE r.name = $1 AND h.name = $2",
+        )
+        .bind::<Text, _>(role_name.as_str())
+        .bind::<Text, _>(host_name)
+        .execute(c)
+        .map_err(map_fk_violation(
+            "host or role not found, or already assigned",
+        ))?;
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn remove_host_from_role_in_conn(
+        c: &mut diesel::PgConnection,
+        role_name: &HostPolicyName,
+        host_name: &str,
+    ) -> Result<(), AppError> {
+        let deleted = sql_query(
+            "DELETE FROM host_policy_role_hosts
+             WHERE role_id = (SELECT id FROM host_policy_roles WHERE name = $1)
+               AND host_id = (SELECT id FROM hosts WHERE name = $2)",
+        )
+        .bind::<Text, _>(role_name.as_str())
+        .bind::<Text, _>(host_name)
+        .execute(c)?;
+        if deleted == 0 {
+            return Err(AppError::not_found(format!(
+                "host '{}' is not in role '{}'",
+                host_name,
+                role_name.as_str()
+            )));
+        }
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn add_label_to_role_in_conn(
+        c: &mut diesel::PgConnection,
+        role_name: &HostPolicyName,
+        label_name: &str,
+    ) -> Result<(), AppError> {
+        sql_query(
+            "INSERT INTO host_policy_role_labels (role_id, label_id)
+             SELECT r.id, l.id
+             FROM host_policy_roles r, labels l
+             WHERE r.name = $1 AND l.name = $2",
+        )
+        .bind::<Text, _>(role_name.as_str())
+        .bind::<Text, _>(label_name)
+        .execute(c)
+        .map_err(map_fk_violation(
+            "label or role not found, or already assigned",
+        ))?;
+        Ok(())
+    }
+
+    pub(in crate::storage::postgres) fn remove_label_from_role_in_conn(
+        c: &mut diesel::PgConnection,
+        role_name: &HostPolicyName,
+        label_name: &str,
+    ) -> Result<(), AppError> {
+        let deleted = sql_query(
+            "DELETE FROM host_policy_role_labels
+             WHERE role_id = (SELECT id FROM host_policy_roles WHERE name = $1)
+               AND label_id = (SELECT id FROM labels WHERE name = $2)",
+        )
+        .bind::<Text, _>(role_name.as_str())
+        .bind::<Text, _>(label_name)
+        .execute(c)?;
+        if deleted == 0 {
+            return Err(AppError::not_found(format!(
+                "label '{}' is not in role '{}'",
+                label_name,
+                role_name.as_str()
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl HostPolicyStore for PostgresStorage {
     async fn list_atoms(&self, page: &PageRequest) -> Result<Page<HostPolicyAtom>, AppError> {
         let page = page.clone();
         self.database
-            .run(move |c| {
-                let rows = sql_query(
-                    "SELECT id, name, description, created_at, updated_at
-                     FROM host_policy_atoms ORDER BY name ASC",
-                )
-                .load::<AtomRow>(c)?;
-                let items: Result<Vec<_>, _> = rows.into_iter().map(AtomRow::into_domain).collect();
-                Ok(vec_to_page(items?, &page))
-            })
+            .run(move |c| Self::list_atoms_in_conn(c, &page))
             .await
     }
 
     async fn create_atom(&self, command: CreateHostPolicyAtom) -> Result<HostPolicyAtom, AppError> {
-        let name = command.name().as_str().to_string();
-        let description = command.description().to_string();
         self.database
-            .run(move |c| {
-                let row = sql_query(
-                    "INSERT INTO host_policy_atoms (name, description)
-                     VALUES ($1, $2)
-                     RETURNING id, name, description, created_at, updated_at",
-                )
-                .bind::<Text, _>(&name)
-                .bind::<Text, _>(&description)
-                .get_result::<AtomRow>(c)
-                .map_err(map_unique("host policy atom already exists"))?;
-                row.into_domain()
-            })
+            .run(move |c| Self::create_atom_in_conn(c, command))
             .await
     }
 
     async fn get_atom_by_name(&self, name: &HostPolicyName) -> Result<HostPolicyAtom, AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |c| {
-                let row = sql_query(
-                    "SELECT id, name, description, created_at, updated_at
-                     FROM host_policy_atoms WHERE name = $1",
-                )
-                .bind::<Text, _>(&name)
-                .get_results::<AtomRow>(c)?
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    AppError::not_found(format!("host policy atom '{}' was not found", name))
-                })?;
-                row.into_domain()
-            })
+            .run(move |c| Self::get_atom_by_name_in_conn(c, &name))
             .await
     }
 
@@ -154,74 +497,23 @@ impl HostPolicyStore for PostgresStorage {
         name: &HostPolicyName,
         command: UpdateHostPolicyAtom,
     ) -> Result<HostPolicyAtom, AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |c| {
-                if let Some(ref description) = command.description {
-                    let row = sql_query(
-                        "UPDATE host_policy_atoms SET description = $2, updated_at = now()
-                         WHERE name = $1
-                         RETURNING id, name, description, created_at, updated_at",
-                    )
-                    .bind::<Text, _>(&name)
-                    .bind::<Text, _>(description)
-                    .get_results::<AtomRow>(c)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("host policy atom '{}' was not found", name))
-                    })?;
-                    row.into_domain()
-                } else {
-                    let row = sql_query(
-                        "SELECT id, name, description, created_at, updated_at
-                         FROM host_policy_atoms WHERE name = $1",
-                    )
-                    .bind::<Text, _>(&name)
-                    .get_results::<AtomRow>(c)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("host policy atom '{}' was not found", name))
-                    })?;
-                    row.into_domain()
-                }
-            })
+            .run(move |c| Self::update_atom_in_conn(c, &name, command))
             .await
     }
 
     async fn delete_atom(&self, name: &HostPolicyName) -> Result<(), AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |c| {
-                let result = sql_query("DELETE FROM host_policy_atoms WHERE name = $1")
-                    .bind::<Text, _>(&name)
-                    .execute(c)
-                    .map_err(map_fk_violation(
-                        "host policy atom is in use by a role and cannot be deleted",
-                    ))?;
-                if result == 0 {
-                    return Err(AppError::not_found(format!(
-                        "host policy atom '{}' was not found",
-                        name
-                    )));
-                }
-                Ok(())
-            })
+            .run(move |c| Self::delete_atom_in_conn(c, &name))
             .await
     }
 
     async fn list_roles(&self, page: &PageRequest) -> Result<Page<HostPolicyRole>, AppError> {
         let page = page.clone();
         self.database
-            .run(move |c| {
-                let rows = sql_query(
-                    "SELECT id, name, description, created_at, updated_at
-                     FROM host_policy_roles ORDER BY name ASC",
-                )
-                .load::<RoleRow>(c)?;
-                Ok(vec_to_page(build_roles_from_rows(c, rows)?, &page))
-            })
+            .run(move |c| Self::list_roles_in_conn(c, &page))
             .await
     }
 
@@ -231,19 +523,7 @@ impl HostPolicyStore for PostgresStorage {
     ) -> Result<Vec<HostPolicyRole>, AppError> {
         let host_name = host_name.clone();
         self.database
-            .run(move |c| {
-                let rows = sql_query(
-                    "SELECT DISTINCT r.id, r.name, r.description, r.created_at, r.updated_at
-                     FROM host_policy_roles r
-                     JOIN host_policy_role_hosts rh ON rh.role_id = r.id
-                     JOIN hosts h ON h.id = rh.host_id
-                     WHERE h.name = $1
-                     ORDER BY r.name ASC",
-                )
-                .bind::<Text, _>(host_name.as_str())
-                .load::<RoleRow>(c)?;
-                build_roles_from_rows(c, rows)
-            })
+            .run(move |c| Self::list_roles_for_host_in_conn(c, &host_name))
             .await
     }
 
@@ -251,66 +531,22 @@ impl HostPolicyStore for PostgresStorage {
         &self,
         hosts: &[Hostname],
     ) -> Result<Vec<HostPolicyRole>, AppError> {
-        let host_names = hosts
-            .iter()
-            .map(|host| host.as_str().to_string())
-            .collect::<Vec<_>>();
+        let hosts = hosts.to_vec();
         self.database
-            .run(move |c| {
-                if host_names.is_empty() {
-                    return Ok(Vec::new());
-                }
-                let rows = sql_query(
-                    "SELECT DISTINCT r.id, r.name, r.description, r.created_at, r.updated_at
-                     FROM host_policy_roles r
-                     JOIN host_policy_role_hosts rh ON rh.role_id = r.id
-                     JOIN hosts h ON h.id = rh.host_id
-                     WHERE h.name = ANY($1::text[])
-                     ORDER BY r.name ASC",
-                )
-                .bind::<diesel::sql_types::Array<Text>, _>(&host_names)
-                .load::<RoleRow>(c)?;
-                build_roles_from_rows(c, rows)
-            })
+            .run(move |c| Self::list_roles_for_hosts_in_conn(c, &hosts))
             .await
     }
 
     async fn create_role(&self, command: CreateHostPolicyRole) -> Result<HostPolicyRole, AppError> {
-        let name = command.name().as_str().to_string();
-        let description = command.description().to_string();
         self.database
-            .run(move |c| {
-                let row = sql_query(
-                    "INSERT INTO host_policy_roles (name, description)
-                     VALUES ($1, $2)
-                     RETURNING id, name, description, created_at, updated_at",
-                )
-                .bind::<Text, _>(&name)
-                .bind::<Text, _>(&description)
-                .get_result::<RoleRow>(c)
-                .map_err(map_unique("host policy role already exists"))?;
-                build_role_from_row(c, row)
-            })
+            .run(move |c| Self::create_role_in_conn(c, command))
             .await
     }
 
     async fn get_role_by_name(&self, name: &HostPolicyName) -> Result<HostPolicyRole, AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |c| {
-                let row = sql_query(
-                    "SELECT id, name, description, created_at, updated_at
-                     FROM host_policy_roles WHERE name = $1",
-                )
-                .bind::<Text, _>(&name)
-                .get_results::<RoleRow>(c)?
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    AppError::not_found(format!("host policy role '{}' was not found", name))
-                })?;
-                build_role_from_row(c, row)
-            })
+            .run(move |c| Self::get_role_by_name_in_conn(c, &name))
             .await
     }
 
@@ -319,56 +555,16 @@ impl HostPolicyStore for PostgresStorage {
         name: &HostPolicyName,
         command: UpdateHostPolicyRole,
     ) -> Result<HostPolicyRole, AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |c| {
-                let row = if let Some(ref description) = command.description {
-                    sql_query(
-                        "UPDATE host_policy_roles SET description = $2, updated_at = now()
-                         WHERE name = $1
-                         RETURNING id, name, description, created_at, updated_at",
-                    )
-                    .bind::<Text, _>(&name)
-                    .bind::<Text, _>(description)
-                    .get_results::<RoleRow>(c)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("host policy role '{}' was not found", name))
-                    })?
-                } else {
-                    sql_query(
-                        "SELECT id, name, description, created_at, updated_at
-                         FROM host_policy_roles WHERE name = $1",
-                    )
-                    .bind::<Text, _>(&name)
-                    .get_results::<RoleRow>(c)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("host policy role '{}' was not found", name))
-                    })?
-                };
-                build_role_from_row(c, row)
-            })
+            .run(move |c| Self::update_role_in_conn(c, &name, command))
             .await
     }
 
     async fn delete_role(&self, name: &HostPolicyName) -> Result<(), AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |c| {
-                let result = sql_query("DELETE FROM host_policy_roles WHERE name = $1")
-                    .bind::<Text, _>(&name)
-                    .execute(c)?;
-                if result == 0 {
-                    return Err(AppError::not_found(format!(
-                        "host policy role '{}' was not found",
-                        name
-                    )));
-                }
-                Ok(())
-            })
+            .run(move |c| Self::delete_role_in_conn(c, &name))
             .await
     }
 
@@ -377,24 +573,10 @@ impl HostPolicyStore for PostgresStorage {
         role_name: &HostPolicyName,
         atom_name: &HostPolicyName,
     ) -> Result<(), AppError> {
-        let role_name = role_name.as_str().to_string();
-        let atom_name = atom_name.as_str().to_string();
+        let role_name = role_name.clone();
+        let atom_name = atom_name.clone();
         self.database
-            .run(move |c| {
-                sql_query(
-                    "INSERT INTO host_policy_role_atoms (role_id, atom_id)
-                     SELECT r.id, a.id
-                     FROM host_policy_roles r, host_policy_atoms a
-                     WHERE r.name = $1 AND a.name = $2",
-                )
-                .bind::<Text, _>(&role_name)
-                .bind::<Text, _>(&atom_name)
-                .execute(c)
-                .map_err(map_fk_violation(
-                    "atom or role not found, or already assigned",
-                ))?;
-                Ok(())
-            })
+            .run(move |c| Self::add_atom_to_role_in_conn(c, &role_name, &atom_name))
             .await
     }
 
@@ -403,26 +585,10 @@ impl HostPolicyStore for PostgresStorage {
         role_name: &HostPolicyName,
         atom_name: &HostPolicyName,
     ) -> Result<(), AppError> {
-        let role_name = role_name.as_str().to_string();
-        let atom_name = atom_name.as_str().to_string();
+        let role_name = role_name.clone();
+        let atom_name = atom_name.clone();
         self.database
-            .run(move |c| {
-                let deleted = sql_query(
-                    "DELETE FROM host_policy_role_atoms
-                     WHERE role_id = (SELECT id FROM host_policy_roles WHERE name = $1)
-                       AND atom_id = (SELECT id FROM host_policy_atoms WHERE name = $2)",
-                )
-                .bind::<Text, _>(&role_name)
-                .bind::<Text, _>(&atom_name)
-                .execute(c)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found(format!(
-                        "atom '{}' is not in role '{}'",
-                        atom_name, role_name
-                    )));
-                }
-                Ok(())
-            })
+            .run(move |c| Self::remove_atom_from_role_in_conn(c, &role_name, &atom_name))
             .await
     }
 
@@ -431,24 +597,10 @@ impl HostPolicyStore for PostgresStorage {
         role_name: &HostPolicyName,
         host_name: &str,
     ) -> Result<(), AppError> {
-        let role_name = role_name.as_str().to_string();
+        let role_name = role_name.clone();
         let host_name = host_name.to_string();
         self.database
-            .run(move |c| {
-                sql_query(
-                    "INSERT INTO host_policy_role_hosts (role_id, host_id)
-                     SELECT r.id, h.id
-                     FROM host_policy_roles r, hosts h
-                     WHERE r.name = $1 AND h.name = $2",
-                )
-                .bind::<Text, _>(&role_name)
-                .bind::<Text, _>(&host_name)
-                .execute(c)
-                .map_err(map_fk_violation(
-                    "host or role not found, or already assigned",
-                ))?;
-                Ok(())
-            })
+            .run(move |c| Self::add_host_to_role_in_conn(c, &role_name, &host_name))
             .await
     }
 
@@ -457,26 +609,10 @@ impl HostPolicyStore for PostgresStorage {
         role_name: &HostPolicyName,
         host_name: &str,
     ) -> Result<(), AppError> {
-        let role_name = role_name.as_str().to_string();
+        let role_name = role_name.clone();
         let host_name = host_name.to_string();
         self.database
-            .run(move |c| {
-                let deleted = sql_query(
-                    "DELETE FROM host_policy_role_hosts
-                     WHERE role_id = (SELECT id FROM host_policy_roles WHERE name = $1)
-                       AND host_id = (SELECT id FROM hosts WHERE name = $2)",
-                )
-                .bind::<Text, _>(&role_name)
-                .bind::<Text, _>(&host_name)
-                .execute(c)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found(format!(
-                        "host '{}' is not in role '{}'",
-                        host_name, role_name
-                    )));
-                }
-                Ok(())
-            })
+            .run(move |c| Self::remove_host_from_role_in_conn(c, &role_name, &host_name))
             .await
     }
 
@@ -485,24 +621,10 @@ impl HostPolicyStore for PostgresStorage {
         role_name: &HostPolicyName,
         label_name: &str,
     ) -> Result<(), AppError> {
-        let role_name = role_name.as_str().to_string();
+        let role_name = role_name.clone();
         let label_name = label_name.to_string();
         self.database
-            .run(move |c| {
-                sql_query(
-                    "INSERT INTO host_policy_role_labels (role_id, label_id)
-                     SELECT r.id, l.id
-                     FROM host_policy_roles r, labels l
-                     WHERE r.name = $1 AND l.name = $2",
-                )
-                .bind::<Text, _>(&role_name)
-                .bind::<Text, _>(&label_name)
-                .execute(c)
-                .map_err(map_fk_violation(
-                    "label or role not found, or already assigned",
-                ))?;
-                Ok(())
-            })
+            .run(move |c| Self::add_label_to_role_in_conn(c, &role_name, &label_name))
             .await
     }
 
@@ -511,26 +633,10 @@ impl HostPolicyStore for PostgresStorage {
         role_name: &HostPolicyName,
         label_name: &str,
     ) -> Result<(), AppError> {
-        let role_name = role_name.as_str().to_string();
+        let role_name = role_name.clone();
         let label_name = label_name.to_string();
         self.database
-            .run(move |c| {
-                let deleted = sql_query(
-                    "DELETE FROM host_policy_role_labels
-                     WHERE role_id = (SELECT id FROM host_policy_roles WHERE name = $1)
-                       AND label_id = (SELECT id FROM labels WHERE name = $2)",
-                )
-                .bind::<Text, _>(&role_name)
-                .bind::<Text, _>(&label_name)
-                .execute(c)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found(format!(
-                        "label '{}' is not in role '{}'",
-                        label_name, role_name
-                    )));
-                }
-                Ok(())
-            })
+            .run(move |c| Self::remove_label_from_role_in_conn(c, &role_name, &label_name))
             .await
     }
 }

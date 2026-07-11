@@ -13,8 +13,9 @@ concurrency:
 
 jobs:
   bench:
-    uses: terjekv/github-action-iai-callgrind/.github/workflows/rust-pr-bench.yml@v2
+    uses: terjekv/github-action-iai-callgrind/.github/workflows/rust-pr-bench.yml@v2.0.2
     with:
+      action_ref: v2.0.2
       backend: all
       auto_discover: true
       criterion_cli_args: "--noplot --sample-size 80 --measurement-time 6"

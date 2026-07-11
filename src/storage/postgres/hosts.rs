@@ -739,6 +739,347 @@ impl PostgresStorage {
         }
         Ok(())
     }
+
+    // ---------------------------------------------------------------------
+    // Synchronous, in-connection bodies for HostStore methods. These are the
+    // shared implementations called from both the async HostStore impl
+    // (wrapped in `database.run`) and the sync TxHostStore impl on
+    // PgTxStorage (already inside a transaction).
+    // ---------------------------------------------------------------------
+
+    pub(super) fn list_hosts_in_conn(
+        connection: &mut PgConnection,
+        page: &PageRequest,
+        filter: &HostFilter,
+    ) -> Result<Page<Host>, AppError> {
+        let base = "SELECT h.id, h.name::text AS name, fz.name::text AS zone_name, \
+                h.ttl, h.comment, h.created_at, h.updated_at \
+                FROM hosts h LEFT JOIN forward_zones fz ON fz.id = h.zone_id";
+
+        let (clauses, values) = filter.sql_conditions();
+        let where_str = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let order_col = match page.sort_by() {
+            Some("comment") => "h.comment",
+            Some("created_at") => "h.created_at",
+            Some("updated_at") => "h.updated_at",
+            Some("name") | None => "h.name::text",
+            Some(other) => {
+                return Err(AppError::validation(format!(
+                    "unsupported sort_by field for hosts: {other}"
+                )));
+            }
+        };
+        let order_dir = match page.sort_direction() {
+            crate::domain::pagination::SortDirection::Asc => "ASC",
+            crate::domain::pagination::SortDirection::Desc => "DESC",
+        };
+        let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
+        let total = run_count_query(connection, &count_sql, &values)?;
+
+        let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+            format!(" LIMIT {}", page.limit() + 1)
+        } else {
+            String::new()
+        };
+        let query_str =
+            format!("{base}{where_str} ORDER BY {order_col} {order_dir}, h.id{limit_clause}");
+
+        let rows = run_dynamic_query::<HostRow>(connection, &query_str, &values)?;
+        let items: Vec<Host> = rows
+            .into_iter()
+            .map(|row| row.into_domain())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows_to_page(items, page, total))
+    }
+
+    pub(super) fn create_host_in_conn(
+        connection: &mut PgConnection,
+        command: CreateHost,
+    ) -> Result<Host, AppError> {
+        let name = command.name().as_str().to_string();
+        let zone_name = command.zone().map(|zone| zone.as_str().to_string());
+        let ttl = command.ttl().map(|ttl| ttl.as_i32());
+        let comment = command.comment().to_string();
+        let ip_specs = command.ip_assignments().to_vec();
+
+        let zone_id = match zone_name.as_ref() {
+            Some(zone_name) => Some(
+                forward_zones::table
+                    .filter(forward_zones::name.eq(zone_name))
+                    .select(forward_zones::id)
+                    .first::<uuid::Uuid>(connection)
+                    .optional()?
+                    .ok_or_else(|| {
+                        AppError::not_found(format!(
+                            "forward zone '{}' was not found",
+                            zone_name
+                        ))
+                    })?,
+            ),
+            None => None,
+        };
+        let host = sql_query(
+            "INSERT INTO hosts (name, zone_id, ttl, comment)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, name::text AS name, $5::text AS zone_name, ttl, comment, created_at, updated_at",
+        )
+        .bind::<Text, _>(&name)
+        .bind::<Nullable<SqlUuid>, _>(zone_id)
+        .bind::<Nullable<Integer>, _>(ttl)
+        .bind::<Text, _>(&comment)
+        .bind::<Nullable<Text>, _>(zone_name.as_deref())
+        .get_result::<HostRow>(connection)
+        .map_err(map_unique("host already exists"))?
+        .into_domain()?;
+
+        for spec in ip_specs {
+            let assign_cmd = if *spec.allocation() == AllocationPolicy::Random {
+                if let Some(network_cidr) = spec.network() {
+                    let network = Self::query_network_by_cidr(connection, network_cidr)?;
+                    let address =
+                        Self::allocate_random_address_in_network(connection, &network)?;
+                    let cmd = AssignIpAddress::new(
+                        host.name().clone(),
+                        Some(address),
+                        None,
+                        spec.mac_address().cloned(),
+                    )?;
+                    cmd.with_auto_dhcp(spec.auto_v4_client_id(), spec.auto_v6_duid_ll())
+                } else {
+                    spec.into_assign_command(host.name().clone())?
+                }
+            } else {
+                spec.into_assign_command(host.name().clone())?
+            };
+            let assignment = Self::assign_ip_address_tx(connection, assign_cmd)?;
+            Self::auto_create_forward_record(connection, &assignment)?;
+            Self::auto_create_ptr_record(connection, &assignment)?;
+        }
+
+        Ok(host)
+    }
+
+    pub(super) fn update_host_in_conn(
+        connection: &mut PgConnection,
+        name: &Hostname,
+        command: UpdateHost,
+    ) -> Result<Host, AppError> {
+        let old_host = Self::query_host_by_name(connection, name)?;
+        let resolved = Self::resolve_host_update_values(connection, &old_host, &command)?;
+
+        let host = sql_query(
+            "UPDATE hosts
+             SET name = $1, ttl = $2, comment = $3,
+                 zone_id = $4, updated_at = now()
+             WHERE id = $5
+             RETURNING id, name::text AS name, $6::text AS zone_name, ttl, comment, created_at, updated_at",
+        )
+        .bind::<Text, _>(&resolved.name)
+        .bind::<Nullable<Integer>, _>(resolved.ttl)
+        .bind::<Text, _>(&resolved.comment)
+        .bind::<Nullable<SqlUuid>, _>(resolved.zone_id)
+        .bind::<SqlUuid, _>(old_host.id())
+        .bind::<Nullable<Text>, _>(resolved.zone_name.as_deref())
+        .get_result::<HostRow>(connection)
+        .map_err(map_unique("host already exists"))?
+        .into_domain()?;
+
+        if host.name() != old_host.name() {
+            Self::cascade_host_rename(
+                connection,
+                old_host.id(),
+                &resolved.name,
+                resolved.zone_id,
+            )?;
+        }
+
+        Ok(host)
+    }
+
+    pub(super) fn delete_host_in_conn(
+        connection: &mut PgConnection,
+        name: &Hostname,
+    ) -> Result<(), AppError> {
+        use crate::db::schema::records;
+
+        let name_str = name.as_str();
+        let (host_id, host_zone_id) = hosts::table
+            .filter(hosts::name.eq(name_str))
+            .select((hosts::id, hosts::zone_id))
+            .first::<(uuid::Uuid, Option<uuid::Uuid>)>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name_str)))?;
+
+        diesel::delete(records::table.filter(records::owner_id.eq(host_id)))
+            .execute(connection)?;
+        sql_query(
+            "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
+        )
+        .execute(connection)?;
+
+        if let Some(zone_id) = host_zone_id {
+            Self::bump_zone_serial_tx(connection, zone_id)?;
+        }
+
+        diesel::delete(hosts::table.filter(hosts::id.eq(host_id))).execute(connection)?;
+
+        Ok(())
+    }
+
+    pub(super) fn assign_ip_address_in_conn(
+        connection: &mut PgConnection,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let assignment = Self::assign_ip_address_tx(connection, command)?;
+        Self::auto_create_forward_record(connection, &assignment)?;
+        Self::auto_create_ptr_record(connection, &assignment)?;
+        Ok(assignment)
+    }
+
+    pub(super) fn update_ip_address_in_conn(
+        connection: &mut PgConnection,
+        address: &IpAddressValue,
+        command: UpdateIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let addr = address.as_str();
+        if command.mac_address.is_unchanged() {
+            let row = sql_query(
+                "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
+                 nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
+                 FROM ip_addresses ip \
+                 JOIN LATERAL ( \
+                   SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
+                 ) nw ON true \
+                 WHERE ip.address = $1::inet",
+            )
+            .bind::<Text, _>(&addr)
+            .get_result::<IpAddressAssignmentRow>(connection)
+            .map_err(|_| {
+                AppError::not_found(format!("IP address assignment '{}' was not found", addr))
+            })?;
+            return row.into_domain();
+        }
+        let mac_str: Option<String> = command
+            .mac_address
+            .into_set()
+            .map(|m| m.as_str().to_string());
+
+        let existing = sql_query(
+            "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
+             nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
+             FROM ip_addresses ip \
+             JOIN LATERAL ( \
+               SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
+             ) nw ON true \
+             WHERE ip.address = $1::inet",
+        )
+        .bind::<Text, _>(&addr)
+        .get_result::<IpAddressAssignmentRow>(connection)
+        .map_err(|_| {
+            AppError::not_found(format!("IP address assignment '{}' was not found", addr))
+        })?
+        .into_domain()?;
+
+        let host = hosts::table
+            .filter(hosts::id.eq(existing.host_id()))
+            .select(hosts::name)
+            .first::<String>(connection)
+            .optional()?
+            .ok_or_else(|| {
+                AppError::not_found("host for IP address assignment was not found")
+            })?;
+        let network = Self::query_network_by_id(connection, existing.network_id())?;
+        let attachment = Self::find_or_create_attachment(
+            connection,
+            &Hostname::new(host)?,
+            network.cidr(),
+            mac_str
+                .as_deref()
+                .map(MacAddressValue::new)
+                .transpose()?
+                .as_ref(),
+        )?;
+
+        sql_query(
+            "UPDATE ip_addresses SET attachment_id = $1, mac_address = $2, updated_at = now() \
+             WHERE address = $3::inet",
+        )
+        .bind::<SqlUuid, _>(attachment.id())
+        .bind::<Nullable<Text>, _>(mac_str.as_deref())
+        .bind::<Text, _>(&addr)
+        .execute(connection)?;
+
+        sql_query(
+            "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
+             nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
+             FROM ip_addresses ip \
+             JOIN LATERAL ( \
+               SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
+             ) nw ON true \
+             WHERE ip.address = $1::inet",
+        )
+        .bind::<Text, _>(&addr)
+        .get_result::<IpAddressAssignmentRow>(connection)
+        .map_err(|_| {
+            AppError::not_found(format!("IP address assignment '{}' was not found", addr))
+        })?
+        .into_domain()
+    }
+
+    pub(super) fn unassign_ip_address_in_conn(
+        connection: &mut PgConnection,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let addr = address.as_str();
+
+        let row = sql_query(
+            "SELECT ip.id,
+                    ip.host_id,
+                    ip.attachment_id,
+                    host(ip.address) AS address,
+                    ip.family::int AS family,
+                    nw.id AS network_id,
+                    ip.mac_address,
+                    ip.created_at,
+                    ip.updated_at
+             FROM ip_addresses ip
+             JOIN LATERAL (
+               SELECT id
+               FROM networks
+               WHERE ip.address <<= network
+               ORDER BY masklen(network) DESC
+               LIMIT 1
+             ) nw ON true
+             WHERE ip.address = $1::inet",
+        )
+        .bind::<Text, _>(&addr)
+        .get_result::<IpAddressAssignmentRow>(connection)
+        .optional()?
+        .ok_or_else(|| {
+            AppError::not_found(format!("IP address assignment '{}' was not found", addr))
+        })?;
+
+        let deleted = sql_query("DELETE FROM ip_addresses WHERE address = $1::inet")
+            .bind::<Text, _>(&addr)
+            .execute(connection)?;
+
+        if deleted == 0 {
+            return Err(AppError::not_found(format!(
+                "IP address assignment '{}' was not found",
+                addr
+            )));
+        }
+
+        Self::auto_delete_forward_record(connection, &row)?;
+        Self::auto_delete_ptr_record(connection, &row)?;
+
+        row.into_domain()
+    }
 }
 
 #[async_trait]
@@ -751,126 +1092,15 @@ impl HostStore for PostgresStorage {
         let page = page.clone();
         let filter = filter.clone();
         self.database
-            .run(move |c| {
-                let base = "SELECT h.id, h.name::text AS name, fz.name::text AS zone_name, \
-                        h.ttl, h.comment, h.created_at, h.updated_at \
-                        FROM hosts h LEFT JOIN forward_zones fz ON fz.id = h.zone_id";
-
-                let (clauses, values) = filter.sql_conditions();
-                let where_str = if clauses.is_empty() {
-                    String::new()
-                } else {
-                    format!(" WHERE {}", clauses.join(" AND "))
-                };
-                let order_col = match page.sort_by() {
-                    Some("comment") => "h.comment",
-                    Some("created_at") => "h.created_at",
-                    Some("updated_at") => "h.updated_at",
-                    Some("name") | None => "h.name::text",
-                    Some(other) => {
-                        return Err(AppError::validation(format!(
-                            "unsupported sort_by field for hosts: {other}"
-                        )));
-                    }
-                };
-                let order_dir = match page.sort_direction() {
-                    crate::domain::pagination::SortDirection::Asc => "ASC",
-                    crate::domain::pagination::SortDirection::Desc => "DESC",
-                };
-                let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
-                let total = run_count_query(c, &count_sql, &values)?;
-
-                let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
-                    format!(" LIMIT {}", page.limit() + 1)
-                } else {
-                    String::new()
-                };
-                let query_str = format!(
-                    "{base}{where_str} ORDER BY {order_col} {order_dir}, h.id{limit_clause}"
-                );
-
-                let rows = run_dynamic_query::<HostRow>(c, &query_str, &values)?;
-                let items: Vec<Host> = rows
-                    .into_iter()
-                    .map(|row| row.into_domain())
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(rows_to_page(items, &page, total))
-            })
+            .run(move |c| Self::list_hosts_in_conn(c, &page, &filter))
             .await
     }
 
     async fn create_host(&self, command: CreateHost) -> Result<Host, AppError> {
-        let name = command.name().as_str().to_string();
-        let zone_name = command.zone().map(|zone| zone.as_str().to_string());
-        let ttl = command.ttl().map(|ttl| ttl.as_i32());
-        let comment = command.comment().to_string();
-        let ip_specs = command.ip_assignments().to_vec();
         self.database
             .run(move |connection| {
                 connection.transaction::<Host, AppError, _>(|connection| {
-                    let zone_id = match zone_name.as_ref() {
-                        Some(zone_name) => Some(
-                            forward_zones::table
-                                .filter(forward_zones::name.eq(zone_name))
-                                .select(forward_zones::id)
-                                .first::<uuid::Uuid>(connection)
-                                .optional()?
-                                .ok_or_else(|| {
-                                    AppError::not_found(format!(
-                                        "forward zone '{}' was not found",
-                                        zone_name
-                                    ))
-                                })?,
-                        ),
-                        None => None,
-                    };
-                    let host = sql_query(
-                        "INSERT INTO hosts (name, zone_id, ttl, comment)
-                         VALUES ($1, $2, $3, $4)
-                         RETURNING id, name::text AS name, $5::text AS zone_name, ttl, comment, created_at, updated_at",
-                    )
-                    .bind::<Text, _>(&name)
-                    .bind::<Nullable<SqlUuid>, _>(zone_id)
-                    .bind::<Nullable<Integer>, _>(ttl)
-                    .bind::<Text, _>(&comment)
-                    .bind::<Nullable<Text>, _>(zone_name.as_deref())
-                    .get_result::<HostRow>(connection)
-                    .map_err(map_unique("host already exists"))?
-                    .into_domain()?;
-
-                    // Process IP assignments atomically within the transaction
-                    for spec in ip_specs {
-                        let assign_cmd =
-                            if *spec.allocation() == AllocationPolicy::Random {
-                                if let Some(network_cidr) = spec.network() {
-                                    let network =
-                                        Self::query_network_by_cidr(connection, network_cidr)?;
-                                    let address = Self::allocate_random_address_in_network(
-                                        connection, &network,
-                                    )?;
-                                    let cmd = AssignIpAddress::new(
-                                        host.name().clone(),
-                                        Some(address),
-                                        None,
-                                        spec.mac_address().cloned(),
-                                    )?;
-                                    cmd.with_auto_dhcp(
-                                        spec.auto_v4_client_id(),
-                                        spec.auto_v6_duid_ll(),
-                                    )
-                                } else {
-                                    spec.into_assign_command(host.name().clone())?
-                                }
-                            } else {
-                                spec.into_assign_command(host.name().clone())?
-                            };
-                        let assignment = Self::assign_ip_address_tx(connection, assign_cmd)?;
-                        Self::auto_create_forward_record(connection, &assignment)?;
-                        Self::auto_create_ptr_record(connection, &assignment)?;
-                    }
-
-                    Ok(host)
+                    Self::create_host_in_conn(connection, command)
                 })
             })
             .await
@@ -910,75 +1140,18 @@ impl HostStore for PostgresStorage {
         self.database
             .run(move |connection| {
                 connection.transaction::<Host, AppError, _>(|connection| {
-                    let old_host = Self::query_host_by_name(connection, &name)?;
-                    let resolved =
-                        Self::resolve_host_update_values(connection, &old_host, &command)?;
-
-                    let host = sql_query(
-                        "UPDATE hosts
-                         SET name = $1, ttl = $2, comment = $3,
-                             zone_id = $4, updated_at = now()
-                         WHERE id = $5
-                         RETURNING id, name::text AS name, $6::text AS zone_name, ttl, comment, created_at, updated_at",
-                    )
-                    .bind::<Text, _>(&resolved.name)
-                    .bind::<Nullable<Integer>, _>(resolved.ttl)
-                    .bind::<Text, _>(&resolved.comment)
-                    .bind::<Nullable<SqlUuid>, _>(resolved.zone_id)
-                    .bind::<SqlUuid, _>(old_host.id())
-                    .bind::<Nullable<Text>, _>(resolved.zone_name.as_deref())
-                    .get_result::<HostRow>(connection)
-                    .map_err(map_unique("host already exists"))?
-                    .into_domain()?;
-
-                    if host.name() != old_host.name() {
-                        Self::cascade_host_rename(
-                            connection,
-                            old_host.id(),
-                            &resolved.name,
-                            resolved.zone_id,
-                        )?;
-                    }
-
-                    Ok(host)
+                    Self::update_host_in_conn(connection, &name, command)
                 })
             })
             .await
     }
 
     async fn delete_host(&self, name: &Hostname) -> Result<(), AppError> {
-        let name = name.as_str().to_string();
+        let name = name.clone();
         self.database
             .run(move |connection| {
                 connection.transaction::<(), AppError, _>(|connection| {
-                    use crate::db::schema::records;
-
-                    // Look up the host id and zone_id
-                    let (host_id, host_zone_id) = hosts::table
-                        .filter(hosts::name.eq(&name))
-                        .select((hosts::id, hosts::zone_id))
-                        .first::<(uuid::Uuid, Option<uuid::Uuid>)>(connection)
-                        .optional()?
-                        .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name)))?;
-
-                    // Cascade: delete all records owned by this host
-                    diesel::delete(records::table.filter(records::owner_id.eq(host_id)))
-                        .execute(connection)?;
-                    sql_query(
-                        "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
-                    )
-                    .execute(connection)?;
-
-                    // Cascade: bump zone serial for the host's zone
-                    if let Some(zone_id) = host_zone_id {
-                        Self::bump_zone_serial_tx(connection, zone_id)?;
-                    }
-
-                    // Delete the host (CASCADE handles ip_addresses via FK)
-                    diesel::delete(hosts::table.filter(hosts::id.eq(host_id)))
-                        .execute(connection)?;
-
-                    Ok(())
+                    Self::delete_host_in_conn(connection, &name)
                 })
             })
             .await
@@ -1043,15 +1216,7 @@ impl HostStore for PostgresStorage {
         self.database
             .run(move |connection| {
                 connection.transaction(|connection| {
-                    let assignment = Self::assign_ip_address_tx(connection, command)?;
-
-                    // Auto-create A/AAAA record for the host
-                    Self::auto_create_forward_record(connection, &assignment)?;
-
-                    // Auto-create PTR record in the matching reverse zone (if one exists)
-                    Self::auto_create_ptr_record(connection, &assignment)?;
-
-                    Ok(assignment)
+                    Self::assign_ip_address_in_conn(connection, command)
                 })
             })
             .await
@@ -1062,81 +1227,11 @@ impl HostStore for PostgresStorage {
         address: &crate::domain::types::IpAddressValue,
         command: UpdateIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
-        let addr = address.as_str();
-        if command.mac_address.is_unchanged() {
-            return self.database.run(move |connection| {
-                let row = sql_query(
-                    "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
-                     nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
-                     FROM ip_addresses ip \
-                     JOIN LATERAL ( \
-                       SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-                     ) nw ON true \
-                     WHERE ip.address = $1::inet",
-                )
-                .bind::<Text, _>(&addr)
-                .get_result::<IpAddressAssignmentRow>(connection)
-                .map_err(|_| AppError::not_found(format!("IP address assignment '{}' was not found", addr)))?;
-                row.into_domain()
-            }).await;
-        }
-        let mac_str: Option<String> = command
-            .mac_address
-            .into_set()
-            .map(|m| m.as_str().to_string());
+        let address = *address;
         self.database
             .run(move |connection| {
                 connection.transaction::<IpAddressAssignment, AppError, _>(|connection| {
-                    let existing = sql_query(
-                        "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
-                         nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
-                         FROM ip_addresses ip \
-                         JOIN LATERAL ( \
-                           SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-                         ) nw ON true \
-                         WHERE ip.address = $1::inet",
-                    )
-                    .bind::<Text, _>(&addr)
-                    .get_result::<IpAddressAssignmentRow>(connection)
-                    .map_err(|_| AppError::not_found(format!("IP address assignment '{}' was not found", addr)))?
-                    .into_domain()?;
-
-                    let host = hosts::table
-                        .filter(hosts::id.eq(existing.host_id()))
-                        .select(hosts::name)
-                        .first::<String>(connection)
-                        .optional()?
-                        .ok_or_else(|| AppError::not_found("host for IP address assignment was not found"))?;
-                    let network = Self::query_network_by_id(connection, existing.network_id())?;
-                    let attachment = Self::find_or_create_attachment(
-                        connection,
-                        &Hostname::new(host)?,
-                        network.cidr(),
-                        mac_str.as_deref().map(MacAddressValue::new).transpose()?.as_ref(),
-                    )?;
-
-                    sql_query(
-                        "UPDATE ip_addresses SET attachment_id = $1, mac_address = $2, updated_at = now() \
-                         WHERE address = $3::inet",
-                    )
-                    .bind::<SqlUuid, _>(attachment.id())
-                    .bind::<Nullable<Text>, _>(mac_str.as_deref())
-                    .bind::<Text, _>(&addr)
-                    .execute(connection)?;
-
-                    sql_query(
-                        "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
-                         nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
-                         FROM ip_addresses ip \
-                         JOIN LATERAL ( \
-                           SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-                         ) nw ON true \
-                         WHERE ip.address = $1::inet",
-                    )
-                    .bind::<Text, _>(&addr)
-                    .get_result::<IpAddressAssignmentRow>(connection)
-                    .map_err(|_| AppError::not_found(format!("IP address assignment '{}' was not found", addr)))?
-                    .into_domain()
+                    Self::update_ip_address_in_conn(connection, &address, command)
                 })
             })
             .await
@@ -1146,60 +1241,11 @@ impl HostStore for PostgresStorage {
         &self,
         address: &crate::domain::types::IpAddressValue,
     ) -> Result<IpAddressAssignment, AppError> {
-        let addr = address.as_str();
+        let address = *address;
         self.database
             .run(move |connection| {
                 connection.transaction::<IpAddressAssignment, AppError, _>(|connection| {
-                    // First query the assignment so we can return it
-                    let row = sql_query(
-                        "SELECT ip.id,
-                                ip.host_id,
-                                ip.attachment_id,
-                                host(ip.address) AS address,
-                                ip.family::int AS family,
-                                nw.id AS network_id,
-                                ip.mac_address,
-                                ip.created_at,
-                                ip.updated_at
-                         FROM ip_addresses ip
-                         JOIN LATERAL (
-                           SELECT id
-                           FROM networks
-                           WHERE ip.address <<= network
-                           ORDER BY masklen(network) DESC
-                           LIMIT 1
-                         ) nw ON true
-                         WHERE ip.address = $1::inet",
-                    )
-                    .bind::<Text, _>(&addr)
-                    .get_result::<IpAddressAssignmentRow>(connection)
-                    .optional()?;
-
-                    let row = row.ok_or_else(|| {
-                        AppError::not_found(format!(
-                            "IP address assignment '{}' was not found",
-                            addr
-                        ))
-                    })?;
-
-                    let deleted = sql_query("DELETE FROM ip_addresses WHERE address = $1::inet")
-                        .bind::<Text, _>(&addr)
-                        .execute(connection)?;
-
-                    if deleted == 0 {
-                        return Err(AppError::not_found(format!(
-                            "IP address assignment '{}' was not found",
-                            addr
-                        )));
-                    }
-
-                    // Cascade: delete matching A/AAAA record
-                    Self::auto_delete_forward_record(connection, &row)?;
-
-                    // Cascade: delete matching PTR record
-                    Self::auto_delete_ptr_record(connection, &row)?;
-
-                    row.into_domain()
+                    Self::unassign_ip_address_in_conn(connection, &address)
                 })
             })
             .await

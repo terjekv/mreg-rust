@@ -71,7 +71,7 @@ impl PostgresStorage {
             .collect()
     }
 
-    pub(super) fn list_forward_zones_impl(
+    pub(in crate::storage::postgres) fn list_forward_zones_impl(
         connection: &mut PgConnection,
         page: &PageRequest,
     ) -> Result<Page<ForwardZone>, AppError> {
@@ -79,7 +79,7 @@ impl PostgresStorage {
         Ok(vec_to_page(items, page))
     }
 
-    pub(super) fn create_forward_zone_impl(
+    pub(in crate::storage::postgres) fn create_forward_zone_impl(
         connection: &mut PgConnection,
         command: CreateForwardZone,
     ) -> Result<ForwardZone, AppError> {
@@ -155,7 +155,7 @@ impl PostgresStorage {
         row.into_domain(nameservers)
     }
 
-    pub(super) fn update_forward_zone_impl(
+    pub(in crate::storage::postgres) fn update_forward_zone_impl(
         connection: &mut PgConnection,
         name: &str,
         command: UpdateForwardZone,
@@ -261,7 +261,7 @@ impl PostgresStorage {
         })
     }
 
-    pub(super) fn delete_forward_zone_impl(
+    pub(in crate::storage::postgres) fn delete_forward_zone_impl(
         connection: &mut PgConnection,
         name: &str,
     ) -> Result<(), AppError> {
@@ -276,7 +276,7 @@ impl PostgresStorage {
         Ok(())
     }
 
-    pub(super) fn bump_forward_zone_serial_impl(
+    pub(in crate::storage::postgres) fn bump_forward_zone_serial_impl(
         connection: &mut PgConnection,
         zone_id: Uuid,
     ) -> Result<ForwardZone, AppError> {

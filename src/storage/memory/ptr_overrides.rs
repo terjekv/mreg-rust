@@ -64,6 +64,55 @@ pub(super) fn create_ptr_override_in_state(
     Ok(override_record)
 }
 
+pub(super) fn list_ptr_overrides_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &PtrOverrideFilter,
+) -> Result<Page<PtrOverride>, AppError> {
+    let items: Vec<PtrOverride> = state
+        .ptr_overrides
+        .values()
+        .filter(|ptr| filter.matches(ptr))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["address", "created_at"],
+        |ptr, field| match field {
+            "address" => ptr.address().as_str(),
+            "created_at" => ptr.created_at().to_rfc3339(),
+            _ => ptr.host_name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn get_ptr_override_by_address_in_state(
+    state: &MemoryState,
+    address: &IpAddressValue,
+) -> Result<PtrOverride, AppError> {
+    state
+        .ptr_overrides
+        .get(&address.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("ptr override '{}' was not found", address.as_str()))
+        })
+}
+
+pub(super) fn delete_ptr_override_in_state(
+    state: &mut MemoryState,
+    address: &IpAddressValue,
+) -> Result<(), AppError> {
+    state
+        .ptr_overrides
+        .remove(&address.as_str())
+        .map(|_| ())
+        .ok_or_else(|| {
+            AppError::not_found(format!("ptr override '{}' was not found", address.as_str()))
+        })
+}
+
 #[async_trait]
 impl PtrOverrideStore for MemoryStorage {
     async fn list_ptr_overrides(
@@ -72,22 +121,7 @@ impl PtrOverrideStore for MemoryStorage {
         filter: &PtrOverrideFilter,
     ) -> Result<Page<PtrOverride>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<PtrOverride> = state
-            .ptr_overrides
-            .values()
-            .filter(|ptr| filter.matches(ptr))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["address", "created_at"],
-            |ptr, field| match field {
-                "address" => ptr.address().as_str(),
-                "created_at" => ptr.created_at().to_rfc3339(),
-                _ => ptr.host_name().as_str().to_string(),
-            },
-        )
+        list_ptr_overrides_in_state(&state, page, filter)
     }
 
     async fn create_ptr_override(
@@ -103,23 +137,11 @@ impl PtrOverrideStore for MemoryStorage {
         address: &IpAddressValue,
     ) -> Result<PtrOverride, AppError> {
         let state = self.state.read().await;
-        state
-            .ptr_overrides
-            .get(&address.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!("ptr override '{}' was not found", address.as_str()))
-            })
+        get_ptr_override_by_address_in_state(&state, address)
     }
 
     async fn delete_ptr_override(&self, address: &IpAddressValue) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .ptr_overrides
-            .remove(&address.as_str())
-            .map(|_| ())
-            .ok_or_else(|| {
-                AppError::not_found(format!("ptr override '{}' was not found", address.as_str()))
-            })
+        delete_ptr_override_in_state(&mut state, address)
     }
 }

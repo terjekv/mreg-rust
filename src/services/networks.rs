@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::actions,
+    audit::{CreateHistoryEvent, actions, actor},
     domain::{
         filters::NetworkFilter,
         host::IpAddressAssignment,
@@ -10,8 +10,8 @@ use crate::{
         types::{CidrValue, IpAddressValue},
     },
     errors::AppError,
-    events::EventSinkClient,
-    storage::{AuditStore, NetworkStore},
+    events::{DomainEvent, EventSinkClient},
+    storage::{DynStorage, NetworkStore},
 };
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "network"))]
@@ -23,28 +23,31 @@ pub async fn list(
     store.list_networks(page, filter).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "network"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "network"))]
 pub async fn create(
-    store: &(dyn NetworkStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreateNetwork,
+    events: &EventSinkClient,
 ) -> Result<Network, AppError> {
-    let network = store.create_network(command).await?;
+    let (network, history) = storage
+        .transaction(move |tx| {
+            let network = tx.networks().create_network(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "network",
+                Some(network.id()),
+                network.cidr().as_str(),
+                actions::CREATE,
+                json!({
+                    "cidr": network.cidr().as_str(),
+                    "description": network.description(),
+                }),
+            ))?;
+            Ok((network, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "network",
-        actions::CREATE,
-        Some(network.id()),
-        network.cidr().as_str(),
-        json!({
-            "cidr": network.cidr().as_str(),
-            "description": network.description(),
-        }),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(network)
 }
@@ -57,29 +60,33 @@ pub async fn get(
     store.get_network_by_cidr(cidr).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "network"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "network"))]
 pub async fn delete(
-    store: &(dyn NetworkStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     cidr: &CidrValue,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    let old = store.get_network_by_cidr(cidr).await?;
-    store.delete_network(cidr).await?;
+    let cidr_owned = cidr.clone();
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx.networks().get_network_by_cidr(&cidr_owned)?;
+            tx.networks().delete_network(&cidr_owned)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "network",
+                Some(old.id()),
+                old.cidr().as_str(),
+                actions::DELETE,
+                json!({
+                    "cidr": old.cidr().as_str(),
+                    "description": old.description(),
+                }),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "network",
-        actions::DELETE,
-        Some(old.id()),
-        old.cidr().as_str(),
-        json!({
-            "cidr": old.cidr().as_str(),
-            "description": old.description(),
-        }),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }
@@ -93,59 +100,67 @@ pub async fn list_excluded_ranges(
     store.list_excluded_ranges(cidr, page).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "network"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "network"))]
 pub async fn update(
-    store: &(dyn NetworkStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     cidr: &CidrValue,
     command: UpdateNetwork,
+    events: &EventSinkClient,
 ) -> Result<Network, AppError> {
-    let old = store.get_network_by_cidr(cidr).await?;
-    let new = store.update_network(cidr, command).await?;
+    let cidr_owned = cidr.clone();
+    let (new, history) = storage
+        .transaction(move |tx| {
+            let old = tx.networks().get_network_by_cidr(&cidr_owned)?;
+            let new = tx.networks().update_network(&cidr_owned, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "network",
+                Some(new.id()),
+                new.cidr().as_str(),
+                actions::UPDATE,
+                json!({
+                    "old": {"description": old.description(), "vlan": old.vlan(), "frozen": old.frozen(), "reserved": old.reserved()},
+                    "new": {"description": new.description(), "vlan": new.vlan(), "frozen": new.frozen(), "reserved": new.reserved()},
+                }),
+            ))?;
+            Ok((new, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "network",
-        actions::UPDATE,
-        Some(new.id()),
-        new.cidr().as_str(),
-        json!({
-            "old": {"description": old.description(), "vlan": old.vlan(), "frozen": old.frozen(), "reserved": old.reserved()},
-            "new": {"description": new.description(), "vlan": new.vlan(), "frozen": new.frozen(), "reserved": new.reserved()},
-        }),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(new)
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "excluded_range"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "excluded_range"))]
 pub async fn add_excluded_range(
-    store: &(dyn NetworkStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     cidr: &CidrValue,
     command: CreateExcludedRange,
+    events: &EventSinkClient,
 ) -> Result<ExcludedRange, AppError> {
-    let range = store.add_excluded_range(cidr, command).await?;
+    let cidr_owned = cidr.clone();
+    let (range, history) = storage
+        .transaction(move |tx| {
+            let range = tx.networks().add_excluded_range(&cidr_owned, command)?;
+            let range_name = format!("{}-{}", range.start_ip().as_str(), range.end_ip().as_str());
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "excluded_range",
+                Some(range.id()),
+                range_name,
+                actions::CREATE,
+                json!({
+                    "start_ip": range.start_ip().as_str(),
+                    "end_ip": range.end_ip().as_str(),
+                    "description": range.description(),
+                }),
+            ))?;
+            Ok((range, event))
+        })
+        .await?;
 
-    let range_name = format!("{}-{}", range.start_ip().as_str(), range.end_ip().as_str());
-    super::audit_mutation(
-        audit,
-        events,
-        "excluded_range",
-        actions::CREATE,
-        Some(range.id()),
-        &range_name,
-        json!({
-            "start_ip": range.start_ip().as_str(),
-            "end_ip": range.end_ip().as_str(),
-            "description": range.description(),
-        }),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(range)
 }

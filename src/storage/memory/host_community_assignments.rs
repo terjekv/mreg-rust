@@ -86,6 +86,61 @@ pub(super) fn create_host_community_assignment_in_state(
     Ok(mapping)
 }
 
+pub(super) fn list_host_community_assignments_in_state(
+    state: &MemoryState,
+    page: &PageRequest,
+    filter: &HostCommunityAssignmentFilter,
+) -> Result<Page<HostCommunityAssignment>, AppError> {
+    let items: Vec<HostCommunityAssignment> = state
+        .host_community_assignments
+        .values()
+        .filter(|mapping| filter.matches(mapping))
+        .cloned()
+        .collect();
+    sort_and_paginate(
+        items,
+        page,
+        &["community_name", "created_at"],
+        |mapping, field| match field {
+            "community_name" => mapping.community_name().as_str().to_string(),
+            "created_at" => mapping.created_at().to_rfc3339(),
+            _ => mapping.host_name().as_str().to_string(),
+        },
+    )
+}
+
+pub(super) fn get_host_community_assignment_in_state(
+    state: &MemoryState,
+    mapping_id: Uuid,
+) -> Result<HostCommunityAssignment, AppError> {
+    state
+        .host_community_assignments
+        .get(&mapping_id)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "host community assignment '{}' was not found",
+                mapping_id
+            ))
+        })
+}
+
+pub(super) fn delete_host_community_assignment_in_state(
+    state: &mut MemoryState,
+    mapping_id: Uuid,
+) -> Result<(), AppError> {
+    state
+        .host_community_assignments
+        .remove(&mapping_id)
+        .map(|_| ())
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "host community assignment '{}' was not found",
+                mapping_id
+            ))
+        })
+}
+
 #[async_trait]
 impl HostCommunityAssignmentStore for MemoryStorage {
     async fn list_host_community_assignments(
@@ -94,22 +149,7 @@ impl HostCommunityAssignmentStore for MemoryStorage {
         filter: &HostCommunityAssignmentFilter,
     ) -> Result<Page<HostCommunityAssignment>, AppError> {
         let state = self.state.read().await;
-        let items: Vec<HostCommunityAssignment> = state
-            .host_community_assignments
-            .values()
-            .filter(|mapping| filter.matches(mapping))
-            .cloned()
-            .collect();
-        sort_and_paginate(
-            items,
-            page,
-            &["community_name", "created_at"],
-            |mapping, field| match field {
-                "community_name" => mapping.community_name().as_str().to_string(),
-                "created_at" => mapping.created_at().to_rfc3339(),
-                _ => mapping.host_name().as_str().to_string(),
-            },
-        )
+        list_host_community_assignments_in_state(&state, page, filter)
     }
 
     async fn create_host_community_assignment(
@@ -125,29 +165,11 @@ impl HostCommunityAssignmentStore for MemoryStorage {
         mapping_id: Uuid,
     ) -> Result<HostCommunityAssignment, AppError> {
         let state = self.state.read().await;
-        state
-            .host_community_assignments
-            .get(&mapping_id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::not_found(format!(
-                    "host community assignment '{}' was not found",
-                    mapping_id
-                ))
-            })
+        get_host_community_assignment_in_state(&state, mapping_id)
     }
 
     async fn delete_host_community_assignment(&self, mapping_id: Uuid) -> Result<(), AppError> {
         let mut state = self.state.write().await;
-        state
-            .host_community_assignments
-            .remove(&mapping_id)
-            .map(|_| ())
-            .ok_or_else(|| {
-                AppError::not_found(format!(
-                    "host community assignment '{}' was not found",
-                    mapping_id
-                ))
-            })
+        delete_host_community_assignment_in_state(&mut state, mapping_id)
     }
 }

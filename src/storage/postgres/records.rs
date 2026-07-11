@@ -212,67 +212,56 @@ impl PostgresStorage {
     }
 }
 
-#[async_trait]
-impl RecordStore for PostgresStorage {
-    async fn list_record_types(
-        &self,
+impl PostgresStorage {
+    pub(in crate::storage::postgres) fn list_record_types_in_conn(
+        connection: &mut PgConnection,
         page: &PageRequest,
     ) -> Result<Page<RecordTypeDefinition>, AppError> {
-        let page = page.clone();
-        self.database
-            .run(move |c| {
-                let items = Self::query_record_types(c)?;
-                Ok(vec_to_page(items, &page))
-            })
-            .await
+        let items = Self::query_record_types(connection)?;
+        Ok(vec_to_page(items, page))
     }
 
-    async fn list_rrsets(&self, page: &PageRequest) -> Result<Page<RecordRrset>, AppError> {
-        let page = page.clone();
-        self.database
-            .run(move |c| {
-                let items = Self::query_rrsets(c)?;
-                Ok(vec_to_page(items, &page))
-            })
-            .await
+    pub(in crate::storage::postgres) fn list_rrsets_in_conn(
+        connection: &mut PgConnection,
+        page: &PageRequest,
+    ) -> Result<Page<RecordRrset>, AppError> {
+        let items = Self::query_rrsets(connection)?;
+        Ok(vec_to_page(items, page))
     }
 
-    async fn list_records(
-        &self,
+    pub(in crate::storage::postgres) fn list_records_in_conn(
+        connection: &mut PgConnection,
         page: &PageRequest,
         filter: &RecordFilter,
     ) -> Result<Page<RecordInstance>, AppError> {
-        let page = page.clone();
-        let filter = filter.clone();
-        self.database.run(move |c| {
-            Self::ensure_builtin_record_types(c)?;
+        Self::ensure_builtin_record_types(connection)?;
 
-            let base = "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind, \
-                        rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl, \
-                        r.data, r.raw_rdata, r.rendered, \
-                        r.created_at, r.updated_at \
-                        FROM records r \
-                        JOIN rrsets rs ON rs.id = r.rrset_id \
-                        JOIN record_types rt ON rt.id = rs.type_id";
+        let base = "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind, \
+                    rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl, \
+                    r.data, r.raw_rdata, r.rendered, \
+                    r.created_at, r.updated_at \
+                    FROM records r \
+                    JOIN rrsets rs ON rs.id = r.rrset_id \
+                    JOIN record_types rt ON rt.id = rs.type_id";
 
-            let (clauses, values) = filter.sql_conditions();
-            let where_str = if clauses.is_empty() {
-                String::new()
-            } else {
-                format!(" WHERE {}", clauses.join(" AND "))
-            };
-            let query_str = format!("{base}{where_str} ORDER BY r.created_at DESC");
+        let (clauses, values) = filter.sql_conditions();
+        let where_str = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let query_str = format!("{base}{where_str} ORDER BY r.created_at DESC");
 
-            let rows = run_dynamic_query::<RecordRow>(c, &query_str, &values)?;
-            let items: Vec<RecordInstance> = rows.into_iter()
-                .map(RecordRow::into_domain)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(vec_to_page(items, &page))
-        }).await
+        let rows = run_dynamic_query::<RecordRow>(connection, &query_str, &values)?;
+        let items: Vec<RecordInstance> = rows
+            .into_iter()
+            .map(RecordRow::into_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(vec_to_page(items, page))
     }
 
-    async fn create_record_type(
-        &self,
+    pub(in crate::storage::postgres) fn create_record_type_in_conn(
+        connection: &mut PgConnection,
         command: CreateRecordTypeDefinition,
     ) -> Result<RecordTypeDefinition, AppError> {
         let name = command.name().as_str().to_string();
@@ -280,190 +269,166 @@ impl RecordStore for PostgresStorage {
         let (owner_kind, cardinality, validation_schema, rendering_schema, behavior_flags) =
             record_type_storage_parts(command.schema());
         let built_in = command.built_in();
-        self.database
-            .run(move |connection| {
-                Self::ensure_builtin_record_types(connection)?;
-                insert_into(record_types::table)
-                    .values((
-                        record_types::name.eq(&name),
-                        record_types::dns_type.eq(dns_type),
-                        record_types::owner_kind.eq(&owner_kind),
-                        record_types::cardinality.eq(&cardinality),
-                        record_types::validation_schema.eq(&validation_schema),
-                        record_types::rendering_schema.eq(&rendering_schema),
-                        record_types::behavior_flags.eq(&behavior_flags),
-                        record_types::built_in.eq(built_in),
-                    ))
-                    .returning(RecordTypeRow::as_returning())
-                    .get_result(connection)
-                    .map_err(map_unique("record type already exists"))?
-                    .into_domain()
-            })
-            .await
+        Self::ensure_builtin_record_types(connection)?;
+        insert_into(record_types::table)
+            .values((
+                record_types::name.eq(&name),
+                record_types::dns_type.eq(dns_type),
+                record_types::owner_kind.eq(&owner_kind),
+                record_types::cardinality.eq(&cardinality),
+                record_types::validation_schema.eq(&validation_schema),
+                record_types::rendering_schema.eq(&rendering_schema),
+                record_types::behavior_flags.eq(&behavior_flags),
+                record_types::built_in.eq(built_in),
+            ))
+            .returning(RecordTypeRow::as_returning())
+            .get_result(connection)
+            .map_err(map_unique("record type already exists"))?
+            .into_domain()
     }
 
-    async fn get_record(&self, record_id: Uuid) -> Result<RecordInstance, AppError> {
-        self.database
-            .run(move |connection| {
-                sql_query(
-                    "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
-                            rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
-                            r.data, r.raw_rdata, r.rendered,
-                            r.created_at, r.updated_at
-                     FROM records r
-                     JOIN rrsets rs ON rs.id = r.rrset_id
-                     JOIN record_types rt ON rt.id = rs.type_id
-                     WHERE r.id = $1",
-                )
-                .bind::<SqlUuid, _>(record_id)
-                .get_result::<RecordRow>(connection)
-                .optional()?
-                .ok_or_else(|| AppError::not_found("record not found"))?
-                .into_domain()
-            })
-            .await
+    pub(in crate::storage::postgres) fn get_record_in_conn(
+        connection: &mut PgConnection,
+        record_id: Uuid,
+    ) -> Result<RecordInstance, AppError> {
+        sql_query(
+            "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
+                    rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
+                    r.data, r.raw_rdata, r.rendered,
+                    r.created_at, r.updated_at
+             FROM records r
+             JOIN rrsets rs ON rs.id = r.rrset_id
+             JOIN record_types rt ON rt.id = rs.type_id
+             WHERE r.id = $1",
+        )
+        .bind::<SqlUuid, _>(record_id)
+        .get_result::<RecordRow>(connection)
+        .optional()?
+        .ok_or_else(|| AppError::not_found("record not found"))?
+        .into_domain()
     }
 
-    async fn get_rrset(&self, rrset_id: Uuid) -> Result<RecordRrset, AppError> {
-        self.database
-            .run(move |connection| {
-                sql_query(
-                    "SELECT rs.id, rs.type_id, rt.name::text AS type_name, rs.dns_class,
-                            rs.owner_name::text AS owner_name, rs.anchor_kind, rs.anchor_id,
-                            rs.anchor_name::text AS anchor_name, rs.zone_id, rs.ttl,
-                            rs.created_at, rs.updated_at
-                     FROM rrsets rs
-                     JOIN record_types rt ON rt.id = rs.type_id
-                     WHERE rs.id = $1",
-                )
-                .bind::<SqlUuid, _>(rrset_id)
-                .get_result::<RrsetRow>(connection)
-                .optional()?
-                .ok_or_else(|| AppError::not_found("rrset not found"))?
-                .into_domain()
-            })
-            .await
+    pub(in crate::storage::postgres) fn get_rrset_in_conn(
+        connection: &mut PgConnection,
+        rrset_id: Uuid,
+    ) -> Result<RecordRrset, AppError> {
+        sql_query(
+            "SELECT rs.id, rs.type_id, rt.name::text AS type_name, rs.dns_class,
+                    rs.owner_name::text AS owner_name, rs.anchor_kind, rs.anchor_id,
+                    rs.anchor_name::text AS anchor_name, rs.zone_id, rs.ttl,
+                    rs.created_at, rs.updated_at
+             FROM rrsets rs
+             JOIN record_types rt ON rt.id = rs.type_id
+             WHERE rs.id = $1",
+        )
+        .bind::<SqlUuid, _>(rrset_id)
+        .get_result::<RrsetRow>(connection)
+        .optional()?
+        .ok_or_else(|| AppError::not_found("rrset not found"))?
+        .into_domain()
     }
 
-    async fn list_records_for_hosts(
-        &self,
+    pub(in crate::storage::postgres) fn list_records_for_hosts_in_conn(
+        connection: &mut PgConnection,
         hosts: &[Hostname],
     ) -> Result<Vec<RecordInstance>, AppError> {
+        if hosts.is_empty() {
+            return Ok(Vec::new());
+        }
         let host_names = hosts
             .iter()
             .map(|host| host.as_str().to_string())
             .collect::<Vec<_>>();
-        self.database
-            .run(move |connection| {
-                if host_names.is_empty() {
-                    return Ok(Vec::new());
-                }
-                Self::ensure_builtin_record_types(connection)?;
-                let rows = sql_query(
-                    "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
-                            rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
-                            r.data, r.raw_rdata, r.rendered,
-                            r.created_at, r.updated_at
-                     FROM records r
-                     JOIN rrsets rs ON rs.id = r.rrset_id
-                     JOIN record_types rt ON rt.id = rs.type_id
-                     WHERE rs.anchor_kind = 'host'
-                       AND rs.owner_name = ANY($1::text[])
-                     ORDER BY rs.owner_name, r.created_at DESC",
-                )
-                .bind::<diesel::sql_types::Array<Text>, _>(&host_names)
-                .load::<RecordRow>(connection)?;
-                rows.into_iter().map(RecordRow::into_domain).collect()
-            })
-            .await
+        Self::ensure_builtin_record_types(connection)?;
+        let rows = sql_query(
+            "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
+                    rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
+                    r.data, r.raw_rdata, r.rendered,
+                    r.created_at, r.updated_at
+             FROM records r
+             JOIN rrsets rs ON rs.id = r.rrset_id
+             JOIN record_types rt ON rt.id = rs.type_id
+             WHERE rs.anchor_kind = 'host'
+               AND rs.owner_name = ANY($1::text[])
+             ORDER BY rs.owner_name, r.created_at DESC",
+        )
+        .bind::<diesel::sql_types::Array<Text>, _>(&host_names)
+        .load::<RecordRow>(connection)?;
+        rows.into_iter().map(RecordRow::into_domain).collect()
     }
 
-    async fn create_record(
-        &self,
+    pub(in crate::storage::postgres) fn create_record_in_conn(
+        connection: &mut PgConnection,
         command: CreateRecordInstance,
     ) -> Result<RecordInstance, AppError> {
-        self.database
-            .run(move |connection| {
-                connection.transaction::<RecordInstance, AppError, _>(|connection| {
-                    let record_type =
-                        Self::query_record_type_by_name(connection, command.type_name())?;
-                    let (anchor_id, _anchor_name, zone_id) = Self::resolve_record_owner(
-                        connection,
-                        command.owner_kind(),
-                        command.anchor_name(),
-                        command.owner_name(),
-                    )?;
-                    let validated = record_type.validate_record_input(
-                        command.owner_name(),
-                        command.data(),
-                        command.raw_rdata(),
-                    )?;
-                    let same_owner_records =
-                        Self::query_existing_owner_records(connection, command.owner_name())?;
-                    let existing_rrset = Self::query_rrset_by_type_and_owner(
-                        connection,
-                        record_type.id(),
-                        command.owner_name(),
-                    )?;
-                    let same_rrset_records = if let Some(rrset) = &existing_rrset {
-                        Self::query_existing_rrset_records(connection, rrset.id())?
-                    } else {
-                        Vec::new()
-                    };
-                    let alias_lookup = match &validated {
-                        ValidatedRecordContent::Structured(normalized) => {
-                            Self::query_alias_owner_names(
-                                connection,
-                                &alias_target_names(normalized, record_type.name()),
-                            )?
-                        }
-                        ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
-                    };
-                    let alias_owner_names = alias_lookup
-                        .into_iter()
-                        .filter_map(|(name, is_alias)| is_alias.then_some(name))
-                        .collect();
-                    validate_record_relationships(
-                        &record_type,
-                        command.ttl(),
-                        &validated,
-                        &same_owner_records,
-                        &same_rrset_records,
-                        &alias_owner_names,
-                    )?;
-                    let rrset = if let Some(rrset) = existing_rrset {
-                        rrset
-                    } else {
-                        Self::insert_rrset(connection, &record_type, &command, anchor_id, zone_id)?
-                    };
-                    let rendered =
-                        if let ValidatedRecordContent::Structured(normalized) = &validated {
-                            Self::render_record_data(
-                                record_type.schema().render_template(),
-                                normalized,
-                            )?
-                        } else {
-                            None
-                        };
-                    let record = Self::insert_record(connection, &rrset, rendered, &validated)?;
-                    // Cascade: bump zone serial
-                    if let Some(zone_id) = record.zone_id() {
-                        Self::bump_zone_serial_tx(connection, zone_id)?;
-                    }
-                    Ok(record)
-                })
-            })
-            .await
+        connection.transaction::<RecordInstance, AppError, _>(|connection| {
+            let record_type = Self::query_record_type_by_name(connection, command.type_name())?;
+            let (anchor_id, _anchor_name, zone_id) = Self::resolve_record_owner(
+                connection,
+                command.owner_kind(),
+                command.anchor_name(),
+                command.owner_name(),
+            )?;
+            let validated = record_type.validate_record_input(
+                command.owner_name(),
+                command.data(),
+                command.raw_rdata(),
+            )?;
+            let same_owner_records =
+                Self::query_existing_owner_records(connection, command.owner_name())?;
+            let existing_rrset = Self::query_rrset_by_type_and_owner(
+                connection,
+                record_type.id(),
+                command.owner_name(),
+            )?;
+            let same_rrset_records = if let Some(rrset) = &existing_rrset {
+                Self::query_existing_rrset_records(connection, rrset.id())?
+            } else {
+                Vec::new()
+            };
+            let alias_lookup = match &validated {
+                ValidatedRecordContent::Structured(normalized) => Self::query_alias_owner_names(
+                    connection,
+                    &alias_target_names(normalized, record_type.name()),
+                )?,
+                ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
+            };
+            let alias_owner_names = alias_lookup
+                .into_iter()
+                .filter_map(|(name, is_alias)| is_alias.then_some(name))
+                .collect();
+            validate_record_relationships(
+                &record_type,
+                command.ttl(),
+                &validated,
+                &same_owner_records,
+                &same_rrset_records,
+                &alias_owner_names,
+            )?;
+            let rrset = if let Some(rrset) = existing_rrset {
+                rrset
+            } else {
+                Self::insert_rrset(connection, &record_type, &command, anchor_id, zone_id)?
+            };
+            let rendered = if let ValidatedRecordContent::Structured(normalized) = &validated {
+                Self::render_record_data(record_type.schema().render_template(), normalized)?
+            } else {
+                None
+            };
+            let record = Self::insert_record(connection, &rrset, rendered, &validated)?;
+            if let Some(zone_id) = record.zone_id() {
+                Self::bump_zone_serial_tx(connection, zone_id)?;
+            }
+            Ok(record)
+        })
     }
 
-    async fn update_record(
-        &self,
+    pub(in crate::storage::postgres) fn update_record_in_conn(
+        connection: &mut PgConnection,
         record_id: Uuid,
         command: UpdateRecord,
     ) -> Result<RecordInstance, AppError> {
-        self.database
-            .run(move |connection| {
-                connection.transaction::<RecordInstance, AppError, _>(|connection| {
+        connection.transaction::<RecordInstance, AppError, _>(|connection| {
                     // Fetch existing record
                     let existing = sql_query(
                         "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
@@ -593,168 +558,314 @@ impl RecordStore for PostgresStorage {
                         Self::bump_zone_serial_tx(connection, zone_id)?;
                     }
                     Ok(record)
-                })
-            })
+        })
+    }
+
+    pub(in crate::storage::postgres) fn delete_record_in_conn(
+        connection: &mut PgConnection,
+        record_id: Uuid,
+    ) -> Result<(), AppError> {
+        connection.transaction::<(), AppError, _>(|connection| {
+            use crate::db::schema::{records, rrsets};
+
+            let record_info = records::table
+                .inner_join(rrsets::table.on(rrsets::id.eq(records::rrset_id)))
+                .filter(records::id.eq(record_id))
+                .select((records::rrset_id, rrsets::zone_id))
+                .first::<(Uuid, Option<Uuid>)>(connection)
+                .optional()?;
+
+            let (rrset_id, zone_id) =
+                record_info.ok_or_else(|| AppError::not_found("record not found"))?;
+
+            diesel::delete(records::table.filter(records::id.eq(record_id)))
+                .execute(connection)?;
+
+            sql_query(
+                "DELETE FROM rrsets WHERE id = $1
+                 AND NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = $1)",
+            )
+            .bind::<SqlUuid, _>(rrset_id)
+            .execute(connection)?;
+
+            if let Some(zone_id) = zone_id {
+                Self::bump_zone_serial_tx(connection, zone_id)?;
+            }
+
+            Ok(())
+        })
+    }
+
+    pub(in crate::storage::postgres) fn delete_record_type_in_conn(
+        connection: &mut PgConnection,
+        name: &RecordTypeName,
+    ) -> Result<(), AppError> {
+        let name_str = name.as_str().to_string();
+        connection.transaction::<(), AppError, _>(|connection| {
+            let built_in_val = record_types::table
+                .filter(record_types::name.eq(&name_str))
+                .select(record_types::built_in)
+                .first::<bool>(connection)
+                .optional()?
+                .ok_or_else(|| AppError::not_found("record type not found"))?;
+
+            if built_in_val {
+                return Err(AppError::conflict("cannot delete built-in record type"));
+            }
+
+            let has_records = sql_query(
+                "SELECT 1 AS value FROM records r
+                 JOIN rrsets rs ON rs.id = r.rrset_id
+                 JOIN record_types rt ON rt.id = rs.type_id
+                 WHERE rt.name = $1
+                 LIMIT 1",
+            )
+            .bind::<Text, _>(&name_str)
+            .get_result::<IntSentinelRow>(connection)
+            .optional()?
+            .is_some();
+
+            if has_records {
+                return Err(AppError::conflict(
+                    "cannot delete record type with existing records",
+                ));
+            }
+
+            let deleted =
+                diesel::delete(record_types::table.filter(record_types::name.eq(&name_str)))
+                    .execute(connection)?;
+
+            if deleted == 0 {
+                return Err(AppError::not_found("record type not found"));
+            }
+
+            Ok(())
+        })
+    }
+
+    pub(in crate::storage::postgres) fn delete_rrset_in_conn(
+        connection: &mut PgConnection,
+        rrset_id: Uuid,
+    ) -> Result<(), AppError> {
+        connection.transaction::<(), AppError, _>(|connection| {
+            use crate::db::schema::rrsets;
+
+            let zone_id = rrsets::table
+                .filter(rrsets::id.eq(rrset_id))
+                .select(rrsets::zone_id)
+                .first::<Option<Uuid>>(connection)
+                .optional()?
+                .flatten();
+
+            let deleted = diesel::delete(rrsets::table.filter(rrsets::id.eq(rrset_id)))
+                .execute(connection)?;
+            if deleted == 0 {
+                return Err(AppError::not_found("rrset not found"));
+            }
+
+            if let Some(zone_id) = zone_id {
+                Self::bump_zone_serial_tx(connection, zone_id)?;
+            }
+
+            Ok(())
+        })
+    }
+
+    pub(in crate::storage::postgres) fn find_records_by_owner_in_conn(
+        connection: &mut PgConnection,
+        owner_id: Uuid,
+    ) -> Result<Vec<RecordInstance>, AppError> {
+        let rows = sql_query(
+            "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
+                    rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
+                    r.data, r.raw_rdata, r.rendered,
+                    r.created_at, r.updated_at
+             FROM records r
+             JOIN rrsets rs ON rs.id = r.rrset_id
+             JOIN record_types rt ON rt.id = rs.type_id
+             WHERE r.owner_id = $1",
+        )
+        .bind::<SqlUuid, _>(owner_id)
+        .load::<RecordRow>(connection)?;
+        rows.into_iter().map(RecordRow::into_domain).collect()
+    }
+
+    pub(in crate::storage::postgres) fn delete_records_by_owner_in_conn(
+        connection: &mut PgConnection,
+        owner_id: Uuid,
+    ) -> Result<u64, AppError> {
+        connection.transaction::<u64, AppError, _>(|connection| {
+            use crate::db::schema::records;
+
+            let deleted =
+                diesel::delete(records::table.filter(records::owner_id.eq(owner_id)))
+                    .execute(connection)?;
+            sql_query(
+                "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
+            )
+            .execute(connection)?;
+            Ok(deleted as u64)
+        })
+    }
+
+    pub(in crate::storage::postgres) fn delete_records_by_owner_name_and_type_in_conn(
+        connection: &mut PgConnection,
+        owner_name: &DnsName,
+        type_name: &RecordTypeName,
+    ) -> Result<u64, AppError> {
+        let owner_name_str = owner_name.as_str().to_string();
+        let type_name_str = type_name.as_str().to_string();
+        connection.transaction::<u64, AppError, _>(|connection| {
+            let deleted = sql_query(
+                "DELETE FROM records r
+                 USING rrsets rs, record_types rt
+                 WHERE r.rrset_id = rs.id AND rs.type_id = rt.id
+                 AND rs.owner_name = $1 AND rt.name = $2",
+            )
+            .bind::<Text, _>(&owner_name_str)
+            .bind::<Text, _>(&type_name_str)
+            .execute(connection)?;
+            sql_query(
+                "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
+            )
+            .execute(connection)?;
+            Ok(deleted as u64)
+        })
+    }
+
+    pub(in crate::storage::postgres) fn rename_record_owner_in_conn(
+        connection: &mut PgConnection,
+        owner_id: Uuid,
+        new_name: &DnsName,
+    ) -> Result<u64, AppError> {
+        let new_name_str = new_name.as_str().to_string();
+        connection.transaction::<u64, AppError, _>(|connection| {
+            use crate::db::schema::{records, rrsets};
+
+            diesel::update(rrsets::table.filter(rrsets::anchor_id.eq(owner_id)))
+                .set((
+                    rrsets::owner_name.eq(&new_name_str),
+                    rrsets::anchor_name.eq(&new_name_str),
+                ))
+                .execute(connection)?;
+            let updated =
+                diesel::update(records::table.filter(records::owner_id.eq(owner_id)))
+                    .set(records::owner_name.eq(&new_name_str))
+                    .execute(connection)?;
+            Ok(updated as u64)
+        })
+    }
+}
+
+#[async_trait]
+impl RecordStore for PostgresStorage {
+    async fn list_record_types(
+        &self,
+        page: &PageRequest,
+    ) -> Result<Page<RecordTypeDefinition>, AppError> {
+        let page = page.clone();
+        self.database
+            .run(move |c| Self::list_record_types_in_conn(c, &page))
+            .await
+    }
+
+    async fn list_rrsets(&self, page: &PageRequest) -> Result<Page<RecordRrset>, AppError> {
+        let page = page.clone();
+        self.database
+            .run(move |c| Self::list_rrsets_in_conn(c, &page))
+            .await
+    }
+
+    async fn list_records(
+        &self,
+        page: &PageRequest,
+        filter: &RecordFilter,
+    ) -> Result<Page<RecordInstance>, AppError> {
+        let page = page.clone();
+        let filter = filter.clone();
+        self.database
+            .run(move |c| Self::list_records_in_conn(c, &page, &filter))
+            .await
+    }
+
+    async fn create_record_type(
+        &self,
+        command: CreateRecordTypeDefinition,
+    ) -> Result<RecordTypeDefinition, AppError> {
+        self.database
+            .run(move |c| Self::create_record_type_in_conn(c, command))
+            .await
+    }
+
+    async fn get_record(&self, record_id: Uuid) -> Result<RecordInstance, AppError> {
+        self.database
+            .run(move |c| Self::get_record_in_conn(c, record_id))
+            .await
+    }
+
+    async fn get_rrset(&self, rrset_id: Uuid) -> Result<RecordRrset, AppError> {
+        self.database
+            .run(move |c| Self::get_rrset_in_conn(c, rrset_id))
+            .await
+    }
+
+    async fn list_records_for_hosts(
+        &self,
+        hosts: &[Hostname],
+    ) -> Result<Vec<RecordInstance>, AppError> {
+        let hosts = hosts.to_vec();
+        self.database
+            .run(move |c| Self::list_records_for_hosts_in_conn(c, &hosts))
+            .await
+    }
+
+    async fn create_record(
+        &self,
+        command: CreateRecordInstance,
+    ) -> Result<RecordInstance, AppError> {
+        self.database
+            .run(move |c| Self::create_record_in_conn(c, command))
+            .await
+    }
+
+    async fn update_record(
+        &self,
+        record_id: Uuid,
+        command: UpdateRecord,
+    ) -> Result<RecordInstance, AppError> {
+        self.database
+            .run(move |c| Self::update_record_in_conn(c, record_id, command))
             .await
     }
 
     async fn delete_record(&self, record_id: Uuid) -> Result<(), AppError> {
         self.database
-            .run(move |connection| {
-                connection.transaction::<(), AppError, _>(|connection| {
-                    use crate::db::schema::{records, rrsets};
-
-                    // Fetch zone_id and rrset_id before deleting
-                    let record_info = records::table
-                        .inner_join(rrsets::table.on(rrsets::id.eq(records::rrset_id)))
-                        .filter(records::id.eq(record_id))
-                        .select((records::rrset_id, rrsets::zone_id))
-                        .first::<(Uuid, Option<Uuid>)>(connection)
-                        .optional()?;
-
-                    let (rrset_id, zone_id) =
-                        record_info.ok_or_else(|| AppError::not_found("record not found"))?;
-
-                    diesel::delete(records::table.filter(records::id.eq(record_id)))
-                        .execute(connection)?;
-
-                    sql_query(
-                        "DELETE FROM rrsets WHERE id = $1
-                         AND NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = $1)",
-                    )
-                    .bind::<SqlUuid, _>(rrset_id)
-                    .execute(connection)?;
-
-                    // Cascade: bump zone serial
-                    if let Some(zone_id) = zone_id {
-                        Self::bump_zone_serial_tx(connection, zone_id)?;
-                    }
-
-                    Ok(())
-                })
-            })
+            .run(move |c| Self::delete_record_in_conn(c, record_id))
             .await
     }
 
     async fn delete_record_type(&self, name: &RecordTypeName) -> Result<(), AppError> {
-        let name_str = name.as_str().to_string();
+        let name = name.clone();
         self.database
-            .run(move |connection| {
-                connection.transaction::<(), AppError, _>(|connection| {
-                    // Check if built-in
-                    let built_in_val = record_types::table
-                        .filter(record_types::name.eq(&name_str))
-                        .select(record_types::built_in)
-                        .first::<bool>(connection)
-                        .optional()?
-                        .ok_or_else(|| AppError::not_found("record type not found"))?;
-
-                    if built_in_val {
-                        return Err(AppError::conflict("cannot delete built-in record type"));
-                    }
-
-                    // Check if records exist (uses JOIN so stays as sql_query)
-                    let has_records = sql_query(
-                        "SELECT 1 AS value FROM records r
-                         JOIN rrsets rs ON rs.id = r.rrset_id
-                         JOIN record_types rt ON rt.id = rs.type_id
-                         WHERE rt.name = $1
-                         LIMIT 1",
-                    )
-                    .bind::<Text, _>(&name_str)
-                    .get_result::<IntSentinelRow>(connection)
-                    .optional()?
-                    .is_some();
-
-                    if has_records {
-                        return Err(AppError::conflict(
-                            "cannot delete record type with existing records",
-                        ));
-                    }
-
-                    let deleted = diesel::delete(
-                        record_types::table.filter(record_types::name.eq(&name_str)),
-                    )
-                    .execute(connection)?;
-
-                    if deleted == 0 {
-                        return Err(AppError::not_found("record type not found"));
-                    }
-
-                    Ok(())
-                })
-            })
+            .run(move |c| Self::delete_record_type_in_conn(c, &name))
             .await
     }
 
     async fn delete_rrset(&self, rrset_id: Uuid) -> Result<(), AppError> {
         self.database
-            .run(move |connection| {
-                connection.transaction::<(), AppError, _>(|connection| {
-                    use crate::db::schema::rrsets;
-
-                    // Fetch zone_id before deleting, so we can bump serial
-                    let zone_id = rrsets::table
-                        .filter(rrsets::id.eq(rrset_id))
-                        .select(rrsets::zone_id)
-                        .first::<Option<Uuid>>(connection)
-                        .optional()?
-                        .flatten();
-
-                    let deleted = diesel::delete(rrsets::table.filter(rrsets::id.eq(rrset_id)))
-                        .execute(connection)?;
-                    if deleted == 0 {
-                        return Err(AppError::not_found("rrset not found"));
-                    }
-
-                    // Cascade: bump zone serial
-                    if let Some(zone_id) = zone_id {
-                        Self::bump_zone_serial_tx(connection, zone_id)?;
-                    }
-
-                    Ok(())
-                })
-            })
+            .run(move |c| Self::delete_rrset_in_conn(c, rrset_id))
             .await
     }
 
     async fn find_records_by_owner(&self, owner_id: Uuid) -> Result<Vec<RecordInstance>, AppError> {
         self.database
-            .run(move |connection| {
-                let rows = sql_query(
-                    "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
-                            rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
-                            r.data, r.raw_rdata, r.rendered,
-                            r.created_at, r.updated_at
-                     FROM records r
-                     JOIN rrsets rs ON rs.id = r.rrset_id
-                     JOIN record_types rt ON rt.id = rs.type_id
-                     WHERE r.owner_id = $1",
-                )
-                .bind::<SqlUuid, _>(owner_id)
-                .load::<RecordRow>(connection)?;
-                rows.into_iter().map(RecordRow::into_domain).collect()
-            })
+            .run(move |c| Self::find_records_by_owner_in_conn(c, owner_id))
             .await
     }
 
     async fn delete_records_by_owner(&self, owner_id: Uuid) -> Result<u64, AppError> {
         self.database
-            .run(move |connection| {
-                connection.transaction::<u64, AppError, _>(|connection| {
-                    use crate::db::schema::records;
-
-                    let deleted = diesel::delete(
-                        records::table.filter(records::owner_id.eq(owner_id)),
-                    )
-                    .execute(connection)?;
-                    sql_query(
-                        "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
-                    )
-                    .execute(connection)?;
-                    Ok(deleted as u64)
-                })
-            })
+            .run(move |c| Self::delete_records_by_owner_in_conn(c, owner_id))
             .await
     }
 
@@ -763,26 +874,11 @@ impl RecordStore for PostgresStorage {
         owner_name: &DnsName,
         type_name: &RecordTypeName,
     ) -> Result<u64, AppError> {
-        let owner_name_str = owner_name.as_str().to_string();
-        let type_name_str = type_name.as_str().to_string();
+        let owner_name = owner_name.clone();
+        let type_name = type_name.clone();
         self.database
-            .run(move |connection| {
-                connection.transaction::<u64, AppError, _>(|connection| {
-                    let deleted = sql_query(
-                        "DELETE FROM records r
-                         USING rrsets rs, record_types rt
-                         WHERE r.rrset_id = rs.id AND rs.type_id = rt.id
-                         AND rs.owner_name = $1 AND rt.name = $2",
-                    )
-                    .bind::<Text, _>(&owner_name_str)
-                    .bind::<Text, _>(&type_name_str)
-                    .execute(connection)?;
-                    sql_query(
-                        "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
-                    )
-                    .execute(connection)?;
-                    Ok(deleted as u64)
-                })
+            .run(move |c| {
+                Self::delete_records_by_owner_name_and_type_in_conn(c, &owner_name, &type_name)
             })
             .await
     }
@@ -792,25 +888,9 @@ impl RecordStore for PostgresStorage {
         owner_id: Uuid,
         new_name: &DnsName,
     ) -> Result<u64, AppError> {
-        let new_name_str = new_name.as_str().to_string();
+        let new_name = new_name.clone();
         self.database
-            .run(move |connection| {
-                connection.transaction::<u64, AppError, _>(|connection| {
-                    use crate::db::schema::{records, rrsets};
-
-                    diesel::update(rrsets::table.filter(rrsets::anchor_id.eq(owner_id)))
-                        .set((
-                            rrsets::owner_name.eq(&new_name_str),
-                            rrsets::anchor_name.eq(&new_name_str),
-                        ))
-                        .execute(connection)?;
-                    let updated =
-                        diesel::update(records::table.filter(records::owner_id.eq(owner_id)))
-                            .set(records::owner_name.eq(&new_name_str))
-                            .execute(connection)?;
-                    Ok(updated as u64)
-                })
-            })
+            .run(move |c| Self::rename_record_owner_in_conn(c, owner_id, &new_name))
             .await
     }
 }

@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    audit::actions,
+    audit::{CreateHistoryEvent, actions, actor},
     domain::{
         filters::PtrOverrideFilter,
         pagination::{Page, PageRequest},
@@ -9,8 +9,8 @@ use crate::{
         types::IpAddressValue,
     },
     errors::AppError,
-    events::EventSinkClient,
-    storage::{AuditStore, PtrOverrideStore},
+    events::{DomainEvent, EventSinkClient},
+    storage::{DynStorage, PtrOverrideStore},
 };
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "ptr_override"))]
@@ -22,25 +22,28 @@ pub async fn list_ptr_overrides(
     store.list_ptr_overrides(page, filter).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "ptr_override"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "ptr_override"))]
 pub async fn create_ptr_override(
-    store: &(dyn PtrOverrideStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     command: CreatePtrOverride,
+    events: &EventSinkClient,
 ) -> Result<PtrOverride, AppError> {
-    let item = store.create_ptr_override(command).await?;
+    let (item, history) = storage
+        .transaction(move |tx| {
+            let item = tx.ptr_overrides().create_ptr_override(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "ptr_override",
+                Some(item.id()),
+                item.address().as_str(),
+                actions::CREATE,
+                json!({"host_name": item.host_name().as_str(), "address": item.address().as_str()}),
+            ))?;
+            Ok((item, event))
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "ptr_override",
-        actions::CREATE,
-        Some(item.id()),
-        item.address().as_str(),
-        json!({"host_name": item.host_name().as_str(), "address": item.address().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(item)
 }
@@ -53,26 +56,32 @@ pub async fn get_ptr_override(
     store.get_ptr_override_by_address(address).await
 }
 
-#[tracing::instrument(skip(store, audit, events), fields(resource_kind = "ptr_override"))]
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "ptr_override"))]
 pub async fn delete_ptr_override(
-    store: &(dyn PtrOverrideStore + Send + Sync),
-    audit: &(dyn AuditStore + Send + Sync),
-    events: &EventSinkClient,
+    storage: &DynStorage,
     address: &IpAddressValue,
+    events: &EventSinkClient,
 ) -> Result<(), AppError> {
-    let old = store.get_ptr_override_by_address(address).await?;
-    store.delete_ptr_override(address).await?;
+    let address_owned = *address;
+    let history = storage
+        .transaction(move |tx| {
+            let old = tx
+                .ptr_overrides()
+                .get_ptr_override_by_address(&address_owned)?;
+            tx.ptr_overrides().delete_ptr_override(&address_owned)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::SYSTEM,
+                "ptr_override",
+                Some(old.id()),
+                old.address().as_str(),
+                actions::DELETE,
+                json!({"host_name": old.host_name().as_str(), "address": old.address().as_str()}),
+            ))?;
+            Ok(event)
+        })
+        .await?;
 
-    super::audit_mutation(
-        audit,
-        events,
-        "ptr_override",
-        actions::DELETE,
-        Some(old.id()),
-        old.address().as_str(),
-        json!({"host_name": old.host_name().as_str(), "address": old.address().as_str()}),
-    )
-    .await;
+    events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
 }
