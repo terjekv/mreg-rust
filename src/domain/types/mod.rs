@@ -43,6 +43,16 @@ mod tests {
     }
 
     #[test]
+    fn hostname_allows_only_a_leading_wildcard_label() {
+        assert_eq!(
+            Hostname::new("*.Example.Org").unwrap().as_str(),
+            "*.example.org"
+        );
+        assert!(Hostname::new("foo.*.example.org").is_err());
+        assert!(Hostname::new("foo*.example.org").is_err());
+    }
+
+    #[test]
     fn cidr_parses_successfully() {
         let value = CidrValue::new("10.0.0.0/24").expect("cidr should parse");
         assert_eq!(value.as_str(), "10.0.0.0/24");
@@ -161,8 +171,8 @@ mod tests {
     }
 
     #[test]
-    fn hostname_rejects_wildcards() {
-        assert!(Hostname::new("*.example.org").is_err());
+    fn hostname_rejects_non_leading_wildcards() {
+        assert!(Hostname::new("host.*.example.org").is_err());
     }
 
     #[test]

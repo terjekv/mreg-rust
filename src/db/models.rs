@@ -260,6 +260,10 @@ pub struct NetworkRow {
     frozen: bool,
     #[diesel(sql_type = Integer)]
     reserved: i32,
+    #[diesel(sql_type = Nullable<Integer>)]
+    max_communities: Option<i32>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    policy_id: Option<Uuid>,
     #[diesel(sql_type = Timestamptz)]
     created_at: DateTime<Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -290,6 +294,14 @@ impl NetworkRow {
                     self.reserved
                 ))
             })?)?,
+            self.max_communities
+                .map(|value| {
+                    u32::try_from(value)
+                        .map_err(|_| AppError::internal("invalid max_communities in database"))
+                        .and_then(crate::domain::types::CommunityLimit::new)
+                })
+                .transpose()?,
+            self.policy_id,
             self.created_at,
             self.updated_at,
         )

@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{Page, PageRequest},
         types::{CommunityName, NetworkPolicyName},
@@ -39,7 +39,7 @@ pub(super) fn create_community_in_state(
         )));
     }
     if state.communities.values().any(|community| {
-        community.policy_name() == command.policy_name() && community.name() == command.name()
+        community.network_cidr() == command.network_cidr() && community.name() == command.name()
     }) {
         return Err(AppError::conflict(format!(
             "community '{}:{}' already exists",
@@ -96,6 +96,40 @@ pub(super) fn get_community_in_state(
         .ok_or_else(|| AppError::not_found(format!("community '{}' was not found", community_id)))
 }
 
+pub(super) fn update_community_in_state(
+    state: &mut MemoryState,
+    community_id: Uuid,
+    command: UpdateCommunity,
+) -> Result<Community, AppError> {
+    let old = get_community_in_state(state, community_id)?;
+    let name = command.name.unwrap_or_else(|| old.name().clone());
+    if state.communities.values().any(|community| {
+        community.id() != community_id
+            && community.network_cidr() == old.network_cidr()
+            && community.name() == &name
+    }) {
+        return Err(AppError::conflict(format!(
+            "community '{}' already exists on network '{}'",
+            name.as_str(),
+            old.network_cidr().as_str()
+        )));
+    }
+    let updated = Community::restore(
+        old.id(),
+        old.policy_id(),
+        old.policy_name().clone(),
+        old.network_cidr().clone(),
+        name,
+        command
+            .description
+            .unwrap_or_else(|| old.description().to_string()),
+        old.created_at(),
+        Utc::now(),
+    )?;
+    state.communities.insert(community_id, updated.clone());
+    Ok(updated)
+}
+
 pub(super) fn delete_community_in_state(
     state: &mut MemoryState,
     community_id: Uuid,
@@ -104,7 +138,11 @@ pub(super) fn delete_community_in_state(
         .communities
         .remove(&community_id)
         .map(|_| ())
-        .ok_or_else(|| AppError::not_found(format!("community '{}' was not found", community_id)))
+        .ok_or_else(|| AppError::not_found(format!("community '{}' was not found", community_id)))?;
+    state
+        .host_community_assignments
+        .retain(|_, assignment| assignment.community_id() != community_id);
+    Ok(())
 }
 
 pub(super) fn find_community_by_names_in_state(
@@ -147,6 +185,15 @@ impl CommunityStore for MemoryStorage {
     async fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         let state = self.state.read().await;
         get_community_in_state(&state, community_id)
+    }
+
+    async fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        let mut state = self.state.write().await;
+        update_community_in_state(&mut state, community_id, command)
     }
 
     async fn delete_community(&self, community_id: Uuid) -> Result<(), AppError> {

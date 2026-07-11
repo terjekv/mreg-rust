@@ -139,6 +139,112 @@ async fn legacy_network_policy_attributes_match_django_membership_semantics() {
 }
 
 #[actix_web::test]
+async fn legacy_network_policy_assignment_limit_and_community_crud_work() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::default()
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+    };
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/networkpolicies/")
+            .set_json(json!({"name": "secure", "description": "Secure"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy: Value = test::read_body_json(response).await;
+    let policy_id = policy["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/networks/")
+            .set_json(json!({"network": "192.0.2.0/24", "description": "Policy net"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::PATCH)
+            .uri("/api/v1/networks/192.0.2.0/24")
+            .set_json(json!({"policy": policy_id, "max_communities": 1}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri(&format!("/api/v1/networks/?policy={policy_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let networks: Value = test::read_body_json(response).await;
+    assert_eq!(networks["count"], 1);
+    assert_eq!(networks["results"][0]["policy"]["name"], "secure");
+    assert_eq!(networks["results"][0]["max_communities"], 1);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/networks/192.0.2.0/24/communities/")
+            .set_json(json!({"name": "Guests", "description": "Guest hosts"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let community: Value = test::read_body_json(response).await;
+    assert_eq!(community["name"], "guests");
+    let community_id = community["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::PATCH)
+            .uri(&format!(
+                "/api/v1/networks/192.0.2.0/24/communities/{community_id}"
+            ))
+            .set_json(json!({"name": "Visitors"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let community: Value = test::read_body_json(response).await;
+    assert_eq!(community["name"], "visitors");
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::DELETE)
+            .uri(&format!(
+                "/api/v1/networks/192.0.2.0/24/communities/{community_id}"
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[actix_web::test]
 async fn host_contact_contract_shape_is_stable() {
     let app = test::init_service(
         App::new()
@@ -215,16 +321,21 @@ async fn policy_mapping_contract_shape_is_stable() {
 
     for (uri, body) in [
         (
+            "/policy/network/policies",
+            json!({"name":"campus-core","description":"Campus core policy"}),
+        ),
+        (
             "/inventory/networks",
-            json!({"cidr":"10.0.0.0/24","description":"LAN","reserved":3}),
+            json!({
+                "cidr":"10.0.0.0/24",
+                "description":"LAN",
+                "reserved":3,
+                "policy_name":"campus-core"
+            }),
         ),
         (
             "/inventory/hosts",
             json!({"name":"app.example.org","comment":"app host"}),
-        ),
-        (
-            "/policy/network/policies",
-            json!({"name":"campus-core","description":"Campus core policy"}),
         ),
         (
             "/policy/network/communities",

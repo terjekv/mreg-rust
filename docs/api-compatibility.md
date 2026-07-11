@@ -60,10 +60,10 @@ and serialize legacy DRF-style responses. No entry in this table is a redirect.
 | `nameservers/` | List/detail keyed by name. |
 | `ptroverrides/` | Collection, create/change/delete, host projection, and network-level projections. |
 | DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. Exact collection filters prevent records of the same type from being mistaken for one another. |
-| `networks/` | List/CIDR detail, create/update/delete, excluded-range mutations, lookup by IP, reserved/used/unused counts and lists, first/random unused address, host and PTR projections, and communities. |
+| `networks/` | List/CIDR detail, create/update/delete, excluded-range mutations, lookup by IP, reserved/used/unused counts and lists, first/random unused address, host and PTR projections, policy assignment/filtering, per-network community limits, and community/member CRUD. |
 | Forward/reverse zones | List/detail, forward-zone create/update/delete, nameserver replacement, forward-delegation create/list/comment/delete, hostname/delegation lookup, delegation detail by name, and generated BIND-style zone files. |
 | Network and host policy | Network-policy and network-policy-attribute list/create/detail/update/delete, boolean policy-attribute membership with atomic replace semantics, protected attributes, community-template patterns, plus host-policy atom/role CRUD, rename, atom/host membership, labels, and reverse membership projections. |
-| `history/` | Collection rendered from Rust history records. Old integer history item identity is unavailable. |
+| `history/` | Collection rendered from Rust audit records with legacy host, group, and host-policy relation projections. Old integer history item identity is synthesized. |
 
 ## Direct v1 read adapters
 
@@ -108,11 +108,6 @@ status/body adapters. The genuinely unavailable information is narrower:
 - legacy integer primary keys were not retained. V1 adapters synthesize stable
   opaque integer identifiers where the CLI needs identity; the literal Django
   primary-key values cannot be reproduced;
-- exact Django history responses cannot currently be reproduced. Rust stores
-  the operations and affected resources, but its audit records do not retain
-  Django content-type IDs or the same per-model action payloads. The remaining
-  pre-gap CLI mismatches are host/group history rendering rather than failed
-  mutations;
 - `permissions/netgroupregex/...` (authorization is delegated to Treetop in
   mreg-rust and the Django permission model is not stored);
 - Django-only user flags, login history, token last-used metadata, and exact
@@ -141,16 +136,12 @@ compatibility job.
 
 Run the same path locally with `scripts/run-mreg-cli-compat.sh`. The script
 handles Linux host networking and Docker Desktop on macOS. The final recorded
-run on 2026-07-11 completed all 401 commands with 302 exact command matches, 13
-explicit 501 gaps, no commands left unverified, and 86 unexpected recording
-differences. Implementing policy attributes lets the suite execute the entire
-previously blocked policy/community tail, so the larger visible difference count
-contains newly verified downstream network-policy assignment, per-network
-maximum-community, and community behavior rather than regressions. Many commands
-complete with the same user-visible result but still
-expose a response-field, ordering, or state-projection mismatch in their recorded
-HTTP exchange; they remain red because the goal is equality, not merely command
-success. Six are the known history-rendering mismatches described above.
+run on 2026-07-11 completed all 401 commands with 388 exact command matches, 13
+explicit 501 permission-data gaps, no commands left unverified, and no unexpected
+recording differences. The comparison normalizes only volatile identity, time,
+and address values, plus one redundant read-only label lookup whose repetition
+depends on the CLI cache surviving a permission 501. User-visible output, HTTP
+methods, status codes, response bodies, and resulting state otherwise match.
 
 ## OpenAPI and documentation
 

@@ -14,7 +14,7 @@ use crate::{
             UpdateHostAttachment,
         },
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::{
             AttachmentCommunityAssignmentFilter, BacnetIdFilter, CommunityFilter,
             HostCommunityAssignmentFilter, HostContactFilter, HostFilter, HostGroupFilter,
@@ -806,6 +806,13 @@ impl<'c> TxCommunityStore for PgTxStorage<'c> {
     }
     fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         super::communities::get_by_id(&mut self.conn.borrow_mut(), community_id)
+    }
+    fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        super::communities::update(&mut self.conn.borrow_mut(), community_id, command)
     }
     fn delete_community(&self, community_id: Uuid) -> Result<(), AppError> {
         super::communities::delete_by_id(&mut self.conn.borrow_mut(), community_id)

@@ -36,15 +36,15 @@ use crate::{
             BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, EmailAddressValue,
             HostGroupName, Hostname, IpAddressValue, LabelName, MacAddressValue,
             NetworkPolicyAttributeName, NetworkPolicyName, OwnerGroupName, ReservedCount,
-            SerialNumber, SoaSeconds, Ttl, ZoneName,
+            SerialNumber, SoaSeconds, Ttl, VlanId, ZoneName,
         },
         zone::{CreateForwardZone, CreateReverseZone},
     },
     errors::AppError,
     storage::ImportStore,
     storage::import_helpers::{
-        resolve_bool, resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec,
-        resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
+        resolve_bool, resolve_i32, resolve_one_of_string, resolve_optional_string, resolve_string,
+        resolve_string_vec, resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
     },
 };
 
@@ -221,14 +221,25 @@ fn import_network(
     attributes: &Value,
     refs: &BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
-    let network = create_network_in_state(
-        state,
-        CreateNetwork::new(
-            CidrValue::new(resolve_string(attributes, "cidr", refs)?)?,
-            resolve_string(attributes, "description", refs)?,
-            ReservedCount::new(resolve_u32(attributes, "reserved")?.unwrap_or(3))?,
-        )?,
-    )?;
+    let policy = resolve_one_of_string(attributes, &["policy_name", "policy"], refs)?
+        .map(NetworkPolicyName::new)
+        .transpose()?;
+    let max_communities = resolve_u32(attributes, "max_communities")?
+        .map(crate::domain::types::CommunityLimit::new)
+        .transpose()?;
+    let command = CreateNetwork::new_full(
+        CidrValue::new(resolve_string(attributes, "cidr", refs)?)?,
+        resolve_string(attributes, "description", refs)?,
+        resolve_u32(attributes, "vlan")?.map(VlanId::new).transpose()?,
+        resolve_bool(attributes, "dns_delegated")?.unwrap_or(false),
+        resolve_optional_string(attributes, "category", refs)?.unwrap_or_default(),
+        resolve_optional_string(attributes, "location", refs)?.unwrap_or_default(),
+        resolve_bool(attributes, "frozen")?.unwrap_or(false),
+        ReservedCount::new(resolve_u32(attributes, "reserved")?.unwrap_or(3))?,
+    )?
+    .with_policy(policy)
+    .with_max_communities(max_communities);
+    let network = create_network_in_state(state, command)?;
     Ok(Value::String(network.cidr().as_str()))
 }
 

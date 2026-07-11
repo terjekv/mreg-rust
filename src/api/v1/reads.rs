@@ -30,6 +30,7 @@ use crate::{
         },
     },
     errors::AppError,
+    services::host_groups::HostGroupRelationMutation,
 };
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -287,24 +288,40 @@ struct LegacyNamedMember {
     name: String,
 }
 
-async fn replace_host_group(
-    state: &AppState,
-    group: HostGroup,
+struct LegacyGroupRelationChange {
     hosts: Vec<Hostname>,
     groups: Vec<HostGroupName>,
     owners: Vec<OwnerGroupName>,
+    action: &'static str,
+    relation: &'static str,
+    member: String,
+    history_name: String,
+}
+
+async fn replace_host_group(
+    state: &AppState,
+    group: HostGroup,
+    change: LegacyGroupRelationChange,
 ) -> Result<(), AppError> {
-    state.services.host_groups().delete(group.name()).await?;
     state
         .services
         .host_groups()
-        .create(CreateHostGroup::new(
-            group.name().clone(),
-            group.description(),
-            hosts,
-            groups,
-            owners,
-        )?)
+        .replace_relation(
+            &group,
+            CreateHostGroup::new(
+                group.name().clone(),
+                group.description(),
+                change.hosts,
+                change.groups,
+                change.owners,
+            )?,
+            HostGroupRelationMutation {
+                action: change.action,
+                relation: change.relation,
+                member: change.member,
+                history_name: change.history_name,
+            },
+        )
         .await?;
     Ok(())
 }
@@ -316,14 +333,21 @@ async fn host_group_host_add(
     payload: web::Json<LegacyNamedMember>,
 ) -> Result<HttpResponse, AppError> {
     let group = get_host_group(&req, &state, name.into_inner()).await?;
+    let member = payload.into_inner().name;
     let mut hosts = group.hosts().to_vec();
-    hosts.push(Hostname::new(payload.into_inner().name)?);
+    hosts.push(Hostname::new(&member)?);
     replace_host_group(
         &state,
         group.clone(),
-        hosts,
-        group.parent_groups().to_vec(),
-        group.owner_groups().to_vec(),
+        LegacyGroupRelationChange {
+            hosts,
+            groups: group.parent_groups().to_vec(),
+            owners: group.owner_groups().to_vec(),
+            action: "add",
+            relation: "hosts",
+            member,
+            history_name: group.name().as_str().to_string(),
+        },
     )
     .await?;
     Ok(HttpResponse::Created().finish())
@@ -346,9 +370,15 @@ async fn host_group_host_remove(
     replace_host_group(
         &state,
         group.clone(),
-        hosts,
-        group.parent_groups().to_vec(),
-        group.owner_groups().to_vec(),
+        LegacyGroupRelationChange {
+            hosts,
+            groups: group.parent_groups().to_vec(),
+            owners: group.owner_groups().to_vec(),
+            action: "remove",
+            relation: "hosts",
+            member: member.as_str().to_string(),
+            history_name: group.name().as_str().to_string(),
+        },
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())
@@ -367,9 +397,15 @@ async fn host_group_group_add(
     replace_host_group(
         &state,
         child.clone(),
-        child.hosts().to_vec(),
-        groups,
-        child.owner_groups().to_vec(),
+        LegacyGroupRelationChange {
+            hosts: child.hosts().to_vec(),
+            groups,
+            owners: child.owner_groups().to_vec(),
+            action: "add",
+            relation: "groups",
+            member: child.name().as_str().to_string(),
+            history_name: parent.name().as_str().to_string(),
+        },
     )
     .await?;
     Ok(HttpResponse::Created().finish())
@@ -392,9 +428,15 @@ async fn host_group_group_remove(
     replace_host_group(
         &state,
         child.clone(),
-        child.hosts().to_vec(),
-        groups,
-        child.owner_groups().to_vec(),
+        LegacyGroupRelationChange {
+            hosts: child.hosts().to_vec(),
+            groups,
+            owners: child.owner_groups().to_vec(),
+            action: "remove",
+            relation: "groups",
+            member: child.name().as_str().to_string(),
+            history_name: parent.name().as_str().to_string(),
+        },
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())
@@ -407,14 +449,21 @@ async fn host_group_owner_add(
     payload: web::Json<LegacyNamedMember>,
 ) -> Result<HttpResponse, AppError> {
     let group = get_host_group(&req, &state, name.into_inner()).await?;
+    let member = payload.into_inner().name;
     let mut owners = group.owner_groups().to_vec();
-    owners.push(OwnerGroupName::new(payload.into_inner().name)?);
+    owners.push(OwnerGroupName::new(&member)?);
     replace_host_group(
         &state,
         group.clone(),
-        group.hosts().to_vec(),
-        group.parent_groups().to_vec(),
-        owners,
+        LegacyGroupRelationChange {
+            hosts: group.hosts().to_vec(),
+            groups: group.parent_groups().to_vec(),
+            owners,
+            action: "add",
+            relation: "owners",
+            member,
+            history_name: group.name().as_str().to_string(),
+        },
     )
     .await?;
     Ok(HttpResponse::Created().finish())
@@ -437,9 +486,15 @@ async fn host_group_owner_remove(
     replace_host_group(
         &state,
         group.clone(),
-        group.hosts().to_vec(),
-        group.parent_groups().to_vec(),
-        owners,
+        LegacyGroupRelationChange {
+            hosts: group.hosts().to_vec(),
+            groups: group.parent_groups().to_vec(),
+            owners,
+            action: "remove",
+            relation: "owners",
+            member: member.as_str().to_string(),
+            history_name: group.name().as_str().to_string(),
+        },
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())
@@ -521,17 +576,32 @@ pub(super) async fn network_json(
             &crate::domain::filters::CommunityFilter::default(),
         )
         .await?
-        .items
-        .into_iter()
+        .items;
+    let mut community_values = Vec::new();
+    for community in communities
+        .iter()
         .filter(|community| community.network_cidr() == network.cidr())
-        .map(|community| {
-            json!({
-                "id": super::legacy_id(community.id()), "name": community.name().as_str(),
-                "description": community.description(), "network": network_id,
-                "created_at": community.created_at(), "updated_at": community.updated_at(),
-            })
-        })
-        .collect::<Vec<_>>();
+    {
+        community_values.push(super::resources::community_json(state, community).await?);
+    }
+    let policy = if let Some(policy_id) = network.policy_id() {
+        let policy = state
+            .services
+            .network_policies()
+            .list(
+                &PageRequest::all(),
+                &crate::domain::filters::NetworkPolicyFilter::default(),
+            )
+            .await?
+            .items
+            .into_iter()
+            .find(|policy| policy.id() == policy_id)
+            .ok_or_else(|| AppError::not_found("network policy was not found"))?;
+        let details = super::resources::policy_details(state, policy).await?;
+        super::resources::policy_json(&details)
+    } else {
+        Value::Null
+    };
     Ok(json!({
         "id": super::legacy_id(network.id()), "network": network.cidr().as_str(),
         "description": network.description(), "vlan": network.vlan().map(|v| v.as_u32()),
@@ -539,7 +609,8 @@ pub(super) async fn network_json(
         "location": network.location(), "frozen": network.frozen(),
         "reserved": network.reserved().as_u32().saturating_sub(1), "created_at": network.created_at(),
         "updated_at": network.updated_at(), "excluded_ranges": excluded_ranges,
-        "policy": Value::Null, "communities": communities, "max_communities": Value::Null,
+        "policy": policy, "communities": community_values,
+        "max_communities": network.max_communities().map(|value| value.as_u32()),
     }))
 }
 

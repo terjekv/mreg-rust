@@ -32,7 +32,7 @@ use crate::{
             UpdateHostAttachment,
         },
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         exports::{CreateExportRun, CreateExportTemplate, ExportRun, ExportTemplate},
         filters::{
             BacnetIdFilter, CommunityFilter, HostCommunityAssignmentFilter, HostContactFilter,
@@ -769,6 +769,21 @@ impl HostGroupService<'_> {
     pub async fn delete(&self, name: &HostGroupName) -> Result<(), AppError> {
         host_groups::delete_host_group(self.storage, name, self.events).await
     }
+    pub async fn replace_relation(
+        &self,
+        old: &HostGroup,
+        command: CreateHostGroup,
+        mutation: host_groups::HostGroupRelationMutation,
+    ) -> Result<HostGroup, AppError> {
+        host_groups::replace_host_group_relation(
+            self.storage,
+            old,
+            command,
+            mutation,
+            self.events,
+        )
+        .await
+    }
 }
 
 pub struct BacnetService<'a> {
@@ -885,6 +900,13 @@ impl CommunityService<'_> {
     }
     pub async fn get(&self, community_id: Uuid) -> Result<Community, AppError> {
         communities::get_community(self.storage.communities(), community_id).await
+    }
+    pub async fn update(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        communities::update_community(self.storage, community_id, command, self.events).await
     }
     pub async fn delete(&self, community_id: Uuid) -> Result<(), AppError> {
         communities::delete_community(self.storage, community_id, self.events).await

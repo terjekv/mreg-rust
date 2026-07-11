@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use actix_web::{HttpRequest, HttpResponse, delete, get, post, web};
+use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -10,7 +10,7 @@ use crate::{
     AppState,
     authz::{self, AttrValue},
     domain::{
-        community::Community,
+        community::{Community, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{PageRequest, PageResponse, SortDirection},
         types::{CommunityName, NetworkPolicyName},
@@ -30,6 +30,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(list_communities)
         .service(create_community)
         .service(get_community)
+        .service(update_community)
         .service(delete_community);
 }
 
@@ -75,6 +76,12 @@ impl CreateCommunityRequest {
             self.description,
         )
     }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UpdateCommunityRequest {
+    name: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -215,6 +222,51 @@ pub(crate) async fn get_community(
     Ok(HttpResponse::Ok().json(CommunityResponse::from_domain(&item)))
 }
 
+/// Update a community
+#[utoipa::path(
+    patch,
+    path = "/api/v2/policy/network/communities/{community_id}",
+    params(("community_id" = Uuid, Path, description = "Community ID")),
+    request_body = UpdateCommunityRequest,
+    responses(
+        (status = 200, description = "Community updated", body = CommunityResponse),
+        (status = 404, description = "Community not found")
+    ),
+    tag = "Policy"
+)]
+#[patch("/policy/network/communities/{community_id}")]
+pub(crate) async fn update_community(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+    payload: web::Json<UpdateCommunityRequest>,
+) -> Result<HttpResponse, AppError> {
+    let community_id = path.into_inner();
+    let request = payload.into_inner();
+    require(
+        &state,
+        authz_request(
+            &req,
+            authz::actions::community::UPDATE,
+            authz::actions::resource_kinds::COMMUNITY,
+            community_id.to_string(),
+        ),
+    )
+    .await?;
+    let item = state
+        .services
+        .communities()
+        .update(
+            community_id,
+            UpdateCommunity {
+                name: request.name.map(CommunityName::new).transpose()?,
+                description: request.description,
+            },
+        )
+        .await?;
+    Ok(HttpResponse::Ok().json(CommunityResponse::from_domain(&item)))
+}
+
 /// Delete a community
 #[utoipa::path(
     delete,
@@ -262,20 +314,24 @@ mod tests {
         )
         .await;
 
-        // Create a network
-        let net_req = test::TestRequest::post()
-            .uri("/inventory/networks")
-            .set_json(serde_json::json!({"cidr": "172.30.0.0/24", "description": "comm-test"}))
-            .to_request();
-        let resp = test::call_service(&app, net_req).await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-
         // Create a network policy
         let policy_req = test::TestRequest::post()
             .uri("/policy/network/policies")
             .set_json(serde_json::json!({"name": "comm-policy", "description": "test"}))
             .to_request();
         let resp = test::call_service(&app, policy_req).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Create a network assigned to the policy
+        let net_req = test::TestRequest::post()
+            .uri("/inventory/networks")
+            .set_json(serde_json::json!({
+                "cidr": "172.30.0.0/24",
+                "description": "comm-test",
+                "policy_name": "comm-policy"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, net_req).await;
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Create a community

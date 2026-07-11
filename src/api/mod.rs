@@ -144,6 +144,7 @@ pub mod v2;
         v2::communities::list_communities,
         v2::communities::create_community,
         v2::communities::get_community,
+        v2::communities::update_community,
         v2::communities::delete_community,
         // Policy – Host community assignments
         v2::host_community_assignments::list_host_community_assignments,
@@ -272,6 +273,7 @@ pub mod v2;
         v2::network_policies::NetworkPolicyAttributeResponse,
         v2::network_policies::NetworkPolicyAttributePageResponse,
         v2::communities::CreateCommunityRequest,
+        v2::communities::UpdateCommunityRequest,
         v2::communities::CommunityResponse,
         v2::host_community_assignments::CreateHostCommunityAssignmentRequest,
         v2::host_community_assignments::HostCommunityAssignmentResponse,

@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         filters::NetworkPolicyFilter,
+        network::UpdateNetwork,
         network_policy::{
             CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
             NetworkPolicyAttribute, NetworkPolicyAttributeValue, UpdateNetworkPolicy,
@@ -19,7 +20,9 @@ use crate::{
     storage::NetworkPolicyStore,
 };
 
-use super::{MemoryState, MemoryStorage, sort_and_paginate};
+use super::{
+    MemoryState, MemoryStorage, networks::update_network_in_state, sort_and_paginate,
+};
 
 fn resolve_values(
     state: &MemoryState,
@@ -193,6 +196,29 @@ pub(super) fn delete_network_policy_in_state(
             AppError::not_found(format!("network policy '{}' was not found", name.as_str()))
         })?;
     state.network_policy_attribute_values.remove(&policy.id());
+    let assigned_networks = state
+        .networks
+        .values()
+        .filter(|network| network.policy_id() == Some(policy.id()))
+        .map(|network| network.cidr().clone())
+        .collect::<Vec<_>>();
+    for network in assigned_networks {
+        update_network_in_state(
+            state,
+            &network,
+            UpdateNetwork {
+                description: None,
+                vlan: UpdateField::Unchanged,
+                dns_delegated: None,
+                category: None,
+                location: None,
+                frozen: None,
+                reserved: None,
+                max_communities: UpdateField::Unchanged,
+                policy: UpdateField::Clear,
+            },
+        )?;
+    }
     Ok(())
 }
 

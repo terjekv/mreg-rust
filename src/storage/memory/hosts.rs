@@ -593,15 +593,42 @@ pub(super) fn delete_host_in_state(
         AppError::not_found(format!("host '{}' was not found", name.as_str()))
     })?;
     delete_records_by_owner_in_state(state, host.id());
+    let mut removed_rrsets = std::collections::HashSet::new();
+    state.records.retain(|record| {
+        if record.owner_name().eq_ignore_ascii_case(host.name().as_str()) {
+            removed_rrsets.insert(record.rrset_id());
+            false
+        } else {
+            true
+        }
+    });
+    for rrset_id in removed_rrsets {
+        if !state.records.iter().any(|record| record.rrset_id() == rrset_id) {
+            state.rrsets.remove(&rrset_id);
+        }
+    }
     if let Some(zone_name) = host.zone()
         && let Some(zone) = state.forward_zones.get(zone_name.as_str())
     {
         let zone_id = zone.id();
         bump_zone_serial_in_state(state, zone_id);
     }
+    let ip_address_ids = state
+        .ip_addresses
+        .values()
+        .filter(|assignment| assignment.host_id() == host.id())
+        .map(|assignment| assignment.id())
+        .collect::<std::collections::HashSet<_>>();
     state
         .ip_addresses
         .retain(|_, assignment| assignment.host_id() != host.id());
+    state
+        .ptr_overrides
+        .retain(|_, ptr| ptr.host_name() != host.name());
+    state.host_community_assignments.retain(|_, assignment| {
+        assignment.host_id() != host.id()
+            && !ip_address_ids.contains(&assignment.ip_address_id())
+    });
     Ok(())
 }
 

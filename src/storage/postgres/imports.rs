@@ -223,7 +223,8 @@ impl PostgresStorage {
              VALUES
                 ($1::cidr, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING id, network::text AS network, description, vlan, dns_delegated,
-                       category, location, frozen, reserved, created_at, updated_at",
+                       category, location, frozen, reserved, max_communities, policy_id,
+                       created_at, updated_at",
         )
         .bind::<Text, _>(command.cidr().as_str())
         .bind::<Text, _>(command.description())
@@ -1174,6 +1175,14 @@ impl ImportStore for PostgresStorage {
                                     item.kind(),
                                     message
                                 )),
+                                AppError::NotAcceptable(message) => {
+                                    AppError::not_acceptable(format!(
+                                        "import item '{}' ({}) failed: {}",
+                                        item.reference(),
+                                        item.kind(),
+                                        message
+                                    ))
+                                }
                                 AppError::Forbidden(message) => AppError::forbidden(format!(
                                     "import item '{}' ({}) failed: {}",
                                     item.reference(),

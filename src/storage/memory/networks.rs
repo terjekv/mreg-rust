@@ -30,6 +30,21 @@ pub(super) fn create_network_in_state(
             key
         )));
     }
+    let policy_id = command
+        .policy()
+        .map(|name| {
+            state
+                .network_policies
+                .get(name.as_str())
+                .map(|policy| policy.id())
+                .ok_or_else(|| {
+                    AppError::not_found(format!(
+                        "network policy '{}' was not found",
+                        name.as_str()
+                    ))
+                })
+        })
+        .transpose()?;
     let now = Utc::now();
     let network = Network::restore(
         Uuid::new_v4(),
@@ -41,6 +56,8 @@ pub(super) fn create_network_in_state(
         command.location().to_string(),
         command.frozen(),
         command.reserved(),
+        policy_id.and(command.max_communities()),
+        policy_id,
         now,
         now,
     )?;
@@ -166,6 +183,27 @@ pub(super) fn update_network_in_state(
         .unwrap_or_else(|| network.location().to_string());
     let frozen = command.frozen.unwrap_or(network.frozen());
     let reserved = command.reserved.unwrap_or(network.reserved());
+    let policy_id = match command.policy {
+        crate::domain::types::UpdateField::Unchanged => network.policy_id(),
+        crate::domain::types::UpdateField::Clear => None,
+        crate::domain::types::UpdateField::Set(name) => Some(
+            state
+                .network_policies
+                .get(name.as_str())
+                .map(|policy| policy.id())
+                .ok_or_else(|| {
+                    AppError::not_found(format!(
+                        "network policy '{}' was not found",
+                        name.as_str()
+                    ))
+                })?,
+        ),
+    };
+    let max_communities = if policy_id.is_none() {
+        None
+    } else {
+        command.max_communities.resolve(network.max_communities())
+    };
     let updated = Network::restore(
         network.id(),
         network.cidr().clone(),
@@ -176,6 +214,8 @@ pub(super) fn update_network_in_state(
         location,
         frozen,
         reserved,
+        max_communities,
+        policy_id,
         network.created_at(),
         now,
     )?;

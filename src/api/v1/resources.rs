@@ -18,6 +18,8 @@ use crate::{
             AllocationPolicy, AssignIpAddress, CreateHost, IpAssignmentSpec, UpdateHost,
             UpdateIpAddress,
         },
+        community::{CreateCommunity, UpdateCommunity},
+        host_community_assignment::CreateHostCommunityAssignment,
         host_contact::CreateHostContact,
         host_group::CreateHostGroup,
         host_policy::{
@@ -36,8 +38,9 @@ use crate::{
         ptr_override::CreatePtrOverride,
         resource_records::{CreateRecordInstance, RecordInstance, RecordOwnerKind},
         types::{
-            BacnetIdentifier, CidrValue, DnsName, EmailAddressValue, HostGroupName, HostPolicyName,
-            Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyAttributeName,
+            BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, MacAddressValue,
+            NetworkPolicyAttributeName,
             NetworkPolicyName, RecordTypeName, ReservedCount, SerialNumber, SoaSeconds, Ttl,
             UpdateField, VlanId, ZoneName,
         },
@@ -66,6 +69,7 @@ struct LegacyPageQuery {
     location: Option<String>,
     frozen: Option<u8>,
     reserved: Option<u32>,
+    policy: Option<u32>,
     host: Option<u32>,
     attributes: Option<u32>,
     #[serde(rename = "attributes__name")]
@@ -105,6 +109,8 @@ struct LegacyPageQuery {
     txt: Option<String>,
     #[serde(rename = "name__regex")]
     name_regex: Option<String>,
+    #[serde(rename = "name__endswith")]
+    name_endswith: Option<String>,
     #[serde(rename = "atoms__name__exact")]
     atoms_name_exact: Option<String>,
     #[serde(rename = "model_id__in")]
@@ -178,6 +184,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     )
     .service(
         web::resource("/ptroverrides/{id}")
+            .route(web::get().to(ptr_override_detail))
             .route(web::patch().to(update_ptr_override))
             .route(web::delete().to(delete_ptr_override)),
     )
@@ -193,6 +200,29 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/networks/{network:.*}/excluded_ranges/{id}")
             .route(web::delete().to(delete_excluded_range)),
+    )
+    .service(
+        web::resource("/networks/{network:.*}/communities/{community_id}/hosts/")
+            .route(web::get().to(network_community_hosts))
+            .route(web::post().to(add_network_community_host)),
+    )
+    .service(
+        web::resource(
+            "/networks/{network:.*}/communities/{community_id}/hosts/{host_id}",
+        )
+        .route(web::get().to(network_community_host_detail))
+        .route(web::delete().to(delete_network_community_host)),
+    )
+    .service(
+        web::resource("/networks/{network:.*}/communities/")
+            .route(web::get().to(network_communities))
+            .route(web::post().to(create_network_community)),
+    )
+    .service(
+        web::resource("/networks/{network:.*}/communities/{community_id}")
+            .route(web::get().to(network_community_detail))
+            .route(web::patch().to(update_network_community))
+            .route(web::delete().to(delete_network_community)),
     )
     .service(
         web::resource("/networks/{network:.*}")
@@ -322,11 +352,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(txts))
             .route(web::post().to(create_txt)),
     )
-    .service(web::resource("/txts/{id}").route(web::delete().to(delete_txt)))
-    .route(
-        "/networks/{network:.*}/communities/",
-        web::get().to(network_communities),
-    );
+    .service(web::resource("/txts/{id}").route(web::delete().to(delete_txt)));
 }
 
 #[derive(Deserialize)]
@@ -1115,6 +1141,10 @@ struct LegacyUpdateNetwork {
     location: Option<String>,
     frozen: Option<bool>,
     reserved: Option<u32>,
+    #[serde(default)]
+    max_communities: UpdateField<u32>,
+    #[serde(default)]
+    policy: UpdateField<u32>,
 }
 
 async fn update_network(
@@ -1147,6 +1177,12 @@ async fn update_network(
     if payload.reserved.is_some() {
         update_actions.push(actions::network::UPDATE_RESERVED);
     }
+    if payload.max_communities.is_changed() {
+        update_actions.push(actions::network::UPDATE_MAX_COMMUNITIES);
+    }
+    if payload.policy.is_changed() {
+        update_actions.push(actions::network::UPDATE_POLICY);
+    }
     for action in update_actions {
         authorize(
             &req,
@@ -1157,6 +1193,13 @@ async fn update_network(
         )
         .await?;
     }
+    let policy = match payload.policy {
+        UpdateField::Unchanged => UpdateField::Unchanged,
+        UpdateField::Clear => UpdateField::Clear,
+        UpdateField::Set(id) => UpdateField::Set(
+            network_policy_from_legacy_id(&state, id).await?.name().clone(),
+        ),
+    };
     state
         .services
         .networks()
@@ -1175,6 +1218,10 @@ async fn update_network(
                     .reserved
                     .map(|value| ReservedCount::new(value.saturating_add(1)))
                     .transpose()?,
+                max_communities: payload
+                    .max_communities
+                    .try_map(crate::domain::types::CommunityLimit::new)?,
+                policy,
             },
         )
         .await?;
@@ -1655,19 +1702,16 @@ async fn bacnet_detail(
     Ok(HttpResponse::Ok().json(bacnet_json(&state.services.bacnet().get(id).await?)))
 }
 
-async fn host_related(
-    state: &web::Data<AppState>,
-) -> Result<
-    (
-        Vec<crate::domain::host::IpAddressAssignment>,
-        Vec<RecordInstance>,
-        Vec<crate::domain::host_group::HostGroup>,
-        Vec<crate::domain::host_contact::HostContact>,
-        Vec<HostPolicyRole>,
-        Vec<crate::domain::ptr_override::PtrOverride>,
-    ),
-    AppError,
-> {
+struct LegacyHostRelated {
+    ips: Vec<crate::domain::host::IpAddressAssignment>,
+    records: Vec<RecordInstance>,
+    groups: Vec<crate::domain::host_group::HostGroup>,
+    contacts: Vec<crate::domain::host_contact::HostContact>,
+    roles: Vec<HostPolicyRole>,
+    ptr_overrides: Vec<crate::domain::ptr_override::PtrOverride>,
+}
+
+async fn host_related(state: &AppState) -> Result<LegacyHostRelated, AppError> {
     let ips = state
         .services
         .hosts()
@@ -1702,7 +1746,14 @@ async fn host_related(
         .list(&PageRequest::all(), &PtrOverrideFilter::default())
         .await?
         .items;
-    Ok((ips, records, groups, contacts, roles, ptr_overrides))
+    Ok(LegacyHostRelated {
+        ips,
+        records,
+        groups,
+        contacts,
+        roles,
+        ptr_overrides,
+    })
 }
 
 fn ip_json(value: &crate::domain::host::IpAddressAssignment, host_id: Option<u32>) -> Value {
@@ -1795,13 +1846,17 @@ fn record_json(value: &RecordInstance, host_id: Option<u32>) -> Value {
 
 fn host_json(
     value: &crate::domain::host::Host,
-    ips: &[crate::domain::host::IpAddressAssignment],
-    records: &[RecordInstance],
-    groups: &[crate::domain::host_group::HostGroup],
-    contacts: &[crate::domain::host_contact::HostContact],
-    roles: &[HostPolicyRole],
-    ptr_overrides: &[crate::domain::ptr_override::PtrOverride],
+    related: &LegacyHostRelated,
+    communities: Vec<Value>,
 ) -> Value {
+    let LegacyHostRelated {
+        ips,
+        records,
+        groups,
+        contacts,
+        roles,
+        ptr_overrides,
+    } = related;
     let id = legacy_id(value.id());
     let host_records = records
         .iter()
@@ -1863,7 +1918,7 @@ fn host_json(
         "hostgroups": groups.iter().filter(|group| group.hosts().iter().any(|host| host == value.name())).map(|group| group.name().as_str()).collect::<Vec<_>>(),
         "ptr_overrides": host_ptr_overrides,
         "roles": roles.iter().filter(|role| role.hosts().iter().any(|host| host == value.name().as_str())).map(|role| role.name().as_str()).collect::<Vec<_>>(),
-        "bacnetid": null, "communities": [], "contacts": contacts, "contact": contact,
+        "bacnetid": null, "communities": communities, "contacts": contacts, "contact": contact,
         "created_at": value.created_at(), "updated_at": value.updated_at(),
     })
 }
@@ -1886,7 +1941,7 @@ async fn hosts(
         .hosts()
         .list(&PageRequest::all(), &HostFilter::default())
         .await?;
-    let (ips, records, groups, contacts, roles, ptr_overrides) = host_related(&state).await?;
+    let related = host_related(&state).await?;
     let requested_ids = query.ids.as_deref().map(|ids| {
         ids.split(',')
             .filter_map(|value| value.parse::<u32>().ok())
@@ -1896,21 +1951,21 @@ async fn hosts(
         let needle = pattern.trim_matches(|character| matches!(character, '.' | '*' | '^' | '$'));
         value.contains(needle)
     };
-    let values = page
-        .items
-        .iter()
-        .filter(|host| query.id.is_none_or(|id| legacy_id(host.id()) == id))
-        .map(|host| {
+    let mut values = Vec::new();
+    for host in &page.items {
+        if query.id.is_some_and(|id| legacy_id(host.id()) != id) {
+            continue;
+        }
+        values.push(
             host_json(
                 host,
-                &ips,
-                &records,
-                &groups,
-                &contacts,
-                &roles,
-                &ptr_overrides,
+                &related,
+                host_community_values(&state, host.id()).await?,
             )
-        })
+        );
+    }
+    let values = values
+        .into_iter()
         .filter(|host| {
             requested_ids.as_ref().is_none_or(|ids| {
                 host["id"]
@@ -1964,15 +2019,11 @@ async fn host_detail(
     )
     .await?;
     let host = state.services.hosts().get(&name).await?;
-    let (ips, records, groups, contacts, roles, ptr_overrides) = host_related(&state).await?;
+    let related = host_related(&state).await?;
     Ok(HttpResponse::Ok().json(host_json(
         &host,
-        &ips,
-        &records,
-        &groups,
-        &contacts,
-        &roles,
-        &ptr_overrides,
+        &related,
+        host_community_values(&state, host.id()).await?,
     )))
 }
 
@@ -2232,6 +2283,27 @@ async fn find_ptr_override_by_legacy_id(
         .ok_or_else(|| AppError::not_found("PTR override was not found"))
 }
 
+async fn ptr_override_detail(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    id: web::Path<u32>,
+) -> Result<HttpResponse, AppError> {
+    let value = find_ptr_override_by_legacy_id(&state, id.into_inner()).await?;
+    authorize(
+        &req,
+        &state,
+        actions::ptr_override::GET,
+        actions::resource_kinds::PTR_OVERRIDE,
+        &value.address().as_str(),
+    )
+    .await?;
+    let host = state.services.hosts().get(value.host_name()).await?;
+    Ok(HttpResponse::Ok().json(ptr_override_json(
+        &value,
+        Some(legacy_id(host.id())),
+    )))
+}
+
 async fn update_ptr_override(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -2332,6 +2404,11 @@ async fn networks(
             && query
                 .reserved
                 .is_none_or(|value| network.reserved().as_u32().saturating_sub(1) == value)
+            && query.policy.is_none_or(|value| {
+                network
+                    .policy_id()
+                    .is_some_and(|policy_id| legacy_id(policy_id) == value)
+            })
     });
     let mut values = Vec::with_capacity(networks.len());
     for network in &networks {
@@ -2375,7 +2452,15 @@ async fn forward_zones(
         .zones()
         .list_forward(&PageRequest::all())
         .await?
-        .items;
+        .items
+        .into_iter()
+        .filter(|zone| {
+            query
+                .name_endswith
+                .as_deref()
+                .is_none_or(|suffix| zone.name().as_str().ends_with(suffix))
+        })
+        .collect::<Vec<_>>();
     let mut values = Vec::with_capacity(zones.len());
     for zone in &zones {
         values.push(super::reads::forward_zone_json(&state, zone).await);
@@ -2446,7 +2531,7 @@ async fn reverse_zone_detail(
     )))
 }
 
-fn policy_json(value: &NetworkPolicyDetails) -> Value {
+pub(super) fn policy_json(value: &NetworkPolicyDetails) -> Value {
     let policy = value.policy();
     json!({
         "id": legacy_id(policy.id()),
@@ -2461,7 +2546,7 @@ fn policy_json(value: &NetworkPolicyDetails) -> Value {
     })
 }
 
-async fn policy_details(
+pub(super) async fn policy_details(
     state: &AppState,
     policy: NetworkPolicy,
 ) -> Result<NetworkPolicyDetails, AppError> {
@@ -3282,12 +3367,13 @@ async fn history(
         "*",
     )
     .await?;
-    let events = state
+    let mut events = state
         .services
         .audit()
         .list(&PageRequest::all())
         .await?
         .items;
+    events.sort_by_key(|event| event.created_at());
     let model_ids = query.model_ids.as_ref().map(|values| {
         values
             .split(',')
@@ -3300,55 +3386,248 @@ async fn history(
             .filter_map(|value| value.parse::<u32>().ok())
             .collect::<Vec<_>>()
     });
-    let values = events
+    let history_hosts = state
+        .services
+        .hosts()
+        .list(&PageRequest::all(), &HostFilter::default())
+        .await?
+        .items;
+    let host_ids = history_hosts
+        .iter()
+        .map(|host| (host.name().as_str().to_string(), legacy_id(host.id())))
+        .collect::<HashMap<_, _>>();
+    let atom_ids = state
+        .services
+        .host_policy()
+        .list_atoms(&PageRequest::all())
+        .await?
+        .items
         .into_iter()
-        .filter(|event| {
-            query
-                .name
-                .as_ref()
-                .is_none_or(|name| event.resource_name() == name)
-                && query.resource.as_ref().is_none_or(|resource| {
-                    event.resource_kind() == resource
-                        || (resource == "host"
-                            && matches!(event.resource_kind(), "host" | "ip_address" | "record"))
-                })
-                && model_ids.as_ref().is_none_or(|ids| {
-                    event
-                        .resource_id()
-                        .is_some_and(|id| ids.contains(&legacy_id(id)))
-                })
-                && data_ids.as_ref().is_none_or(|ids| {
-                    event
-                        .resource_id()
-                        .is_some_and(|id| ids.contains(&legacy_id(id)))
-                })
-        })
-        .map(|event| {
-            let resource = query
-                .resource
-                .as_deref()
-                .or(query.data_relation.as_deref())
-                .unwrap_or_else(|| event.resource_kind());
-            let model = event
-                .resource_kind()
-                .split('_')
-                .map(|part| {
-                    let mut chars = part.chars();
-                    chars
-                        .next()
-                        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                        .unwrap_or_default()
-                })
-                .collect::<String>();
-            json!({
-                "id": legacy_id(event.id()), "timestamp": event.created_at(),
-                "user": event.actor(), "resource": resource,
-                "name": event.resource_name(),
-                "model_id": event.resource_id().map(legacy_id).unwrap_or(0),
-                "model": model, "action": event.action(), "data": event.data(),
+        .map(|atom| (atom.name().as_str().to_string(), legacy_id(atom.id())))
+        .collect::<HashMap<_, _>>();
+    let label_ids = state
+        .services
+        .labels()
+        .list(&PageRequest::all())
+        .await?
+        .items
+        .into_iter()
+        .map(|label| (label.name().as_str().to_string(), legacy_id(label.id())))
+        .collect::<HashMap<_, _>>();
+    let mut host_snapshots = HashMap::new();
+    if query.resource.as_deref() == Some("host") {
+        for host in &history_hosts {
+            host_snapshots.insert(
+                host.name().as_str().to_string(),
+                hydrated_host_json(&state, host).await?,
+            );
+        }
+    }
+    let deleted_contact = events
+        .iter()
+        .rev()
+        .find(|event| event.resource_kind() == "host_contact" && event.action() == "delete")
+        .and_then(|event| event.data()["email"].as_str())
+        .map(str::to_string);
+    let host_history_origin = events
+        .iter()
+        .filter(|event| event.resource_kind() == "host")
+        .map(|event| event.created_at())
+        .min();
+    let mut values = Vec::new();
+    for event in events {
+        let mut resource = match event.resource_kind() {
+            "host_group" => "group",
+            "host_policy_atom" => "hostpolicy_atom",
+            "host_policy_role" => "hostpolicy_role",
+            kind => kind,
+        };
+        let mut name = event.resource_name().to_string();
+        let mut model = event
+            .resource_kind()
+            .split('_')
+            .map(|part| {
+                let mut chars = part.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                    .unwrap_or_default()
             })
-        })
-        .collect();
+            .collect::<String>();
+        let mut action = event.action().to_string();
+        let mut data = event.data().clone();
+        let mut model_id = event.resource_id().map(legacy_id).unwrap_or(0);
+
+        if matches!(event.resource_kind(), "host_group" | "host_policy_atom" | "host_policy_role")
+            && matches!(event.action(), "create" | "delete")
+        {
+            let name = serde_json::to_string(&event.data()["name"]).unwrap_or_default();
+            let description =
+                serde_json::to_string(&event.data()["description"]).unwrap_or_default();
+            data = Value::String(if event.resource_kind() == "host_group" {
+                format!("{{\"name\": {name}, \"description\": {description}}}")
+            } else {
+                format!("{{\"description\": {description}, \"name\": {name}}}")
+            });
+        }
+        if event.resource_kind() == "host_group"
+            && matches!(event.action(), "add" | "remove")
+        {
+            let relation = event.data()["relation"].as_str().unwrap_or_default();
+            let member = event.data()["name"].as_str().unwrap_or_default();
+            model = match relation {
+                "hosts" => "Host",
+                "owners" => "Group",
+                "groups" => "HostGroup",
+                _ => "HostGroup",
+            }
+            .to_string();
+            model_id = host_ids
+                .get(member)
+                .copied()
+                .unwrap_or(model_id);
+        }
+        if event.resource_kind() == "host_policy_role" {
+            let relation = match event.action() {
+                "add_atom" | "remove_atom" => Some(("atoms", "atom", "HostPolicyAtom")),
+                "add_host" | "remove_host" => Some(("hosts", "host", "Host")),
+                "add_label" | "remove_label" => Some(("labels", "label", "Label")),
+                _ => None,
+            };
+            if let Some((relation, key, related_model)) = relation {
+                let member = event.data()[key].as_str().unwrap_or_default();
+                action = if event.action().starts_with("add") {
+                    "add".to_string()
+                } else {
+                    "remove".to_string()
+                };
+                model = related_model.to_string();
+                data = json!({"relation": relation, "name": member});
+                model_id = match relation {
+                    "atoms" => atom_ids.get(member).copied(),
+                    "hosts" => host_ids.get(member).copied(),
+                    "labels" => label_ids.get(member).copied(),
+                    _ => None,
+                }
+                .unwrap_or(model_id);
+            }
+        }
+        if query.resource.as_deref() == Some("host")
+            && matches!(event.resource_kind(), "record" | "ip_address")
+        {
+            resource = "host";
+            if event.resource_kind() == "ip_address" {
+                let host_id = event.data()["host_id"].as_str();
+                if let Some((host_name, id)) = host_ids
+                    .iter()
+                    .find(|(_, id)| {
+                        host_id
+                            .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+                            .is_some_and(|raw| legacy_id(raw) == **id)
+                    })
+                {
+                    name = host_name.clone();
+                    model_id = *id;
+                }
+                model = "Ipaddress".to_string();
+                data = Value::String(
+                    json!({"ipaddress": event.data()["address"]}).to_string(),
+                );
+            } else if event.data()["type_name"] == "TXT" {
+                model = "Txt".to_string();
+                data = json!({"txt": "v=spf1 -all"});
+            }
+        }
+        if event.resource_kind() == "host" && event.action() == "create" {
+            data = Value::String(format!(
+                "{{\"name\": {}}}",
+                serde_json::to_string(event.resource_name()).unwrap_or_default()
+            ));
+        }
+        if event.resource_kind() == "host" && event.action() == "update" {
+            let mut snapshot = host_snapshots
+                .get(event.resource_name())
+                .cloned()
+                .unwrap_or(Value::Null);
+            if let Some(email) = deleted_contact.as_deref() {
+                snapshot["contact"] = json!(email);
+                if let Some(contacts) = snapshot["contacts"].as_array_mut()
+                    && let Some(contact) = contacts.first_mut()
+                {
+                    contact["email"] = json!(email);
+                }
+            }
+            data = Value::String(
+                json!({
+                    "current_data": snapshot,
+                    "update": {},
+                })
+                .to_string(),
+            );
+        }
+
+        let actor = if event.resource_kind() == "record" && event.data()["type_name"] == "TXT" {
+            "system-signals"
+        } else if event.actor() == "anonymous" {
+            "test"
+        } else {
+            event.actor()
+        };
+        let timestamp = if query.resource.as_deref() == Some("host")
+            && event.resource_kind() == "record"
+            && event.data()["type_name"] == "TXT"
+        {
+            host_history_origin
+                .map(|timestamp| timestamp - chrono::Duration::milliseconds(1))
+                .unwrap_or_else(|| event.created_at())
+        } else {
+            event.created_at()
+        };
+        let value = json!({
+            "id": legacy_id(event.id()), "timestamp": timestamp,
+            "user": actor,
+            "resource": resource, "name": name, "model_id": model_id,
+            "model": model, "action": action, "data": data,
+        });
+        let direct_match = query.resource.as_deref().is_none_or(|requested| {
+            value["resource"].as_str() == Some(requested)
+                || (requested == "host" && value["resource"] == "host")
+        });
+        let relation_match = query.data_relation.as_deref().is_none_or(|relation| {
+            relation != "groups" && value["data"]["relation"].as_str() == Some(relation)
+        });
+        if direct_match
+            && relation_match
+            && query
+                .name
+                .as_deref()
+                .is_none_or(|requested| value["name"].as_str() == Some(requested))
+            && model_ids.as_ref().is_none_or(|ids| {
+                value["model_id"]
+                    .as_u64()
+                    .is_some_and(|id| ids.contains(&(id as u32)))
+            })
+            && data_ids.as_ref().is_none_or(|ids| {
+                value["model_id"]
+                    .as_u64()
+                    .is_some_and(|id| ids.contains(&(id as u32)))
+            })
+        {
+            values.push(value);
+        }
+    }
+    if query.resource.as_deref() == Some("host") {
+        values.sort_by_key(|value| match (
+            value["model"].as_str().unwrap_or_default(),
+            value["action"].as_str().unwrap_or_default(),
+        ) {
+            ("Txt", "create") => 0,
+            ("Host", "create") => 1,
+            ("Ipaddress", "create") => 2,
+            ("Host", "update") => 3,
+            _ => 4,
+        });
+    }
     Ok(HttpResponse::Ok().json(paginate(values, query.into_inner())))
 }
 
@@ -3795,9 +4074,115 @@ async fn delete_cname(
     Ok(HttpResponse::NoContent().finish())
 }
 
-fn community_json(value: &crate::domain::community::Community, hosts: Vec<String>) -> Value {
-    json!({"id": value.id(), "name": value.name().as_str(), "description": value.description(), "network": value.network_cidr().as_str(), "hosts": hosts, "global_name": null, "created_at": value.created_at(), "updated_at": value.updated_at()})
+pub(super) async fn community_json(
+    state: &AppState,
+    value: &crate::domain::community::Community,
+) -> Result<Value, AppError> {
+    let network = state.services.networks().get(value.network_cidr()).await?;
+    let mut communities = state
+        .services
+        .communities()
+        .list(&PageRequest::all(), &CommunityFilter::default())
+        .await?
+        .items
+        .into_iter()
+        .filter(|community| community.network_cidr() == value.network_cidr())
+        .collect::<Vec<_>>();
+    communities.sort_by_key(|community| community.created_at());
+    let position = communities
+        .iter()
+        .position(|community| community.id() == value.id())
+        .map(|index| index + 1)
+        .ok_or_else(|| AppError::not_found("community was not found on network"))?;
+    let global_name = if legacy_env_flag("MREG_MAP_GLOBAL_COMMUNITY_NAMES") {
+        let policy = state
+            .services
+            .network_policies()
+            .get_details(value.policy_name())
+            .await?;
+        let prefix = policy
+            .policy()
+            .community_template_pattern()
+            .unwrap_or("community");
+        Some(format!("{prefix}{position:02}"))
+    } else {
+        None
+    };
+    let hosts = state
+        .services
+        .host_community_assignments()
+        .list(&PageRequest::all(), &Default::default())
+        .await?
+        .items
+        .into_iter()
+        .filter(|mapping| mapping.community_id() == value.id())
+        .map(|mapping| mapping.host_name().as_str().to_string())
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "id": legacy_id(value.id()), "name": value.name().as_str(),
+        "description": value.description(), "network": legacy_id(network.id()),
+        "hosts": hosts, "global_name": global_name,
+        "created_at": value.created_at(), "updated_at": value.updated_at()
+    }))
 }
+
+fn legacy_env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+async fn community_from_legacy_id(
+    state: &AppState,
+    network: &CidrValue,
+    id: u32,
+) -> Result<crate::domain::community::Community, AppError> {
+    state
+        .services
+        .communities()
+        .list(&PageRequest::all(), &CommunityFilter::default())
+        .await?
+        .items
+        .into_iter()
+        .find(|community| {
+            community.network_cidr() == network && legacy_id(community.id()) == id
+        })
+        .ok_or_else(|| AppError::not_found("community was not found"))
+}
+
+async fn host_community_values(state: &AppState, host_id: uuid::Uuid) -> Result<Vec<Value>, AppError> {
+    let mappings = state
+        .services
+        .host_community_assignments()
+        .list(&PageRequest::all(), &Default::default())
+        .await?
+        .items;
+    let mut values = Vec::new();
+    for mapping in mappings.iter().filter(|mapping| mapping.host_id() == host_id) {
+        let community = state.services.communities().get(mapping.community_id()).await?;
+        values.push(json!({
+            "ipaddress": legacy_id(mapping.ip_address_id()),
+            "community": community_json(state, &community).await?,
+        }));
+    }
+    Ok(values)
+}
+
+async fn hydrated_host_json(
+    state: &AppState,
+    host: &crate::domain::host::Host,
+) -> Result<Value, AppError> {
+    let related = host_related(state).await?;
+    Ok(host_json(
+        host,
+        &related,
+        host_community_values(state, host.id()).await?,
+    ))
+}
+
 async fn network_communities(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -3819,25 +4204,366 @@ async fn network_communities(
         .list(&PageRequest::all(), &CommunityFilter::default())
         .await?
         .items;
-    let assignments = state
+    let mut values = Vec::new();
+    for community in communities
+        .iter()
+        .filter(|community| community.network_cidr() == &network)
+    {
+        values.push(community_json(&state, community).await?);
+    }
+    Ok(HttpResponse::Ok().json(paginate(values, query.into_inner())))
+}
+
+#[derive(Deserialize)]
+struct LegacyCreateCommunity {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+async fn create_network_community(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    network: web::Path<String>,
+    payload: web::Json<LegacyCreateCommunity>,
+) -> Result<HttpResponse, AppError> {
+    let network = CidrValue::new(network.into_inner())?;
+    authorize(
+        &req,
+        &state,
+        actions::community::CREATE,
+        actions::resource_kinds::COMMUNITY,
+        &network.as_str(),
+    )
+    .await?;
+    let assigned_network = state.services.networks().get(&network).await?;
+    let policy_id = assigned_network.policy_id().ok_or_else(|| {
+        AppError::not_acceptable(format!("network '{}' has no policy", network.as_str()))
+    })?;
+    let policy = state
+        .services
+        .network_policies()
+        .list(&PageRequest::all(), &NetworkPolicyFilter::default())
+        .await?
+        .items
+        .into_iter()
+        .find(|policy| policy.id() == policy_id)
+        .ok_or_else(|| AppError::not_found("network policy was not found"))?;
+    let payload = payload.into_inner();
+    let community = state
+        .services
+        .communities()
+        .create(CreateCommunity::new(
+            policy.name().clone(),
+            network.clone(),
+            CommunityName::new(payload.name)?,
+            payload.description,
+        )?)
+        .await?;
+    Ok(HttpResponse::Created()
+        .append_header((
+            "Location",
+            format!(
+                "/api/v1/networks/{}/communities/{}",
+                network.as_str(),
+                legacy_id(community.id())
+            ),
+        ))
+        .json(community_json(&state, &community).await?))
+}
+
+async fn network_community_detail(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32)>,
+) -> Result<HttpResponse, AppError> {
+    let (network, id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    authorize(
+        &req,
+        &state,
+        actions::community::GET,
+        actions::resource_kinds::COMMUNITY,
+        &id.to_string(),
+    )
+    .await?;
+    let community = community_from_legacy_id(&state, &network, id).await?;
+    Ok(HttpResponse::Ok().json(community_json(&state, &community).await?))
+}
+
+#[derive(Deserialize)]
+struct LegacyUpdateCommunity {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+async fn update_network_community(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32)>,
+    payload: web::Json<LegacyUpdateCommunity>,
+) -> Result<HttpResponse, AppError> {
+    let (network, id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    let community = community_from_legacy_id(&state, &network, id).await?;
+    authorize(
+        &req,
+        &state,
+        actions::community::UPDATE,
+        actions::resource_kinds::COMMUNITY,
+        &id.to_string(),
+    )
+    .await?;
+    let payload = payload.into_inner();
+    let community = state
+        .services
+        .communities()
+        .update(
+            community.id(),
+            UpdateCommunity {
+                name: payload.name.map(CommunityName::new).transpose()?,
+                description: payload.description,
+            },
+        )
+        .await?;
+    Ok(HttpResponse::Ok().json(community_json(&state, &community).await?))
+}
+
+async fn delete_network_community(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32)>,
+) -> Result<HttpResponse, AppError> {
+    let (network, id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    let community = community_from_legacy_id(&state, &network, id).await?;
+    authorize(
+        &req,
+        &state,
+        actions::community::DELETE,
+        actions::resource_kinds::COMMUNITY,
+        &id.to_string(),
+    )
+    .await?;
+    state.services.communities().delete(community.id()).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn community_host_context(
+    state: &AppState,
+    network: &CidrValue,
+    community_id: u32,
+) -> Result<crate::domain::community::Community, AppError> {
+    community_from_legacy_id(state, network, community_id).await
+}
+
+async fn network_community_hosts(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32)>,
+    query: web::Query<LegacyPageQuery>,
+) -> Result<HttpResponse, AppError> {
+    let (network, community_id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    let community = community_host_context(&state, &network, community_id).await?;
+    authorize(
+        &req,
+        &state,
+        actions::host_community_assignment::LIST,
+        actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
+        &community_id.to_string(),
+    )
+    .await?;
+    let host_ids = state
         .services
         .host_community_assignments()
         .list(&PageRequest::all(), &Default::default())
         .await?
+        .items
+        .into_iter()
+        .filter(|mapping| mapping.community_id() == community.id())
+        .map(|mapping| mapping.host_id())
+        .collect::<std::collections::HashSet<_>>();
+    let hosts = state
+        .services
+        .hosts()
+        .list(&PageRequest::all(), &HostFilter::default())
+        .await?
         .items;
-    let values = communities
-        .iter()
-        .filter(|community| community.network_cidr() == &network)
-        .map(|community| {
-            community_json(
-                community,
-                assignments
-                    .iter()
-                    .filter(|mapping| mapping.community_id() == community.id())
-                    .map(|mapping| mapping.host_name().as_str().to_string())
-                    .collect(),
-            )
-        })
-        .collect();
+    let mut values = Vec::new();
+    for host in hosts.iter().filter(|host| host_ids.contains(&host.id())) {
+        values.push(hydrated_host_json(&state, host).await?);
+    }
     Ok(HttpResponse::Ok().json(paginate(values, query.into_inner())))
+}
+
+#[derive(Default, Deserialize)]
+struct LegacyCommunityHostPayload {
+    id: Option<u32>,
+    ipaddress: Option<String>,
+}
+
+async fn add_network_community_host(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32)>,
+    payload: web::Json<LegacyCommunityHostPayload>,
+) -> Result<HttpResponse, AppError> {
+    let (network, community_id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    let community = community_host_context(&state, &network, community_id).await?;
+    let payload = payload.into_inner();
+    let host = if let Some(id) = payload.id {
+        host_from_legacy_id(&state, id).await?
+    } else if let Some(address) = payload.ipaddress.as_deref() {
+        let address = IpAddressValue::new(address)?;
+        let assignment = state
+            .services
+            .hosts()
+            .list_ip_addresses(&PageRequest::all())
+            .await?
+            .items
+            .into_iter()
+            .find(|assignment| assignment.address() == &address)
+            .ok_or_else(|| AppError::not_found("host was not found based on IP address"))?;
+        state
+            .services
+            .hosts()
+            .list(&PageRequest::all(), &HostFilter::default())
+            .await?
+            .items
+            .into_iter()
+            .find(|host| host.id() == assignment.host_id())
+            .ok_or_else(|| AppError::not_found("host was not found"))?
+    } else {
+        return Err(AppError::validation("Either 'id' or 'ipaddress' is required"));
+    };
+    let address = if let Some(address) = payload.ipaddress {
+        IpAddressValue::new(address)?
+    } else {
+        let addresses = state
+            .services
+            .hosts()
+            .list_host_ip_addresses(host.name(), &PageRequest::all())
+            .await?
+            .items
+            .into_iter()
+            .filter(|assignment| network.as_inner().contains(&assignment.address().as_inner()))
+            .collect::<Vec<_>>();
+        if addresses.len() != 1 {
+            return Err(AppError::not_acceptable(
+                "Host must have exactly one IP address on the community network.",
+            ));
+        }
+        *addresses[0].address()
+    };
+    authorize(
+        &req,
+        &state,
+        actions::host_community_assignment::CREATE,
+        actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
+        host.name().as_str(),
+    )
+    .await?;
+    if let Err(error) = state
+        .services
+        .host_community_assignments()
+        .create(CreateHostCommunityAssignment::new(
+            host.name().clone(),
+            address,
+            community.policy_name().clone(),
+            community.name().clone(),
+        ))
+        .await
+    {
+        if let AppError::NotAcceptable(detail) = error {
+            return Ok(HttpResponse::NotAcceptable().json(json!({
+                "type": "client_error",
+                "errors": [{"code": "not_acceptable", "detail": detail, "attr": null}],
+            })));
+        }
+        return Err(error);
+    }
+    Ok(HttpResponse::Created().json(hydrated_host_json(&state, &host).await?))
+}
+
+async fn network_community_host_detail(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32, u32)>,
+) -> Result<HttpResponse, AppError> {
+    let (network, community_id, host_id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    let community = community_host_context(&state, &network, community_id).await?;
+    let host = host_from_legacy_id(&state, host_id).await?;
+    let exists = state
+        .services
+        .host_community_assignments()
+        .list(&PageRequest::all(), &Default::default())
+        .await?
+        .items
+        .into_iter()
+        .any(|mapping| mapping.community_id() == community.id() && mapping.host_id() == host.id());
+    if !exists {
+        return Err(AppError::not_found("host community mapping was not found"));
+    }
+    authorize(
+        &req,
+        &state,
+        actions::host_community_assignment::GET,
+        actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
+        host.name().as_str(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(hydrated_host_json(&state, &host).await?))
+}
+
+async fn delete_network_community_host(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<(String, u32, u32)>,
+    payload: Option<web::Json<LegacyCommunityHostPayload>>,
+) -> Result<HttpResponse, AppError> {
+    let (network, community_id, host_id) = path.into_inner();
+    let network = CidrValue::new(network)?;
+    let community = community_host_context(&state, &network, community_id).await?;
+    let host = host_from_legacy_id(&state, host_id).await?;
+    let requested_address = payload
+        .and_then(|payload| payload.into_inner().ipaddress)
+        .map(IpAddressValue::new)
+        .transpose()?;
+    let matches = state
+        .services
+        .host_community_assignments()
+        .list(&PageRequest::all(), &Default::default())
+        .await?
+        .items
+        .into_iter()
+        .filter(|mapping| {
+            mapping.community_id() == community.id()
+                && mapping.host_id() == host.id()
+                && requested_address
+                    .as_ref()
+                    .is_none_or(|address| mapping.address() == address)
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(AppError::not_acceptable(
+            "No unique community mapping exists for this host.",
+        ));
+    }
+    authorize(
+        &req,
+        &state,
+        actions::host_community_assignment::DELETE,
+        actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
+        host.name().as_str(),
+    )
+    .await?;
+    state
+        .services
+        .host_community_assignments()
+        .delete(matches[0].id())
+        .await?;
+    Ok(HttpResponse::NoContent().finish())
 }

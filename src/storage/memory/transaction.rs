@@ -13,7 +13,7 @@ use crate::{
             UpdateHostAttachment,
         },
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::{
             AttachmentCommunityAssignmentFilter, BacnetIdFilter, CommunityFilter,
             HostCommunityAssignmentFilter, HostContactFilter, HostFilter, HostGroupFilter,
@@ -89,7 +89,7 @@ use super::{
     },
     communities::{
         create_community_in_state, delete_community_in_state, find_community_by_names_in_state,
-        get_community_in_state, list_communities_in_state,
+        get_community_in_state, list_communities_in_state, update_community_in_state,
     },
     host_community_assignments::{
         create_host_community_assignment_in_state, delete_host_community_assignment_in_state,
@@ -812,6 +812,13 @@ impl<'tx> TxCommunityStore for MemTxStorage<'tx> {
     }
     fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         get_community_in_state(&self.state.borrow(), community_id)
+    }
+    fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        update_community_in_state(&mut self.state.borrow_mut(), community_id, command)
     }
     fn delete_community(&self, community_id: Uuid) -> Result<(), AppError> {
         delete_community_in_state(&mut self.state.borrow_mut(), community_id)

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::{
     audit::{CreateHistoryEvent, actions, actor},
     domain::{
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{Page, PageRequest},
         types::{CommunityName, NetworkPolicyName},
@@ -31,6 +31,35 @@ pub async fn create_community(
 ) -> Result<Community, AppError> {
     let (item, history) = storage
         .transaction(move |tx| {
+            let network = tx
+                .networks()
+                .get_network_by_cidr(command.network_cidr())?;
+            let policy = tx
+                .network_policies()
+                .get_network_policy_by_name(command.policy_name())?;
+            if network.policy_id() != Some(policy.id()) {
+                return Err(AppError::not_acceptable(format!(
+                    "network '{}' is not assigned policy '{}'",
+                    network.cidr().as_str(),
+                    policy.name().as_str()
+                )));
+            }
+            if let Some(limit) = network.max_communities() {
+                let count = tx
+                    .communities()
+                    .list_communities(&PageRequest::all(), &CommunityFilter::default())?
+                    .items
+                    .into_iter()
+                    .filter(|community| community.network_cidr() == network.cidr())
+                    .count();
+                if count >= limit.as_u32() as usize {
+                    return Err(AppError::not_acceptable(format!(
+                        "network '{}' already has the maximum allowed communities ({})",
+                        network.cidr().as_str(),
+                        limit.as_u32()
+                    )));
+                }
+            }
             let item = tx.communities().create_community(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
                 actor::current(),
@@ -46,6 +75,35 @@ pub async fn create_community(
 
     events.emit(&DomainEvent::from(&history)).await;
 
+    Ok(item)
+}
+
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "community"))]
+pub async fn update_community(
+    storage: &DynStorage,
+    community_id: Uuid,
+    command: UpdateCommunity,
+    events: &EventSinkClient,
+) -> Result<Community, AppError> {
+    let (item, history) = storage
+        .transaction(move |tx| {
+            let old = tx.communities().get_community(community_id)?;
+            let item = tx.communities().update_community(community_id, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "community",
+                Some(item.id()),
+                item.name().as_str(),
+                actions::UPDATE,
+                json!({
+                    "old": {"name": old.name().as_str(), "description": old.description()},
+                    "new": {"name": item.name().as_str(), "description": item.description()},
+                }),
+            ))?;
+            Ok((item, event))
+        })
+        .await?;
+    events.emit(&DomainEvent::from(&history)).await;
     Ok(item)
 }
 

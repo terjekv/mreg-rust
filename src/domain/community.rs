@@ -37,7 +37,7 @@ impl Community {
             policy_name,
             network_cidr,
             name,
-            description: normalize_required_text(description.into(), "community description")?,
+            description: normalize_description(description.into()),
             created_at,
             updated_at,
         })
@@ -89,7 +89,7 @@ impl CreateCommunity {
             policy_name,
             network_cidr,
             name,
-            description: normalize_required_text(description.into(), "community description")?,
+            description: normalize_description(description.into()),
         })
     }
 
@@ -107,10 +107,13 @@ impl CreateCommunity {
     }
 }
 
-fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
-    let trimmed = value.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(AppError::validation(format!("{label} cannot be empty")));
-    }
-    Ok(trimmed)
+/// Command to update a community without changing its network.
+#[derive(Clone, Debug, Default)]
+pub struct UpdateCommunity {
+    pub name: Option<CommunityName>,
+    pub description: Option<String>,
+}
+
+fn normalize_description(value: String) -> String {
+    value.trim().to_string()
 }

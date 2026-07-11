@@ -31,6 +31,8 @@ env \
     MREG_RUN_MIGRATIONS=false \
     MREG_AUTH_MODE=none \
     MREG_ALLOW_DEV_AUTHZ_BYPASS=true \
+    MREG_REQUIRE_MAC_FOR_BINDING_IP_TO_COMMUNITY=true \
+    MREG_MAP_GLOBAL_COMMUNITY_NAMES=true \
     ./target/release/mreg-rust >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 

@@ -1728,6 +1728,15 @@ async fn community_create_and_delete_scenario(ctx: &TestCtx) {
         .await;
     assert_eq!(status, StatusCode::CREATED);
 
+    let (status, body) = ctx
+        .patch_json(
+            &format!("/inventory/networks/{cidr}"),
+            json!({"policy_name": policy_name}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["policy_id"].is_string());
+
     // POST a community.
     let (status, body) = ctx
         .post_json(

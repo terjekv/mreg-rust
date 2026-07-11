@@ -26,6 +26,10 @@ MAC = re.compile(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", re.I)
 DISPLAY_TIME = re.compile(
     r"\b[A-Za-z]{3}\s[A-Za-z]{3}\s+\d{1,2}\s\d{2}:\d{2}:\d{2}\s\d{4}\b"
 )
+DISPLAY_REF_ID = re.compile(r"('(?:host|labels|policy|zone)': )\d+")
+DISPLAY_NESTED_NETWORK_ID = re.compile(
+    r"(/api/v1/networks/<(?:IPv4|IPv6)>/\d+/(?:communities|excluded_ranges)/)\d+"
+)
 IPV4 = re.compile(r"((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}")
 IPV6 = re.compile(r"\b([0-9a-fA-F]{1,4}::?){1,7}[0-9a-fA-F]{1,4}\b")
 API_ID = re.compile(
@@ -33,6 +37,20 @@ API_ID = re.compile(
 )
 EXCLUDED_RANGE_ID = re.compile(r'("url":\s*"/api/v1/networks/[^"]+/excluded_ranges/)(\d+)(")')
 QUERY_ID = re.compile(r'("url":\s*"/api/v1/[^"]*[?&]id=)(\d+)')
+QUERY_REF_ID = re.compile(
+    r'("url":\s*"/api/v1/[^"]*[?&](?:host|labels|network|policy|zone)=)(\d+)'
+)
+QUERY_ID_LIST = re.compile(
+    r'("url":\s*"/api/v1/[^\"]*[?&](?:model_id__in|data__id__in)=)[0-9,]+'
+)
+NESTED_NETWORK_ID = re.compile(
+    r'("url":\s*"/api/v1/networks/<(?:IPv4|IPv6)>/\d+/'
+    r'(?:communities|excluded_ranges)/)(\d+)'
+)
+NESTED_NETWORK_HOST_ID = re.compile(
+    r'("url":\s*"/api/v1/networks/<(?:IPv4|IPv6)>/\d+/'
+    r'communities/<ID>/hosts/)(\d+)'
+)
 SERVER = re.compile(r"https?://(?:127\.0\.0\.1|localhost|host\.docker\.internal):8000")
 
 
@@ -47,8 +65,26 @@ def normalize(value: Any) -> Any:
             key: (
                 "<SERIAL>"
                 if key == "serialno"
+                else [
+                    "<ID>"
+                    if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+                    else normalize(value)
+                    for value in item
+                ]
+                if key == "labels" and isinstance(item, list)
                 else "<ID>"
-                if key in {"id", "host", "network", "zone", "model_id"}
+                if key
+                in {
+                    "id",
+                    "host",
+                    "network",
+                    "zone",
+                    "model_id",
+                    "policy",
+                    "community",
+                    "ipaddress",
+                    "labels",
+                }
                 and (isinstance(item, int) or (isinstance(item, str) and item.isdigit()))
                 else normalize(item)
             )
@@ -58,6 +94,14 @@ def normalize(value: Any) -> Any:
     if isinstance(value, list):
         return [normalize(item) for item in value]
     if isinstance(value, str):
+        stripped = value.strip()
+        if (stripped.startswith("{") and stripped.endswith("}")) or (
+            stripped.startswith("[") and stripped.endswith("]")
+        ):
+            try:
+                return json.dumps(normalize(json.loads(stripped)), sort_keys=True)
+            except json.JSONDecodeError:
+                pass
         value = TIMESTAMP.sub("<TIME>", value)
         value = UUID.sub("<UUID>", value)
         value = MAC.sub("<MAC>", value)
@@ -69,17 +113,36 @@ def normalize(value: Any) -> Any:
 
 def normalized_command(value: Any) -> str:
     """Apply the same volatile-value classes as upstream mreg-cli's diff.py."""
+    if isinstance(value, dict) and str(value.get("command", "")).startswith("label remove "):
+        # A preceding permission 501 changes mreg-cli's label-cache lifetime, so
+        # one side may repeat this read-only lookup. The delete request, output,
+        # and resulting state are still compared normally.
+        value = dict(value)
+        value["api_requests"] = [
+            request
+            for request in value.get("api_requests", [])
+            if not (
+                request.get("method") == "GET"
+                and str(request.get("url", "")).startswith("/api/v1/labels/?name=")
+            )
+        ]
     rendered = urllib.parse.unquote(json.dumps(normalize(value), sort_keys=True))
     rendered = SERVER.sub("http://<SERVER>:8000", rendered)
     rendered = TIMESTAMP.sub("<TIME>", rendered)
     rendered = DISPLAY_TIME.sub("<DATETIME>", rendered)
+    rendered = DISPLAY_REF_ID.sub(r"\1<ID>", rendered)
     rendered = MAC.sub("<macaddress>", rendered)
     rendered = IPV4.sub("<IPv4>", rendered)
     rendered = IPV6.sub("<IPv6>", rendered)
+    rendered = NESTED_NETWORK_ID.sub(r"\1<ID>", rendered)
+    rendered = NESTED_NETWORK_HOST_ID.sub(r"\1<ID>", rendered)
+    rendered = DISPLAY_NESTED_NETWORK_ID.sub(r"\1<ID>", rendered)
     rendered = UUID.sub("<UUID>", rendered)
     rendered = API_ID.sub(r"\1\2<ID>\4", rendered)
     rendered = EXCLUDED_RANGE_ID.sub(r"\1<ID>\3", rendered)
     rendered = QUERY_ID.sub(r"\1<ID>", rendered)
+    rendered = QUERY_REF_ID.sub(r"\1<ID>", rendered)
+    rendered = QUERY_ID_LIST.sub(r"\1<ID>", rendered)
     return re.sub(r"\s+", " ", rendered)
 
 

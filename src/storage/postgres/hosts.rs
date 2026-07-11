@@ -923,8 +923,6 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         name: &Hostname,
     ) -> Result<(), AppError> {
-        use crate::db::schema::records;
-
         let name_str = name.as_str();
         let (host_id, host_zone_id) = hosts::table
             .filter(hosts::name.eq(name_str))
@@ -933,7 +931,15 @@ impl PostgresStorage {
             .optional()?
             .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name_str)))?;
 
-        diesel::delete(records::table.filter(records::owner_id.eq(host_id))).execute(connection)?;
+        sql_query(
+            "DELETE FROM records r
+             USING rrsets s
+             WHERE r.rrset_id = s.id
+               AND (r.owner_id = $1 OR lower(s.owner_name) = lower($2))",
+        )
+        .bind::<SqlUuid, _>(host_id)
+        .bind::<Text, _>(name_str)
+        .execute(connection)?;
         sql_query(
             "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
         )

@@ -37,6 +37,38 @@ pub async fn create_host_community_assignment(
 ) -> Result<HostCommunityAssignment, AppError> {
     let (item, history) = storage
         .transaction(move |tx| {
+            if env_flag("MREG_REQUIRE_MAC_FOR_BINDING_IP_TO_COMMUNITY") {
+                let address = tx
+                    .hosts()
+                    .list_ip_addresses_for_host(command.host_name(), &PageRequest::all())?
+                    .items
+                    .into_iter()
+                    .find(|assignment| assignment.address() == command.address())
+                    .ok_or_else(|| AppError::not_found("IP address was not found for host"))?;
+                if address.mac_address().is_none() {
+                    return Err(AppError::not_acceptable(
+                        "The IP must have a MAC address to bind it to a community.",
+                    ));
+                }
+            }
+            let existing = tx
+                .host_community_assignments()
+                .list_host_community_assignments(
+                    &PageRequest::all(),
+                    &HostCommunityAssignmentFilter::default(),
+                )?
+                .items
+                .into_iter()
+                .filter(|assignment| {
+                    assignment.host_name() == command.host_name()
+                        && assignment.address() == command.address()
+                })
+                .map(|assignment| assignment.id())
+                .collect::<Vec<_>>();
+            for assignment_id in existing {
+                tx.host_community_assignments()
+                    .delete_host_community_assignment(assignment_id)?;
+            }
             let item = tx
                 .host_community_assignments()
                 .create_host_community_assignment(command)?;
@@ -55,6 +87,15 @@ pub async fn create_host_community_assignment(
     events.emit(&DomainEvent::from(&history)).await;
 
     Ok(item)
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 #[tracing::instrument(
