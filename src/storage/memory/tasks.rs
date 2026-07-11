@@ -5,9 +5,9 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        pagination::{Page, PageRequest},
         exports::ExportRun,
         imports::ImportBatchSummary,
+        pagination::{Page, PageRequest},
         tasks::{CreateTask, TaskEnvelope, TaskStatus},
     },
     errors::AppError,
@@ -230,6 +230,16 @@ impl TaskStore for MemoryStorage {
             .get(&task_id)
             .cloned()
             .ok_or_else(|| AppError::not_found(format!("task '{}' was not found", task_id)))?;
+        match current.status() {
+            TaskStatus::Running => {}
+            TaskStatus::Succeeded => return Ok(current),
+            _ => {
+                return Err(AppError::conflict(format!(
+                    "task '{}' is not running and cannot be completed",
+                    task_id
+                )));
+            }
+        }
         let now = Utc::now();
         let updated = TaskEnvelope::restore(
             current.id(),
@@ -260,6 +270,16 @@ impl TaskStore for MemoryStorage {
             .get(&task_id)
             .cloned()
             .ok_or_else(|| AppError::not_found(format!("task '{}' was not found", task_id)))?;
+        match current.status() {
+            TaskStatus::Running => {}
+            TaskStatus::Failed => return Ok(current),
+            _ => {
+                return Err(AppError::conflict(format!(
+                    "task '{}' is not running and cannot be failed",
+                    task_id
+                )));
+            }
+        }
         let now = Utc::now();
         let updated = TaskEnvelope::restore(
             current.id(),

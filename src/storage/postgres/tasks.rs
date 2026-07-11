@@ -11,7 +11,7 @@ use crate::{
     db::{models::TaskRow, schema::tasks},
     domain::{
         pagination::{Page, PageRequest},
-        tasks::{CreateTask, TaskEnvelope},
+        tasks::{CreateTask, TaskEnvelope, TaskStatus},
     },
     errors::AppError,
     storage::TaskStore,
@@ -130,21 +130,35 @@ impl TaskStore for PostgresStorage {
     ) -> Result<TaskEnvelope, AppError> {
         self.database
             .run(move |connection| {
-                update(tasks::table.filter(tasks::id.eq(task_id)))
-                    .set((
-                        tasks::status.eq("succeeded"),
-                        tasks::result.eq(Some(&result)),
-                        tasks::error_summary.eq(None::<String>),
-                        tasks::finished_at.eq(diesel::dsl::now),
-                        tasks::updated_at.eq(diesel::dsl::now),
-                    ))
-                    .returning(TaskRow::as_returning())
-                    .get_result::<TaskRow>(connection)
-                    .optional()?
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("task '{}' was not found", task_id))
-                    })?
-                    .into_domain()
+                let updated = update(
+                    tasks::table
+                        .filter(tasks::id.eq(task_id))
+                        .filter(tasks::status.eq("running")),
+                )
+                .set((
+                    tasks::status.eq("succeeded"),
+                    tasks::result.eq(Some(&result)),
+                    tasks::error_summary.eq(None::<String>),
+                    tasks::finished_at.eq(diesel::dsl::now),
+                    tasks::updated_at.eq(diesel::dsl::now),
+                ))
+                .returning(TaskRow::as_returning())
+                .get_result::<TaskRow>(connection)
+                .optional()?;
+                match updated {
+                    Some(row) => row.into_domain(),
+                    None => match Self::get_task_by_id(connection, task_id)? {
+                        Some(current) if current.status() == &TaskStatus::Succeeded => Ok(current),
+                        Some(_) => Err(AppError::conflict(format!(
+                            "task '{}' is not running and cannot be completed",
+                            task_id
+                        ))),
+                        None => Err(AppError::not_found(format!(
+                            "task '{}' was not found",
+                            task_id
+                        ))),
+                    },
+                }
             })
             .await
     }
@@ -156,20 +170,34 @@ impl TaskStore for PostgresStorage {
     ) -> Result<TaskEnvelope, AppError> {
         self.database
             .run(move |connection| {
-                update(tasks::table.filter(tasks::id.eq(task_id)))
-                    .set((
-                        tasks::status.eq("failed"),
-                        tasks::error_summary.eq(Some(&error_summary)),
-                        tasks::finished_at.eq(diesel::dsl::now),
-                        tasks::updated_at.eq(diesel::dsl::now),
-                    ))
-                    .returning(TaskRow::as_returning())
-                    .get_result::<TaskRow>(connection)
-                    .optional()?
-                    .ok_or_else(|| {
-                        AppError::not_found(format!("task '{}' was not found", task_id))
-                    })?
-                    .into_domain()
+                let updated = update(
+                    tasks::table
+                        .filter(tasks::id.eq(task_id))
+                        .filter(tasks::status.eq("running")),
+                )
+                .set((
+                    tasks::status.eq("failed"),
+                    tasks::error_summary.eq(Some(&error_summary)),
+                    tasks::finished_at.eq(diesel::dsl::now),
+                    tasks::updated_at.eq(diesel::dsl::now),
+                ))
+                .returning(TaskRow::as_returning())
+                .get_result::<TaskRow>(connection)
+                .optional()?;
+                match updated {
+                    Some(row) => row.into_domain(),
+                    None => match Self::get_task_by_id(connection, task_id)? {
+                        Some(current) if current.status() == &TaskStatus::Failed => Ok(current),
+                        Some(_) => Err(AppError::conflict(format!(
+                            "task '{}' is not running and cannot be failed",
+                            task_id
+                        ))),
+                        None => Err(AppError::not_found(format!(
+                            "task '{}' was not found",
+                            task_id
+                        ))),
+                    },
+                }
             })
             .await
     }
@@ -177,25 +205,32 @@ impl TaskStore for PostgresStorage {
     async fn cancel_task(&self, task_id: Uuid) -> Result<TaskEnvelope, AppError> {
         self.database
             .run(move |connection| {
-                let current = Self::get_task_by_id(connection, task_id)?.ok_or_else(|| {
-                    AppError::not_found(format!("task '{}' was not found", task_id))
-                })?;
-                if current.status().is_terminal() {
-                    return Err(AppError::conflict(format!(
-                        "task '{}' is already finished and cannot be cancelled",
+                let updated = update(
+                    tasks::table
+                        .filter(tasks::id.eq(task_id))
+                        .filter(tasks::status.eq_any(["queued", "running"])),
+                )
+                .set((
+                    tasks::status.eq("cancelled"),
+                    tasks::finished_at.eq(diesel::dsl::now),
+                    tasks::updated_at.eq(diesel::dsl::now),
+                ))
+                .returning(TaskRow::as_returning())
+                .get_result::<TaskRow>(connection)
+                .optional()?;
+                match updated {
+                    Some(row) => row.into_domain(),
+                    None if Self::get_task_by_id(connection, task_id)?.is_some() => {
+                        Err(AppError::conflict(format!(
+                            "task '{}' is already finished and cannot be cancelled",
+                            task_id
+                        )))
+                    }
+                    None => Err(AppError::not_found(format!(
+                        "task '{}' was not found",
                         task_id
-                    )));
+                    ))),
                 }
-
-                update(tasks::table.filter(tasks::id.eq(task_id)))
-                    .set((
-                        tasks::status.eq("cancelled"),
-                        tasks::finished_at.eq(diesel::dsl::now),
-                        tasks::updated_at.eq(diesel::dsl::now),
-                    ))
-                    .returning(TaskRow::as_returning())
-                    .get_result::<TaskRow>(connection)?
-                    .into_domain()
             })
             .await
     }

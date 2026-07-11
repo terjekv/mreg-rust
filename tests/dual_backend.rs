@@ -1087,6 +1087,64 @@ async fn task_cancel_and_purge_scenario(ctx: &TestCtx) {
     assert_eq!(failed.status(), &TaskStatus::Failed);
     assert_eq!(completed.status(), &TaskStatus::Succeeded);
     assert!(storage.tasks().cancel_task(queued.id()).await.is_err());
+    let duplicate_completed = storage
+        .tasks()
+        .complete_task(completed.id(), json!({ "duplicate": true }))
+        .await
+        .unwrap();
+    assert_eq!(duplicate_completed.status(), &TaskStatus::Succeeded);
+    assert_eq!(duplicate_completed.result(), Some(&json!({ "ok": true })));
+
+    let duplicate_failed = storage
+        .tasks()
+        .fail_task(failed.id(), "duplicate failure".to_string())
+        .await
+        .unwrap();
+    assert_eq!(duplicate_failed.status(), &TaskStatus::Failed);
+    assert_eq!(duplicate_failed.error_summary(), Some("boom"));
+    assert!(
+        storage
+            .tasks()
+            .complete_task(running.id(), json!({ "late": true }))
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .tasks()
+            .fail_task(running.id(), "late failure".to_string())
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .tasks()
+            .complete_task(failed.id(), json!({ "late": true }))
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .tasks()
+            .fail_task(completed.id(), "late failure".to_string())
+            .await
+            .is_err()
+    );
+
+    let tasks = storage
+        .tasks()
+        .list_tasks(&PageRequest::all())
+        .await
+        .unwrap();
+    assert_eq!(
+        tasks
+            .items
+            .iter()
+            .find(|task| task.id() == running.id())
+            .expect("cancelled running task")
+            .status(),
+        &TaskStatus::Cancelled
+    );
 
     let purged = storage
         .tasks()
@@ -1095,7 +1153,11 @@ async fn task_cancel_and_purge_scenario(ctx: &TestCtx) {
         .unwrap();
     assert!(purged >= 4);
 
-    let tasks = storage.tasks().list_tasks(&PageRequest::all()).await.unwrap();
+    let tasks = storage
+        .tasks()
+        .list_tasks(&PageRequest::all())
+        .await
+        .unwrap();
     assert!(tasks.items.iter().any(|task| task.id() == active.id()));
     assert!(!tasks.items.iter().any(|task| task.id() == queued.id()));
     assert!(!tasks.items.iter().any(|task| task.id() == running.id()));

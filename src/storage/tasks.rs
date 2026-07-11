@@ -15,16 +15,19 @@ pub trait TaskStore: Send + Sync {
     async fn list_tasks(&self, page: &PageRequest) -> Result<Page<TaskEnvelope>, AppError>;
     async fn create_task(&self, command: CreateTask) -> Result<TaskEnvelope, AppError>;
     async fn claim_next_task(&self) -> Result<Option<TaskEnvelope>, AppError>;
+    /// Mark a running task as succeeded, or return an already-succeeded task unchanged.
     async fn complete_task(
         &self,
         task_id: uuid::Uuid,
         result: serde_json::Value,
     ) -> Result<TaskEnvelope, AppError>;
+    /// Mark a running task as failed, or return an already-failed task unchanged.
     async fn fail_task(
         &self,
         task_id: uuid::Uuid,
         error_summary: String,
     ) -> Result<TaskEnvelope, AppError>;
+    /// Cancel a queued or running task.
     async fn cancel_task(&self, task_id: uuid::Uuid) -> Result<TaskEnvelope, AppError>;
     async fn purge_finished_tasks_before(&self, cutoff: DateTime<Utc>) -> Result<usize, AppError>;
 }
