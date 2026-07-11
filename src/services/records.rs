@@ -34,7 +34,7 @@ pub async fn create_type(
         .transaction(move |tx| {
             let record_type = tx.records().create_record_type(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "record_type",
                 Some(record_type.id()),
                 record_type.name().as_str(),
@@ -77,7 +77,7 @@ pub async fn create_record(
         .transaction(move |tx| {
             let record = tx.records().create_record(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "record",
                 Some(record.id()),
                 record.owner_name(),
@@ -124,7 +124,7 @@ pub async fn delete_record(
             let old = tx.records().get_record(record_id)?;
             tx.records().delete_record(record_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "record",
                 Some(old.id()),
                 old.owner_name(),
@@ -155,7 +155,7 @@ pub async fn delete_rrset(
             let old = tx.records().get_rrset(rrset_id)?;
             tx.records().delete_rrset(rrset_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "rrset",
                 Some(old.id()),
                 old.owner_name().as_str(),
@@ -186,7 +186,7 @@ pub async fn update_record(
             let old = tx.records().get_record(record_id)?;
             let new = tx.records().update_record(record_id, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "record",
                 Some(new.id()),
                 new.owner_name(),
@@ -218,7 +218,7 @@ pub async fn delete_record_type(
         .transaction(move |tx| {
             tx.records().delete_record_type(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "record_type",
                 None,
                 name_owned.as_str(),

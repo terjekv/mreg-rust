@@ -7,7 +7,7 @@ use lapin::{
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use super::{DomainEvent, EventSink};
+use super::{DomainEvent, EventSink, safe_url_for_log};
 
 /// Emits events to an AMQP exchange with routing key `{resource_kind}.{action}`.
 pub struct AmqpSink {
@@ -66,7 +66,7 @@ impl EventSink for AmqpSink {
         let channel = match self.get_or_connect().await {
             Ok(ch) => ch,
             Err(error) => {
-                warn!(url = %self.url, %error, "AMQP connection failed, dropping event");
+                warn!(url = %safe_url_for_log(&self.url), %error, "AMQP connection failed, dropping event");
                 return;
             }
         };

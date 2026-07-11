@@ -35,7 +35,7 @@ pub async fn create_forward(
         .transaction(move |tx| {
             let zone = tx.zones().create_forward_zone(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "forward_zone",
                 Some(zone.id()),
                 zone.name().as_str(),
@@ -72,7 +72,7 @@ pub async fn update_forward(
             let old = tx.zones().get_forward_zone_by_name(&name_owned)?;
             let new = tx.zones().update_forward_zone(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "forward_zone",
                 Some(new.id()),
                 new.name().as_str(),
@@ -100,7 +100,7 @@ pub async fn delete_forward(
             let old = tx.zones().get_forward_zone_by_name(&name_owned)?;
             tx.zones().delete_forward_zone(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "forward_zone",
                 Some(old.id()),
                 old.name().as_str(),
@@ -134,7 +134,7 @@ pub async fn create_reverse(
         .transaction(move |tx| {
             let zone = tx.zones().create_reverse_zone(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "reverse_zone",
                 Some(zone.id()),
                 zone.name().as_str(),
@@ -171,7 +171,7 @@ pub async fn update_reverse(
             let old = tx.zones().get_reverse_zone_by_name(&name_owned)?;
             let new = tx.zones().update_reverse_zone(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "reverse_zone",
                 Some(new.id()),
                 new.name().as_str(),
@@ -199,7 +199,7 @@ pub async fn delete_reverse(
             let old = tx.zones().get_reverse_zone_by_name(&name_owned)?;
             tx.zones().delete_reverse_zone(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "reverse_zone",
                 Some(old.id()),
                 old.name().as_str(),
@@ -243,7 +243,7 @@ pub async fn create_forward_delegation(
         .transaction(move |tx| {
             let delegation = tx.zones().create_forward_zone_delegation(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "forward_zone_delegation",
                 Some(delegation.id()),
                 delegation.name().as_str(),
@@ -273,7 +273,7 @@ pub async fn delete_forward_delegation(
             tx.zones().delete_forward_zone_delegation(delegation_id)?;
             let id_str = delegation_id.to_string();
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "forward_zone_delegation",
                 Some(delegation_id),
                 id_str.clone(),
@@ -317,7 +317,7 @@ pub async fn create_reverse_delegation(
         .transaction(move |tx| {
             let delegation = tx.zones().create_reverse_zone_delegation(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "reverse_zone_delegation",
                 Some(delegation.id()),
                 delegation.name().as_str(),
@@ -347,7 +347,7 @@ pub async fn delete_reverse_delegation(
             tx.zones().delete_reverse_zone_delegation(delegation_id)?;
             let id_str = delegation_id.to_string();
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "reverse_zone_delegation",
                 Some(delegation_id),
                 id_str.clone(),

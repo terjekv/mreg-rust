@@ -33,7 +33,7 @@ pub async fn create(
         .transaction(move |tx| {
             let network = tx.networks().create_network(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "network",
                 Some(network.id()),
                 network.cidr().as_str(),
@@ -72,7 +72,7 @@ pub async fn delete(
             let old = tx.networks().get_network_by_cidr(&cidr_owned)?;
             tx.networks().delete_network(&cidr_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "network",
                 Some(old.id()),
                 old.cidr().as_str(),
@@ -113,7 +113,7 @@ pub async fn update(
             let old = tx.networks().get_network_by_cidr(&cidr_owned)?;
             let new = tx.networks().update_network(&cidr_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "network",
                 Some(new.id()),
                 new.cidr().as_str(),
@@ -145,7 +145,7 @@ pub async fn add_excluded_range(
             let range = tx.networks().add_excluded_range(&cidr_owned, command)?;
             let range_name = format!("{}-{}", range.start_ip().as_str(), range.end_ip().as_str());
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "excluded_range",
                 Some(range.id()),
                 range_name,

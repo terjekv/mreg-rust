@@ -35,7 +35,7 @@ pub async fn create(
         .transaction(move |tx| {
             let host = tx.hosts().create_host(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host",
                 Some(host.id()),
                 host.name().as_str(),
@@ -77,7 +77,7 @@ pub async fn update(
             let old = tx.hosts().get_host_by_name(&name_owned)?;
             let new = tx.hosts().update_host(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host",
                 Some(new.id()),
                 new.name().as_str(),
@@ -108,7 +108,7 @@ pub async fn delete(
             let old = tx.hosts().get_host_by_name(&name_owned)?;
             tx.hosts().delete_host(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host",
                 Some(old.id()),
                 old.name().as_str(),
@@ -151,7 +151,7 @@ pub async fn assign_ip_address(
         .transaction(move |tx| {
             let assignment = tx.hosts().assign_ip_address(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "ip_address",
                 Some(assignment.id()),
                 assignment.address().as_str(),
@@ -182,7 +182,7 @@ pub async fn update_ip_address(
             let updated = tx.hosts().update_ip_address(&address_owned, command)?;
             let new_mac = updated.mac_address().map(|m| m.as_str());
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "ip_address",
                 Some(updated.id()),
                 updated.address().as_str(),
@@ -212,7 +212,7 @@ pub async fn unassign_ip_address(
         .transaction(move |tx| {
             let old = tx.hosts().unassign_ip_address(&address_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "ip_address",
                 Some(old.id()),
                 old.address().as_str(),

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::apply::{apply_datetime_filter, apply_string_filter, apply_u32_filter};
 use super::operators::{FieldType, FilterCondition, FilterOp, parse_filter_key, validate_op};
-use super::sql::build_sql_conditions;
+use super::sql::{SqlBindType, build_sql_conditions};
 use crate::domain::network::Network;
 use crate::domain::types::IpAddressValue;
 use crate::errors::AppError;
@@ -101,14 +101,14 @@ impl NetworkFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         let (mut clauses, mut values) = build_sql_conditions(
             &[
-                (&self.description, "n.description"),
-                (&self.vlan, "n.vlan"),
-                (&self.category, "n.category"),
-                (&self.location, "n.location"),
-                (&self.frozen, "n.frozen::text"),
-                (&self.created_at, "n.created_at"),
-                (&self.updated_at, "n.updated_at"),
-                (&self.family, "family(n.network)::text"),
+                (&self.description, "n.description", SqlBindType::Text),
+                (&self.vlan, "n.vlan", SqlBindType::Integer),
+                (&self.category, "n.category", SqlBindType::Text),
+                (&self.location, "n.location", SqlBindType::Text),
+                (&self.frozen, "n.frozen::text", SqlBindType::Text),
+                (&self.created_at, "n.created_at", SqlBindType::Timestamp),
+                (&self.updated_at, "n.updated_at", SqlBindType::Timestamp),
+                (&self.family, "family(n.network)::text", SqlBindType::Text),
             ],
             &self.search,
             &["n.network::text", "n.description"],
@@ -128,35 +128,35 @@ impl NetworkFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "description" => {
-                    validate_op("description", &op, FieldType::String)?;
+                    validate_op("description", &op, FieldType::String, &value)?;
                     filter.description.push(FilterCondition { op, value });
                 }
                 "vlan" => {
-                    validate_op("vlan", &op, FieldType::Numeric)?;
+                    validate_op("vlan", &op, FieldType::Numeric, &value)?;
                     filter.vlan.push(FilterCondition { op, value });
                 }
                 "category" => {
-                    validate_op("category", &op, FieldType::String)?;
+                    validate_op("category", &op, FieldType::String, &value)?;
                     filter.category.push(FilterCondition { op, value });
                 }
                 "location" => {
-                    validate_op("location", &op, FieldType::String)?;
+                    validate_op("location", &op, FieldType::String, &value)?;
                     filter.location.push(FilterCondition { op, value });
                 }
                 "frozen" => {
-                    validate_op("frozen", &op, FieldType::Enum)?;
+                    validate_op("frozen", &op, FieldType::Enum, &value)?;
                     filter.frozen.push(FilterCondition { op, value });
                 }
                 "created_at" => {
-                    validate_op("created_at", &op, FieldType::DateTime)?;
+                    validate_op("created_at", &op, FieldType::DateTime, &value)?;
                     filter.created_at.push(FilterCondition { op, value });
                 }
                 "updated_at" => {
-                    validate_op("updated_at", &op, FieldType::DateTime)?;
+                    validate_op("updated_at", &op, FieldType::DateTime, &value)?;
                     filter.updated_at.push(FilterCondition { op, value });
                 }
                 "family" => {
-                    validate_op("family", &op, FieldType::Enum)?;
+                    validate_op("family", &op, FieldType::Enum, &value)?;
                     filter.family.push(FilterCondition { op, value });
                 }
                 _ => {

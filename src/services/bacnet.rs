@@ -33,7 +33,7 @@ pub async fn create_bacnet_id(
             let item = tx.bacnet().create_bacnet_id(command)?;
             let bid_str = item.bacnet_id().as_u32().to_string();
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "bacnet_id",
                 None,
                 bid_str,
@@ -69,7 +69,7 @@ pub async fn delete_bacnet_id(
             tx.bacnet().delete_bacnet_id(bacnet_id)?;
             let bid_str = old.bacnet_id().as_u32().to_string();
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "bacnet_id",
                 None,
                 bid_str,

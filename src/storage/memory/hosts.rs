@@ -591,7 +591,7 @@ pub(super) fn delete_host_in_state(
     state: &mut MemoryState,
     name: &Hostname,
 ) -> Result<(), AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+    let host = state.hosts.remove(name.as_str()).ok_or_else(|| {
         AppError::not_found(format!("host '{}' was not found", name.as_str()))
     })?;
     delete_records_by_owner_in_state(state, host.id());
@@ -601,7 +601,6 @@ pub(super) fn delete_host_in_state(
         let zone_id = zone.id();
         bump_zone_serial_in_state(state, zone_id);
     }
-    state.hosts.remove(name.as_str());
     state
         .ip_addresses
         .retain(|_, assignment| assignment.host_id() != host.id());

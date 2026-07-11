@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tracing::warn;
 
-use super::{DomainEvent, EventSink};
+use super::{DomainEvent, EventSink, safe_url_for_log};
 
 /// Emits events by POSTing JSON to a webhook URL.
 pub struct WebhookSink {
@@ -36,7 +36,7 @@ impl EventSink for WebhookSink {
     async fn emit(&self, event: &DomainEvent) {
         if let Err(error) = self.try_post(event).await {
             warn!(
-                url = %self.url,
+                url = %safe_url_for_log(&self.url),
                 resource_kind = %event.resource_kind,
                 action = %event.action,
                 %error,
@@ -45,7 +45,7 @@ impl EventSink for WebhookSink {
             tokio::time::sleep(Duration::from_secs(1)).await;
             if let Err(retry_error) = self.try_post(event).await {
                 warn!(
-                    url = %self.url,
+                    url = %safe_url_for_log(&self.url),
                     resource_kind = %event.resource_kind,
                     action = %event.action,
                     error = %retry_error,

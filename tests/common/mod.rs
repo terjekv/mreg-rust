@@ -36,6 +36,8 @@ unsafe extern "C" {
 
 static POSTGRES_TEST_SCHEMA_CLEANUP: OnceLock<(String, String)> = OnceLock::new();
 static POSTGRES_TEST_SCHEMA_CLEANUP_REGISTERED: OnceLock<()> = OnceLock::new();
+const CIDR_SLOTS_PER_CONTEXT: u16 = 128;
+const MAX_CIDR_CONTEXTS: u64 = 512;
 
 #[derive(QueryableByName)]
 struct SchemaNameRow {
@@ -133,8 +135,16 @@ impl TestCtx {
     }
 
     pub fn cidr(&self, slot: u16) -> String {
+        assert!(
+            slot < CIDR_SLOTS_PER_CONTEXT,
+            "CIDR slot must be below {CIDR_SLOTS_PER_CONTEXT}"
+        );
+        assert!(
+            self.id < MAX_CIDR_CONTEXTS,
+            "test context count must stay below {MAX_CIDR_CONTEXTS}"
+        );
         let subnet = run_subnet_offset()
-            .wrapping_add((self.id as u16).wrapping_mul(16))
+            .wrapping_add((self.id as u16).wrapping_mul(CIDR_SLOTS_PER_CONTEXT))
             .wrapping_add(slot);
         let octet_2 = ((subnet >> 8) & 0xff) as u8;
         let octet_3 = (subnet & 0xff) as u8;

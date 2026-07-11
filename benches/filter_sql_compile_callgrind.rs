@@ -11,7 +11,10 @@ fn host_filter() -> HostFilter {
         ("zone__endswith".to_string(), ".test".to_string()),
         ("comment__contains".to_string(), "owned".to_string()),
         ("address__contains".to_string(), "10.10.".to_string()),
-        ("created_at__gt".to_string(), "2026-01-01".to_string()),
+        (
+            "created_at__gt".to_string(),
+            "2026-01-01T00:00:00Z".to_string(),
+        ),
     ]))
     .expect("host filter parses")
 }
@@ -25,16 +28,14 @@ fn record_filter() -> RecordFilter {
     .expect("record filter parses")
 }
 
-#[library_benchmark]
-fn host_filter_sql_compile() {
-    let filter = host_filter();
+#[library_benchmark(setup = host_filter)]
+fn host_filter_sql_compile(filter: HostFilter) {
     let result = black_box(&filter).sql_conditions();
     black_box(result);
 }
 
-#[library_benchmark]
-fn record_filter_sql_compile() {
-    let filter = record_filter();
+#[library_benchmark(setup = record_filter)]
+fn record_filter_sql_compile(filter: RecordFilter) {
     let result = black_box(&filter).sql_conditions();
     black_box(result);
 }

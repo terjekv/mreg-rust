@@ -24,9 +24,11 @@ mod ptr_overrides;
 mod records;
 mod zones;
 
+use std::{any::Any, marker::PhantomData};
+
 use async_trait::async_trait;
 
-use crate::errors::AppError;
+use crate::{audit::actor, errors::AppError};
 
 pub use attachment_community_assignments::TxAttachmentCommunityAssignmentStore;
 pub use attachments::TxAttachmentStore;
@@ -56,9 +58,7 @@ pub trait TxStorage {
     fn networks(&self) -> &dyn TxNetworkStore;
     fn hosts(&self) -> &dyn TxHostStore;
     fn attachments(&self) -> &dyn TxAttachmentStore;
-    fn attachment_community_assignments(
-        &self,
-    ) -> &dyn TxAttachmentCommunityAssignmentStore;
+    fn attachment_community_assignments(&self) -> &dyn TxAttachmentCommunityAssignmentStore;
     fn host_contacts(&self) -> &dyn TxHostContactStore;
     fn host_groups(&self) -> &dyn TxHostGroupStore;
     fn bacnet(&self) -> &dyn TxBacnetStore;
@@ -75,10 +75,7 @@ pub trait TxStorage {
 /// `TransactionRunner` trait object boundary while keeping that trait
 /// object-safe.
 pub trait ErasedTxWork: Send {
-    fn run(
-        self: Box<Self>,
-        tx: &dyn TxStorage,
-    ) -> Result<Box<dyn std::any::Any + Send>, AppError>;
+    fn run(self: Box<Self>, tx: &dyn TxStorage) -> Result<Box<dyn Any + Send>, AppError>;
 }
 
 /// Backend-specific transaction driver. Implemented by each storage backend
@@ -89,20 +86,22 @@ pub trait TransactionRunner: Send + Sync {
     async fn run_transaction(
         &self,
         work: Box<dyn ErasedTxWork>,
-    ) -> Result<Box<dyn std::any::Any + Send>, AppError>;
+    ) -> Result<Box<dyn Any + Send>, AppError>;
 }
 
 /// Adapter that turns a typed `FnOnce(&dyn TxStorage) -> Result<T, AppError>`
 /// into an [`ErasedTxWork`] trait object whose result is `Box<dyn Any + Send>`.
 pub(crate) struct ClosureTxWork<F, T> {
     work: Option<F>,
-    _marker: std::marker::PhantomData<fn() -> T>,
+    actor: String,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<F, T> ClosureTxWork<F, T> {
     pub(crate) fn new(work: F) -> Self {
         Self {
             work: Some(work),
+            actor: actor::current(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -116,12 +115,12 @@ where
     fn run(
         mut self: Box<Self>,
         tx: &dyn TxStorage,
-    ) -> Result<Box<dyn std::any::Any + Send>, AppError> {
+    ) -> Result<Box<dyn Any + Send>, AppError> {
         let work = self
             .work
             .take()
             .expect("ClosureTxWork::run called more than once");
-        let value = work(tx)?;
+        let value = actor::with_transaction_actor(self.actor, || work(tx))?;
         Ok(Box::new(value))
     }
 }

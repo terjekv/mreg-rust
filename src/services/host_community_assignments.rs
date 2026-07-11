@@ -41,7 +41,7 @@ pub async fn create_host_community_assignment(
                 .host_community_assignments()
                 .create_host_community_assignment(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_community_assignment",
                 Some(item.id()),
                 item.host_name().as_str(),
@@ -86,7 +86,7 @@ pub async fn delete_host_community_assignment(
             tx.host_community_assignments()
                 .delete_host_community_assignment(mapping_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_community_assignment",
                 Some(old.id()),
                 old.host_name().as_str(),

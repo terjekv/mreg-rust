@@ -95,12 +95,25 @@ impl TaskStore for PostgresStorage {
     async fn claim_next_task(&self) -> Result<Option<TaskEnvelope>, AppError> {
         self.database
             .run(|connection| {
+                sql_query(
+                    "UPDATE tasks
+                     SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
+                         error_summary = CASE WHEN attempts >= max_attempts
+                             THEN 'task lease expired after maximum attempts' ELSE error_summary END,
+                         started_at = CASE WHEN attempts >= max_attempts THEN started_at ELSE NULL END,
+                         finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
+                         updated_at = now()
+                     WHERE status = 'running'
+                       AND updated_at < now() - interval '15 minutes'",
+                )
+                .execute(connection)?;
                 let row = sql_query(
                     "WITH next_task AS (
                         SELECT id
                         FROM tasks
                         WHERE status = 'queued'
                           AND available_at <= now()
+                          AND attempts < max_attempts
                         ORDER BY available_at, created_at
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
@@ -108,7 +121,8 @@ impl TaskStore for PostgresStorage {
                      UPDATE tasks t
                      SET status = 'running',
                          attempts = t.attempts + 1,
-                         started_at = COALESCE(t.started_at, now()),
+                         started_at = now(),
+                         finished_at = NULL,
                          updated_at = now()
                      FROM next_task
                      WHERE t.id = next_task.id

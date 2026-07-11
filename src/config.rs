@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::errors::AppError;
 
@@ -289,7 +290,7 @@ fn default_forward_groups_claim() -> String {
 /// Validates that an operator-configured URL uses HTTPS unless MREG_ALLOW_UNSAFE_URLS is set.
 /// Prevents accidental plaintext fetches to sensitive endpoints (JWKS, webhooks, auth).
 fn validate_external_url(url: &str, key: &str, allow_unsafe: bool) -> Result<(), AppError> {
-    let parsed = url::Url::parse(url)
+    let parsed = Url::parse(url)
         .map_err(|_| AppError::config(format!("{key} is not a valid URL: {url}")))?;
     if !allow_unsafe && parsed.scheme() != "https" {
         return Err(AppError::config(format!(
@@ -297,6 +298,21 @@ fn validate_external_url(url: &str, key: &str, allow_unsafe: bool) -> Result<(),
         )));
     }
     Ok(())
+}
+
+fn validate_ldap_url(url: &str, allow_unsafe: bool) -> Result<(), AppError> {
+    let parsed = Url::parse(url)
+        .map_err(|_| AppError::config(format!("ldap.url is not a valid URL: {url}")))?;
+    match parsed.scheme() {
+        "ldaps" => Ok(()),
+        "ldap" if allow_unsafe => Ok(()),
+        "ldap" => Err(AppError::config(
+            "ldap.url must use ldaps (set MREG_ALLOW_UNSAFE_URLS=true to allow plaintext ldap in dev/test)",
+        )),
+        scheme => Err(AppError::config(format!(
+            "ldap.url must use ldap or ldaps, got `{scheme}`"
+        ))),
+    }
 }
 
 fn validate_scopes(scopes: &[AuthScopeConfig], allow_unsafe_urls: bool) -> Result<(), AppError> {
@@ -342,13 +358,33 @@ fn validate_scopes(scopes: &[AuthScopeConfig], allow_unsafe_urls: bool) -> Resul
                 user_search_filter,
                 group_search_base,
                 group_search_filter,
+                bind_dn,
+                bind_password,
                 ..
             } => {
                 require_non_empty("ldap.url", url)?;
+                validate_ldap_url(url, allow_unsafe_urls)?;
                 require_non_empty("ldap.user_search_base", user_search_base)?;
                 require_non_empty("ldap.user_search_filter", user_search_filter)?;
                 require_non_empty("ldap.group_search_base", group_search_base)?;
                 require_non_empty("ldap.group_search_filter", group_search_filter)?;
+                match (bind_dn.as_deref(), bind_password.as_deref()) {
+                    (Some(dn), Some(password)) => {
+                        require_non_empty("ldap.bind_dn", dn)?;
+                        require_non_empty("ldap.bind_password", password)?;
+                    }
+                    (Some(_), None) => {
+                        return Err(AppError::config(
+                            "ldap.bind_password is required when ldap.bind_dn is configured",
+                        ));
+                    }
+                    (None, Some(_)) => {
+                        return Err(AppError::config(
+                            "ldap.bind_dn is required when ldap.bind_password is configured",
+                        ));
+                    }
+                    (None, None) => {}
+                }
             }
             AuthScopeBackendConfig::Remote {
                 login_url,
@@ -658,6 +694,13 @@ mod tests {
             err.to_string().contains("https"),
             "expected https error for login_url, got: {err}"
         );
+    }
+
+    #[test]
+    fn ldap_scope_requires_ldaps_by_default() {
+        assert!(validate_ldap_url("ldap://ldap.example.org", false).is_err());
+        assert!(validate_ldap_url("ldaps://ldap.example.org", false).is_ok());
+        assert!(validate_ldap_url("ldap://localhost", true).is_ok());
     }
 
     #[test]

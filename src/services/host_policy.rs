@@ -37,7 +37,7 @@ pub async fn create_atom(
         .transaction(move |tx| {
             let atom = tx.host_policy().create_atom(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_atom",
                 Some(atom.id()),
                 atom.name().as_str(),
@@ -78,7 +78,7 @@ pub async fn update_atom(
             let old = tx.host_policy().get_atom_by_name(&name_owned)?;
             let new = tx.host_policy().update_atom(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_atom",
                 Some(new.id()),
                 new.name().as_str(),
@@ -106,7 +106,7 @@ pub async fn delete_atom(
             let old = tx.host_policy().get_atom_by_name(&name_owned)?;
             tx.host_policy().delete_atom(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_atom",
                 Some(old.id()),
                 old.name().as_str(),
@@ -144,7 +144,7 @@ pub async fn create_role(
         .transaction(move |tx| {
             let role = tx.host_policy().create_role(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),
@@ -185,7 +185,7 @@ pub async fn update_role(
             let old = tx.host_policy().get_role_by_name(&name_owned)?;
             let new = tx.host_policy().update_role(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(new.id()),
                 new.name().as_str(),
@@ -213,7 +213,7 @@ pub async fn delete_role(
             let old = tx.host_policy().get_role_by_name(&name_owned)?;
             tx.host_policy().delete_role(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(old.id()),
                 old.name().as_str(),
@@ -244,7 +244,7 @@ pub async fn add_atom_to_role(
             tx.host_policy()
                 .add_atom_to_role(&role_name_owned, &atom_name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),
@@ -275,7 +275,7 @@ pub async fn remove_atom_from_role(
             tx.host_policy()
                 .remove_atom_from_role(&role_name_owned, &atom_name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),
@@ -306,7 +306,7 @@ pub async fn add_host_to_role(
             tx.host_policy()
                 .add_host_to_role(&role_name_owned, &host_name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),
@@ -337,7 +337,7 @@ pub async fn remove_host_from_role(
             tx.host_policy()
                 .remove_host_from_role(&role_name_owned, &host_name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),
@@ -368,7 +368,7 @@ pub async fn add_label_to_role(
             tx.host_policy()
                 .add_label_to_role(&role_name_owned, &label_name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),
@@ -399,7 +399,7 @@ pub async fn remove_label_from_role(
             tx.host_policy()
                 .remove_label_from_role(&role_name_owned, &label_name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_policy_role",
                 Some(role.id()),
                 role.name().as_str(),

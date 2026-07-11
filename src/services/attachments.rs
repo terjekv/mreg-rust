@@ -28,7 +28,7 @@ pub async fn create_attachment(
         .transaction(move |tx| {
             let attachment = tx.attachments().create_attachment(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_attachment",
                 Some(attachment.id()),
                 attachment.host_name().as_str(),
@@ -58,7 +58,7 @@ pub async fn update_attachment(
         .transaction(move |tx| {
             let attachment = tx.attachments().update_attachment(attachment_id, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_attachment",
                 Some(attachment.id()),
                 attachment.host_name().as_str(),
@@ -88,7 +88,7 @@ pub async fn delete_attachment(
             let old = tx.attachments().get_attachment(attachment_id)?;
             tx.attachments().delete_attachment(attachment_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_attachment",
                 Some(old.id()),
                 old.host_name().as_str(),
@@ -114,7 +114,9 @@ pub async fn create_attachment_dhcp_identifier(
 ) -> Result<AttachmentDhcpIdentifier, AppError> {
     let (identifier, history) = storage
         .transaction(move |tx| {
-            let identifier = tx.attachments().create_attachment_dhcp_identifier(command)?;
+            let identifier = tx
+                .attachments()
+                .create_attachment_dhcp_identifier(command)?;
             let kind = match identifier.kind() {
                 crate::domain::attachment::DhcpIdentifierKind::ClientId => "client_id",
                 crate::domain::attachment::DhcpIdentifierKind::DuidLlt => "duid_llt",
@@ -124,7 +126,7 @@ pub async fn create_attachment_dhcp_identifier(
                 crate::domain::attachment::DhcpIdentifierKind::DuidRaw => "duid_raw",
             };
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "attachment_dhcp_identifier",
                 Some(identifier.id()),
                 identifier.value(),
@@ -158,13 +160,11 @@ pub async fn delete_attachment_dhcp_identifier(
                 .list_attachment_dhcp_identifiers(attachment_id)?
                 .into_iter()
                 .find(|item| item.id() == identifier_id)
-                .ok_or_else(|| {
-                    AppError::not_found("attachment DHCP identifier was not found")
-                })?;
+                .ok_or_else(|| AppError::not_found("attachment DHCP identifier was not found"))?;
             tx.attachments()
                 .delete_attachment_dhcp_identifier(identifier_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "attachment_dhcp_identifier",
                 Some(identifier.id()),
                 identifier.value(),
@@ -191,7 +191,7 @@ pub async fn create_attachment_prefix_reservation(
                 .attachments()
                 .create_attachment_prefix_reservation(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "attachment_prefix_reservation",
                 Some(reservation.id()),
                 reservation.prefix().as_str(),
@@ -226,7 +226,7 @@ pub async fn delete_attachment_prefix_reservation(
             tx.attachments()
                 .delete_attachment_prefix_reservation(reservation_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "attachment_prefix_reservation",
                 Some(reservation.id()),
                 reservation.prefix().as_str(),
@@ -253,7 +253,7 @@ pub async fn create_attachment_community_assignment(
                 .attachment_community_assignments()
                 .create_attachment_community_assignment(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "attachment_community_assignment",
                 Some(assignment.id()),
                 assignment.host_name().as_str(),
@@ -288,7 +288,7 @@ pub async fn delete_attachment_community_assignment(
             tx.attachment_community_assignments()
                 .delete_attachment_community_assignment(assignment_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "attachment_community_assignment",
                 Some(old.id()),
                 old.host_name().as_str(),

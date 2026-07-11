@@ -10,10 +10,8 @@ pub(in crate::storage::postgres) fn vec_to_page<T: HasId>(
     vec_to_page_with_cursor(items, page)
 }
 
-/// Build a Page from rows already limited by SQL (LIMIT limit+1 when no cursor).
-/// When no cursor: rows has at most limit+1 items; pop the extra to determine has_next.
-/// When cursor present: rows may be the full set (cursor filtering done in Rust via vec_to_page).
-/// `total` is a precomputed COUNT(*) from a separate query.
+/// Build a page from rows that may only have been limited in SQL for the first page.
+/// `total` is a precomputed `COUNT(*)` from a separate query.
 pub(in crate::storage::postgres) fn rows_to_page<T: HasId>(
     items: Vec<T>,
     page: &PageRequest,
@@ -44,6 +42,29 @@ pub(in crate::storage::postgres) fn rows_to_page<T: HasId>(
     }
 }
 
+/// Build a page from rows where SQL has already applied both the cursor and
+/// `LIMIT limit + 1`.
+pub(in crate::storage::postgres) fn limited_rows_to_page<T: HasId>(
+    mut items: Vec<T>,
+    page: &PageRequest,
+    total: u64,
+) -> Page<T> {
+    let limit = page.limit() as usize;
+    let has_more = items.len() > limit;
+    if has_more {
+        items.pop();
+    }
+    Page {
+        next_cursor: if has_more {
+            items.last().map(HasId::id)
+        } else {
+            None
+        },
+        items,
+        total,
+    }
+}
+
 pub(in crate::storage::postgres) fn paginate_simple<T>(
     items: Vec<T>,
     page: &PageRequest,
@@ -65,7 +86,7 @@ fn vec_to_page_with_cursor<T: HasId>(items: Vec<T>, page: &PageRequest) -> Page<
             .iter()
             .position(|item| item.id() == cursor)
             .map(|position| position + 1)
-            .unwrap_or(0)
+            .unwrap_or(items.len())
     } else {
         0
     };

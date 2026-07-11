@@ -16,7 +16,7 @@ use crate::{
     },
     domain::{
         filters::RecordFilter,
-        pagination::{Page, PageRequest},
+        pagination::{Page, PageRequest, SortDirection},
         resource_records::{
             CreateRecordInstance, CreateRecordTypeDefinition, RecordInstance, RecordRrset,
             RecordTypeDefinition, UpdateRecord, ValidatedRecordContent, alias_target_names,
@@ -30,7 +30,8 @@ use crate::{
 
 use super::PostgresStorage;
 use super::helpers::{
-    IntSentinelRow, map_unique, record_type_storage_parts, run_dynamic_query, vec_to_page,
+    IntSentinelRow, limited_rows_to_page, map_unique, record_type_storage_parts, run_count_query,
+    run_dynamic_query, vec_to_page,
 };
 
 impl PostgresStorage {
@@ -244,20 +245,66 @@ impl PostgresStorage {
                     JOIN rrsets rs ON rs.id = r.rrset_id \
                     JOIN record_types rt ON rt.id = rs.type_id";
 
-        let (clauses, values) = filter.sql_conditions();
+        let (clauses, mut values) = filter.sql_conditions();
         let where_str = if clauses.is_empty() {
             String::new()
         } else {
             format!(" WHERE {}", clauses.join(" AND "))
         };
-        let query_str = format!("{base}{where_str} ORDER BY r.created_at DESC");
+        let order_col = match page.sort_by() {
+            Some("owner_name") => "rs.owner_name",
+            Some("type_name") => "rt.name",
+            Some("updated_at") => "r.updated_at",
+            Some("created_at") | None => "r.created_at",
+            Some(other) => {
+                return Err(AppError::validation(format!(
+                    "unsupported sort_by field for records: {other}"
+                )))
+            }
+        };
+        let order_dir = match page.sort_direction() {
+            SortDirection::Asc => "ASC",
+            SortDirection::Desc => "DESC",
+        };
+        let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
+        let total = run_count_query(connection, &count_sql, &values)?;
+        let cursor_clause = if let Some(cursor) = page.after() {
+            let idx = values.len() + 1;
+            values.push(cursor.to_string());
+            format!(
+                " WHERE _ord > COALESCE((SELECT _ord FROM ranked WHERE id = ${idx}::uuid), 9223372036854775807)"
+            )
+        } else {
+            String::new()
+        };
+        let limit_clause = if page.limit() != u64::MAX {
+            format!(" LIMIT {}", page.limit() + 1)
+        } else {
+            String::new()
+        };
+        let query_str = format!(
+            "WITH ranked AS (
+                 SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name,
+                        rs.anchor_kind, rs.anchor_id, rs.owner_name::text AS owner_name,
+                        rs.zone_id, rs.ttl, r.data, r.raw_rdata, r.rendered,
+                        r.created_at, r.updated_at,
+                        ROW_NUMBER() OVER (ORDER BY {order_col} {order_dir}, r.id) AS _ord
+                 FROM records r
+                 JOIN rrsets rs ON rs.id = r.rrset_id
+                 JOIN record_types rt ON rt.id = rs.type_id
+                 {where_str}
+             )
+             SELECT id, rrset_id, type_id, type_name, anchor_kind, anchor_id,
+                    owner_name, zone_id, ttl, data, raw_rdata, rendered, created_at, updated_at
+             FROM ranked{cursor_clause} ORDER BY _ord{limit_clause}"
+        );
 
         let rows = run_dynamic_query::<RecordRow>(connection, &query_str, &values)?;
         let items: Vec<RecordInstance> = rows
             .into_iter()
             .map(RecordRow::into_domain)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(vec_to_page(items, page))
+        Ok(limited_rows_to_page(items, page, total))
     }
 
     pub(in crate::storage::postgres) fn create_record_type_in_conn(

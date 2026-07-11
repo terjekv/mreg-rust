@@ -36,11 +36,11 @@ impl PtrOverrideFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "host" => {
-                    validate_op("host", &op, FieldType::String)?;
+                    validate_op("host", &op, FieldType::String, &value)?;
                     filter.host.push(FilterCondition { op, value });
                 }
                 "address" => {
-                    validate_op("address", &op, FieldType::String)?;
+                    validate_op("address", &op, FieldType::String, &value)?;
                     filter.address.push(FilterCondition { op, value });
                 }
                 _ => {

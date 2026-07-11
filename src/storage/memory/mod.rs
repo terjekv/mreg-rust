@@ -80,7 +80,7 @@ pub(super) fn paginate_by_cursor<T: HasId>(
             .iter()
             .position(|item| item.id() == cursor)
             .map(|pos| pos + 1)
-            .unwrap_or(0)
+            .ok_or_else(|| AppError::validation("pagination cursor was not found"))?
     } else {
         0
     };

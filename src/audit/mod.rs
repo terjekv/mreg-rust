@@ -5,7 +5,49 @@ use uuid::Uuid;
 
 /// Conventional actor identifiers used by service-layer mutations.
 pub mod actor {
+    use std::{cell::RefCell, future::Future};
+    use tokio::task_local;
+
     pub const SYSTEM: &str = "system";
+
+    task_local! {
+        static REQUEST_ACTOR: String;
+    }
+
+    thread_local! {
+        static TRANSACTION_ACTOR: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    struct TransactionActorReset(Option<String>);
+
+    impl Drop for TransactionActorReset {
+        fn drop(&mut self) {
+            TRANSACTION_ACTOR.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+
+    /// Run a request future with the authenticated principal available to
+    /// service-layer audit recording.
+    pub async fn scope<F: Future>(actor: String, future: F) -> F::Output {
+        REQUEST_ACTOR.scope(actor, future).await
+    }
+
+    /// Return the active authenticated actor, falling back to `system` for
+    /// background jobs and direct service calls outside an HTTP request.
+    pub fn current() -> String {
+        TRANSACTION_ACTOR
+            .with(|actor| actor.borrow().clone())
+            .or_else(|| REQUEST_ACTOR.try_with(Clone::clone).ok())
+            .unwrap_or_else(|| SYSTEM.to_string())
+    }
+
+    pub(crate) fn with_transaction_actor<T>(actor: String, work: impl FnOnce() -> T) -> T {
+        let previous = TRANSACTION_ACTOR.with(|slot| slot.replace(Some(actor)));
+        let _reset = TransactionActorReset(previous);
+        work()
+    }
 }
 
 /// Conventional action verbs recorded on audit events.

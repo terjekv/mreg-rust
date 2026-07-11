@@ -54,6 +54,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 pub(crate) async fn tasks(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -65,7 +66,7 @@ pub(crate) async fn tasks(
         ),
     )
     .await?;
-    let page = state.services.tasks().list(&PageRequest::default()).await?;
+    let page = state.services.tasks().list(&query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,
         state.reader.backend_kind(),
@@ -85,6 +86,7 @@ pub(crate) async fn tasks(
 pub(crate) async fn imports(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -96,11 +98,7 @@ pub(crate) async fn imports(
         ),
     )
     .await?;
-    let page = state
-        .services
-        .imports()
-        .list(&PageRequest::default())
-        .await?;
+    let page = state.services.imports().list(&query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,
         state.reader.backend_kind(),
@@ -120,6 +118,7 @@ pub(crate) async fn imports(
 pub(crate) async fn export_templates(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -134,7 +133,7 @@ pub(crate) async fn export_templates(
     let page = state
         .services
         .exports()
-        .list_templates(&PageRequest::default())
+        .list_templates(&query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,
@@ -155,6 +154,7 @@ pub(crate) async fn export_templates(
 pub(crate) async fn export_runs(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -169,7 +169,7 @@ pub(crate) async fn export_runs(
     let page = state
         .services
         .exports()
-        .list_runs(&PageRequest::default())
+        .list_runs(&query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,
@@ -179,7 +179,6 @@ pub(crate) async fn export_runs(
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateImportRequest {
-    requested_by: Option<String>,
     items: Vec<CreateImportItemRequest>,
 }
 
@@ -195,7 +194,7 @@ pub struct CreateImportItemRequest {
 }
 
 impl CreateImportRequest {
-    fn into_command(self) -> Result<CreateImportBatch, AppError> {
+    fn into_command(self, requested_by: String) -> Result<CreateImportBatch, AppError> {
         let items = self
             .items
             .into_iter()
@@ -203,7 +202,7 @@ impl CreateImportRequest {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CreateImportBatch::new(
             ImportBatch::new(items)?,
-            self.requested_by,
+            Some(requested_by),
         ))
     }
 }
@@ -237,7 +236,6 @@ impl CreateExportTemplateRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct CreateExportRunRequest {
     template_name: String,
-    requested_by: Option<String>,
     scope: String,
     #[serde(default)]
     #[schema(value_type = Object)]
@@ -245,10 +243,10 @@ pub struct CreateExportRunRequest {
 }
 
 impl CreateExportRunRequest {
-    fn into_command(self) -> Result<CreateExportRun, AppError> {
+    fn into_command(self, requested_by: String) -> Result<CreateExportRun, AppError> {
         CreateExportRun::new(
             self.template_name,
-            self.requested_by,
+            Some(requested_by),
             self.scope,
             self.parameters,
         )
@@ -273,16 +271,14 @@ pub(crate) async fn create_import(
     payload: web::Json<CreateImportRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
+    let requested_by = authz::extract_principal(&req).key();
     require(
         &state,
         authz_request(
             &req,
             authz::actions::import_batch::CREATE,
             authz::actions::resource_kinds::IMPORT_BATCH,
-            request
-                .requested_by
-                .clone()
-                .unwrap_or_else(|| "anonymous".to_string()),
+            requested_by.clone(),
         )
         .attr(
             "item_count",
@@ -293,7 +289,7 @@ pub(crate) async fn create_import(
     let summary = state
         .services
         .imports()
-        .create(request.into_command()?)
+        .create(request.into_command(requested_by)?)
         .await?;
     Ok(HttpResponse::Created().json(summary))
 }
@@ -354,7 +350,8 @@ pub(crate) async fn create_export_run(
     payload: web::Json<CreateExportRunRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    let mut authz = authz_request(
+    let requested_by = authz::extract_principal(&req).key();
+    let authz = authz_request(
         &req,
         authz::actions::export_run::CREATE,
         authz::actions::resource_kinds::EXPORT_RUN,
@@ -364,15 +361,13 @@ pub(crate) async fn create_export_run(
         "template_name",
         AttrValue::String(request.template_name.clone()),
     )
-    .attr("scope", AttrValue::String(request.scope.clone()));
-    if let Some(requested_by) = &request.requested_by {
-        authz = authz.attr("requested_by", AttrValue::String(requested_by.clone()));
-    }
+    .attr("scope", AttrValue::String(request.scope.clone()))
+    .attr("requested_by", AttrValue::String(requested_by.clone()));
     require(&state, authz).await?;
     let run = state
         .services
         .exports()
-        .create_run(request.into_command()?)
+        .create_run(request.into_command(requested_by)?)
         .await?;
     Ok(HttpResponse::Created().json(run))
 }
@@ -462,7 +457,17 @@ async fn execute_import_task(
         }
         return Err(error);
     }
-    let import_id = parse_task_uuid(task.payload(), "import_id")?;
+    let import_id = match parse_task_uuid(task.payload(), "import_id") {
+        Ok(id) => id,
+        Err(error) => {
+            state
+                .services
+                .tasks()
+                .fail(task.id(), error.to_string())
+                .await?;
+            return Err(error);
+        }
+    };
     match state.services.imports().run(import_id).await {
         Ok(summary) => serde_json::to_value(summary).map_err(AppError::internal),
         Err(error) => {
@@ -509,7 +514,17 @@ async fn execute_export_task(
         }
         return Err(error);
     }
-    let run_id = parse_task_uuid(task.payload(), "run_id")?;
+    let run_id = match parse_task_uuid(task.payload(), "run_id") {
+        Ok(id) => id,
+        Err(error) => {
+            state
+                .services
+                .tasks()
+                .fail(task.id(), error.to_string())
+                .await?;
+            return Err(error);
+        }
+    };
     match state.services.exports().run_export(run_id).await {
         Ok(run) => serde_json::to_value(run).map_err(AppError::internal),
         Err(error) => {

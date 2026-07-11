@@ -20,7 +20,7 @@ use crate::{
             AllocationPolicy, AssignIpAddress, CreateHost, Host, HostAuthContext,
             IpAddressAssignment, UpdateHost, UpdateIpAddress,
         },
-        pagination::{Page, PageRequest},
+        pagination::{Page, PageRequest, SortDirection},
         types::{
             CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressValue, Ttl, ZoneName,
         },
@@ -30,7 +30,9 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, rows_to_page, run_count_query, run_dynamic_query, vec_to_page};
+use super::helpers::{
+    limited_rows_to_page, map_unique, run_count_query, run_dynamic_query, vec_to_page,
+};
 
 /// Resolved values for a host update, computed from the command and the existing host.
 struct ResolvedHostUpdate {
@@ -756,7 +758,7 @@ impl PostgresStorage {
                 h.ttl, h.comment, h.created_at, h.updated_at \
                 FROM hosts h LEFT JOIN forward_zones fz ON fz.id = h.zone_id";
 
-        let (clauses, values) = filter.sql_conditions();
+        let (clauses, mut values) = filter.sql_conditions();
         let where_str = if clauses.is_empty() {
             String::new()
         } else {
@@ -774,19 +776,37 @@ impl PostgresStorage {
             }
         };
         let order_dir = match page.sort_direction() {
-            crate::domain::pagination::SortDirection::Asc => "ASC",
-            crate::domain::pagination::SortDirection::Desc => "DESC",
+            SortDirection::Asc => "ASC",
+            SortDirection::Desc => "DESC",
         };
         let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
         let total = run_count_query(connection, &count_sql, &values)?;
 
-        let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+        let cursor_clause = if let Some(cursor) = page.after() {
+            let idx = values.len() + 1;
+            values.push(cursor.to_string());
+            format!(
+                " WHERE _ord > COALESCE((SELECT _ord FROM ranked WHERE id = ${idx}::uuid), 9223372036854775807)"
+            )
+        } else {
+            String::new()
+        };
+        let limit_clause = if page.limit() != u64::MAX {
             format!(" LIMIT {}", page.limit() + 1)
         } else {
             String::new()
         };
-        let query_str =
-            format!("{base}{where_str} ORDER BY {order_col} {order_dir}, h.id{limit_clause}");
+        let query_str = format!(
+            "WITH ranked AS (
+                 SELECT h.id, h.name::text AS name, fz.name::text AS zone_name,
+                        h.ttl, h.comment, h.created_at, h.updated_at,
+                        ROW_NUMBER() OVER (ORDER BY {order_col} {order_dir}, h.id) AS _ord
+                 FROM hosts h LEFT JOIN forward_zones fz ON fz.id = h.zone_id
+                 {where_str}
+             )
+             SELECT id, name, zone_name, ttl, comment, created_at, updated_at
+             FROM ranked{cursor_clause} ORDER BY _ord{limit_clause}"
+        );
 
         let rows = run_dynamic_query::<HostRow>(connection, &query_str, &values)?;
         let items: Vec<Host> = rows
@@ -794,7 +814,7 @@ impl PostgresStorage {
             .map(|row| row.into_domain())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(rows_to_page(items, page, total))
+        Ok(limited_rows_to_page(items, page, total))
     }
 
     pub(super) fn create_host_in_conn(
@@ -815,10 +835,7 @@ impl PostgresStorage {
                     .first::<uuid::Uuid>(connection)
                     .optional()?
                     .ok_or_else(|| {
-                        AppError::not_found(format!(
-                            "forward zone '{}' was not found",
-                            zone_name
-                        ))
+                        AppError::not_found(format!("forward zone '{}' was not found", zone_name))
                     })?,
             ),
             None => None,
@@ -841,8 +858,7 @@ impl PostgresStorage {
             let assign_cmd = if *spec.allocation() == AllocationPolicy::Random {
                 if let Some(network_cidr) = spec.network() {
                     let network = Self::query_network_by_cidr(connection, network_cidr)?;
-                    let address =
-                        Self::allocate_random_address_in_network(connection, &network)?;
+                    let address = Self::allocate_random_address_in_network(connection, &network)?;
                     let cmd = AssignIpAddress::new(
                         host.name().clone(),
                         Some(address),
@@ -890,12 +906,7 @@ impl PostgresStorage {
         .into_domain()?;
 
         if host.name() != old_host.name() {
-            Self::cascade_host_rename(
-                connection,
-                old_host.id(),
-                &resolved.name,
-                resolved.zone_id,
-            )?;
+            Self::cascade_host_rename(connection, old_host.id(), &resolved.name, resolved.zone_id)?;
         }
 
         Ok(host)
@@ -915,8 +926,7 @@ impl PostgresStorage {
             .optional()?
             .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name_str)))?;
 
-        diesel::delete(records::table.filter(records::owner_id.eq(host_id)))
-            .execute(connection)?;
+        diesel::delete(records::table.filter(records::owner_id.eq(host_id))).execute(connection)?;
         sql_query(
             "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
         )
@@ -990,9 +1000,7 @@ impl PostgresStorage {
             .select(hosts::name)
             .first::<String>(connection)
             .optional()?
-            .ok_or_else(|| {
-                AppError::not_found("host for IP address assignment was not found")
-            })?;
+            .ok_or_else(|| AppError::not_found("host for IP address assignment was not found"))?;
         let network = Self::query_network_by_id(connection, existing.network_id())?;
         let attachment = Self::find_or_create_attachment(
             connection,
@@ -1215,9 +1223,8 @@ impl HostStore for PostgresStorage {
     ) -> Result<IpAddressAssignment, AppError> {
         self.database
             .run(move |connection| {
-                connection.transaction(|connection| {
-                    Self::assign_ip_address_in_conn(connection, command)
-                })
+                connection
+                    .transaction(|connection| Self::assign_ip_address_in_conn(connection, command))
             })
             .await
     }

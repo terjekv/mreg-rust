@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use ldap3::{LdapConnAsync, Scope, SearchEntry};
+use tokio::time::timeout;
 
 use crate::errors::AppError;
 
@@ -23,7 +26,7 @@ pub struct LdapAuthenticatorConfig {
 #[derive(Clone)]
 pub struct LdapScopeAuthenticator {
     url: String,
-    timeout: std::time::Duration,
+    timeout: Duration,
     user_search_base: String,
     user_search_filter: String,
     group_search_base: String,
@@ -36,7 +39,7 @@ impl LdapScopeAuthenticator {
     pub fn new(config: LdapAuthenticatorConfig) -> Self {
         Self {
             url: config.url,
-            timeout: std::time::Duration::from_millis(config.timeout_ms),
+            timeout: Duration::from_millis(config.timeout_ms),
             user_search_base: config.user_search_base,
             user_search_filter: config.user_search_filter,
             group_search_base: config.group_search_base,
@@ -47,15 +50,16 @@ impl LdapScopeAuthenticator {
     }
 
     async fn connect(&self) -> Result<ldap3::Ldap, AppError> {
-        let (conn, mut ldap) = tokio::time::timeout(self.timeout, LdapConnAsync::new(&self.url))
+        let (conn, mut ldap) = timeout(self.timeout, LdapConnAsync::new(&self.url))
             .await
             .map_err(|_| AppError::unavailable("LDAP connection timed out"))?
             .map_err(AppError::internal)?;
         ldap3::drive!(conn);
         if let Some(bind_dn) = &self.bind_dn {
             let password = self.bind_password.as_deref().unwrap_or_default();
-            ldap.simple_bind(bind_dn, password)
+            timeout(self.timeout, ldap.simple_bind(bind_dn, password))
                 .await
+                .map_err(|_| AppError::unavailable("LDAP service bind timed out"))?
                 .map_err(AppError::internal)?
                 .success()
                 .map_err(|error| {
@@ -72,21 +76,27 @@ impl ScopeAuthenticator for LdapScopeAuthenticator {
         &self,
         credentials: BackendLoginRequest,
     ) -> Result<AuthenticatedIdentity, AppError> {
+        if credentials.password.is_empty() {
+            return Err(AppError::unauthorized("invalid credentials"));
+        }
         let mut ldap = self.connect().await?;
         let user_filter = self
             .user_search_filter
             .replace("{username}", &ldap3::ldap_escape(&credentials.username));
-        let (entries, _) = ldap
-            .search(
+        let (entries, _) = timeout(
+            self.timeout,
+            ldap.search(
                 &self.user_search_base,
                 Scope::Subtree,
                 &user_filter,
                 vec!["dn"],
-            )
-            .await
-            .map_err(AppError::internal)?
-            .success()
-            .map_err(|error| AppError::unavailable(format!("LDAP user search failed: {error}")))?;
+            ),
+        )
+        .await
+        .map_err(|_| AppError::unavailable("LDAP user search timed out"))?
+        .map_err(AppError::internal)?
+        .success()
+        .map_err(|error| AppError::unavailable(format!("LDAP user search failed: {error}")))?;
         let entry = entries
             .into_iter()
             .next()
@@ -95,33 +105,39 @@ impl ScopeAuthenticator for LdapScopeAuthenticator {
         let user_dn = entry.dn;
 
         let (user_conn, mut user_ldap) =
-            tokio::time::timeout(self.timeout, LdapConnAsync::new(&self.url))
+            timeout(self.timeout, LdapConnAsync::new(&self.url))
                 .await
                 .map_err(|_| AppError::unavailable("LDAP bind timed out"))?
                 .map_err(AppError::internal)?;
         ldap3::drive!(user_conn);
-        user_ldap
-            .simple_bind(&user_dn, &credentials.password)
-            .await
-            .map_err(AppError::internal)?
-            .success()
-            .map_err(|_| AppError::unauthorized("invalid credentials"))?;
+        timeout(
+            self.timeout,
+            user_ldap.simple_bind(&user_dn, &credentials.password),
+        )
+        .await
+        .map_err(|_| AppError::unavailable("LDAP user bind timed out"))?
+        .map_err(AppError::internal)?
+        .success()
+        .map_err(|_| AppError::unauthorized("invalid credentials"))?;
 
         let group_filter = self
             .group_search_filter
             .replace("{username}", &ldap3::ldap_escape(&credentials.username))
             .replace("{user_dn}", &ldap3::ldap_escape(&user_dn));
-        let (groups, _) = ldap
-            .search(
+        let (groups, _) = timeout(
+            self.timeout,
+            ldap.search(
                 &self.group_search_base,
                 Scope::Subtree,
                 &group_filter,
                 vec!["cn"],
-            )
-            .await
-            .map_err(AppError::internal)?
-            .success()
-            .map_err(|error| AppError::unavailable(format!("LDAP group search failed: {error}")))?;
+            ),
+        )
+        .await
+        .map_err(|_| AppError::unavailable("LDAP group search timed out"))?
+        .map_err(AppError::internal)?
+        .success()
+        .map_err(|error| AppError::unavailable(format!("LDAP group search failed: {error}")))?;
 
         Ok(AuthenticatedIdentity {
             username: credentials.username,

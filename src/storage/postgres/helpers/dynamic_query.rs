@@ -58,7 +58,7 @@ pub(in crate::storage::postgres) fn run_dynamic_query<
     query_str: &str,
     values: &[String],
 ) -> Result<Vec<T>, diesel::result::Error> {
-    bind_text_params!(query_str, values, connection, 12;
+    bind_text_params!(query_str, values, connection, 16;
         ( 1  => 0)
         ( 2  => 0 1)
         ( 3  => 0 1 2)
@@ -71,5 +71,9 @@ pub(in crate::storage::postgres) fn run_dynamic_query<
         (10  => 0 1 2 3 4 5 6 7 8 9)
         (11  => 0 1 2 3 4 5 6 7 8 9 10)
         (12  => 0 1 2 3 4 5 6 7 8 9 10 11)
+        (13  => 0 1 2 3 4 5 6 7 8 9 10 11 12)
+        (14  => 0 1 2 3 4 5 6 7 8 9 10 11 12 13)
+        (15  => 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14)
+        (16  => 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)
     )
 }
