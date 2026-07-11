@@ -1069,6 +1069,17 @@ async fn wildcard_dns_records_work_as_unanchored_records() {
     )
     .await;
 
+    // Wildcards are DNS owners, never inventory hosts.
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/inventory/hosts")
+            .set_json(json!({"name": "*.example.org"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
     // Create a TXT record at *.example.org (no host entity needed)
     let response = test::call_service(
         &app,
@@ -1089,6 +1100,109 @@ async fn wildcard_dns_records_work_as_unanchored_records() {
         body["owner_kind"].is_null(),
         "wildcard should be unanchored"
     );
+
+    for invalid_owner in ["foo.*.example.org", "foo*.example.org"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/dns/records")
+                .set_json(json!({
+                    "type_name": "TXT",
+                    "owner_name": invalid_owner,
+                    "data": {"value": "invalid wildcard"}
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[actix_web::test]
+async fn legacy_wildcard_host_is_a_v2_dns_owner_facade() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::default()
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+    };
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/hosts/")
+            .set_json(json!({"name": "*.example.org"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v1/hosts/%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let legacy: Value = test::read_body_json(response).await;
+    assert_eq!(legacy["name"], "*.example.org");
+    assert_eq!(legacy["txts"][0]["txt"], "v=spf1 -all");
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/dns/records?owner_name=%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let records: Value = test::read_body_json(response).await;
+    assert_eq!(records["total"], 1);
+    assert_eq!(records["items"][0]["owner_name"], "*.example.org");
+    assert!(records["items"][0]["owner_kind"].is_null());
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/inventory/hosts?name=%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let hosts: Value = test::read_body_json(response).await;
+    assert_eq!(hosts["total"], 0);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::DELETE)
+            .uri("/api/v1/hosts/%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/dns/records?owner_name=%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    let records: Value = test::read_body_json(response).await;
+    assert_eq!(records["total"], 0);
 }
 
 #[actix_web::test]

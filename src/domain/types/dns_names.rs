@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for DomainNameValue {
     }
 }
 
-/// Validated hostname (subset of DNS name, allowing a leading DNS wildcard label).
+/// Validated infrastructure hostname (a strict subset of DNS names).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Hostname(DnsName);
 
@@ -199,10 +199,7 @@ fn normalize_dns_name(value: &str) -> Result<String, AppError> {
 }
 
 fn validate_hostname(value: &str) -> Result<(), AppError> {
-    for (index, label) in value.split('.').enumerate() {
-        if index == 0 && label == "*" {
-            continue;
-        }
+    for label in value.split('.') {
         let bytes = label.as_bytes();
         if bytes.is_empty() {
             return Err(AppError::validation("hostname contains empty label"));
@@ -218,11 +215,7 @@ fn validate_hostname(value: &str) -> Result<(), AppError> {
             .find(|byte| !byte.is_ascii_alphanumeric() && *byte != b'-')
         {
             match byte {
-                b'*' => {
-                    return Err(AppError::validation(
-                        "hostname wildcard is only allowed as the complete first label",
-                    ));
-                }
+                b'*' => return Err(AppError::validation("hostname cannot contain '*'")),
                 b'_' => return Err(AppError::validation("hostname cannot contain '_'")),
                 _ => {
                     return Err(AppError::validation(

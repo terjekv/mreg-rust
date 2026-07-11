@@ -43,11 +43,8 @@ mod tests {
     }
 
     #[test]
-    fn hostname_allows_only_a_leading_wildcard_label() {
-        assert_eq!(
-            Hostname::new("*.Example.Org").unwrap().as_str(),
-            "*.example.org"
-        );
+    fn hostname_rejects_wildcards() {
+        assert!(Hostname::new("*.Example.Org").is_err());
         assert!(Hostname::new("foo.*.example.org").is_err());
         assert!(Hostname::new("foo*.example.org").is_err());
     }
@@ -168,11 +165,6 @@ mod tests {
     #[test]
     fn dns_name_rejects_double_dot() {
         assert!(DnsName::new("example..org").is_err());
-    }
-
-    #[test]
-    fn hostname_rejects_non_leading_wildcards() {
-        assert!(Hostname::new("host.*.example.org").is_err());
     }
 
     #[test]

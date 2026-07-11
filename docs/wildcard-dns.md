@@ -93,3 +93,11 @@ GET /api/v2/dns/records?owner_name=*.example.org
 ## Relationship to the old mreg
 
 The old mreg supported wildcard hosts as actual host entities (`*.example.org` in the hosts table). In mreg-rust, wildcards are modeled more correctly as DNS records without host entities, following RFC 4592's conceptual model.
+
+The V1 compatibility API retains the old host-shaped create, detail, list, and
+delete behavior as a facade. Creating `*.example.org` through
+`POST /api/v1/hosts/` creates an unanchored wildcard TXT record, and V1 projects
+the records at that owner name into the legacy host response. It does not create
+an inventory host. The same resource is therefore managed through
+`/api/v2/dns/records` or `/api/v2/dns/rrsets` in V2 and never appears under
+`/api/v2/inventory/hosts`.

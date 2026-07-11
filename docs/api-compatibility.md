@@ -53,7 +53,7 @@ and serialize legacy DRF-style responses. No entry in this table is a redirect.
 | Original v1 family | Direct coverage and caveats |
 |---|---|---|
 | `bacnet/ids/` | List and BACnet-ID detail. |
-| `hosts/` | List, hostname detail, create/update/rename/delete, contacts, policy roles, PTR overrides, groups, and DNS records. Host renames preserve contact relationships. |
+| `hosts/` | List, hostname detail, create/update/rename/delete, contacts, policy roles, PTR overrides, groups, and DNS records. Host renames preserve contact relationships. Legacy wildcard hosts are projected over unanchored DNS owners and do not create V2 inventory hosts. |
 | `hostgroups/` | List/detail, create/delete, and nested group, host, and owner reads and mutations. Legacy IDs are stable synthetic values. |
 | `ipaddresses/` | Collection/detail, assignment, address/MAC update, host move, and removal. Legacy IDs derive from the stable assignment UUID and remain stable across address/host changes. |
 | `labels/` | Collection/detail/name lookup, create, rename/update, and delete. |

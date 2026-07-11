@@ -1,6 +1,6 @@
 //! Legacy collection and detail response adapters.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
@@ -725,15 +725,41 @@ async fn create_host(
     payload: web::Json<LegacyCreateHost>,
 ) -> Result<HttpResponse, AppError> {
     let payload = payload.into_inner();
-    let name = Hostname::new(payload.name)?;
+    let dns_name = DnsName::new(payload.name)?;
     authorize(
         &req,
         &state,
         actions::host::CREATE,
         actions::resource_kinds::HOST,
-        name.as_str(),
+        dns_name.as_str(),
     )
     .await?;
+    if is_wildcard_dns_owner(&dns_name) {
+        if payload.network.is_some() || payload.ipaddress.is_some() {
+            return Err(AppError::validation(
+                "wildcard DNS owners cannot have IP inventory assignments",
+            ));
+        }
+        if !payload.contacts.is_empty() || !payload.comment.is_empty() {
+            return Err(AppError::validation(
+                "wildcard DNS owners cannot have host contacts or comments",
+            ));
+        }
+        state
+            .services
+            .records()
+            .create_record(CreateRecordInstance::new_unanchored(
+                RecordTypeName::new("TXT")?,
+                dns_name.as_str(),
+                payload.ttl.map(Ttl::new).transpose()?,
+                json!({"value": "v=spf1 -all"}),
+            )?)
+            .await?;
+        return Ok(HttpResponse::Created()
+            .append_header(("Location", format!("/api/v1/hosts/{}", dns_name.as_str())))
+            .finish());
+    }
+    let name = Hostname::new(dns_name.as_str())?;
     let mut zone = state
         .services
         .zones()
@@ -867,15 +893,36 @@ async fn delete_host(
     state: web::Data<AppState>,
     name: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    let name = Hostname::new(name.into_inner())?;
+    let dns_name = DnsName::new(name.into_inner())?;
     authorize(
         &req,
         &state,
         actions::host::DELETE,
         actions::resource_kinds::HOST,
-        name.as_str(),
+        dns_name.as_str(),
     )
     .await?;
+    if is_wildcard_dns_owner(&dns_name) {
+        let records = state
+            .services
+            .records()
+            .list_records(&PageRequest::all(), &RecordFilter::default())
+            .await?
+            .items
+            .into_iter()
+            .filter(|record| {
+                record.owner_kind().is_none() && record.owner_name() == dns_name.as_str()
+            })
+            .collect::<Vec<_>>();
+        if records.is_empty() {
+            return Err(AppError::not_found("host was not found"));
+        }
+        for record in records {
+            state.services.records().delete_record(record.id()).await?;
+        }
+        return Ok(HttpResponse::NoContent().finish());
+    }
+    let name = Hostname::new(dns_name.as_str())?;
     remove_host_contacts(&state, &name).await?;
     state.services.hosts().delete(&name).await?;
     Ok(HttpResponse::NoContent().finish())
@@ -1923,6 +1970,60 @@ fn host_json(
     })
 }
 
+fn is_wildcard_dns_owner(name: &DnsName) -> bool {
+    name.as_str().starts_with("*.")
+}
+
+fn wildcard_host_json(name: &DnsName, records: &[RecordInstance]) -> Result<Value, AppError> {
+    let host_records = records
+        .iter()
+        .filter(|record| record.owner_kind().is_none() && record.owner_name() == name.as_str())
+        .collect::<Vec<_>>();
+    let first = host_records
+        .iter()
+        .min_by_key(|record| record.created_at())
+        .ok_or_else(|| AppError::not_found("host was not found"))?;
+    let id = legacy_name_id(name.as_str());
+    let records_of = |kind: &str| {
+        let mut values = host_records
+            .iter()
+            .filter(|record| record.type_name().as_str() == kind)
+            .map(|record| {
+                let mut value = record_json(record, Some(id));
+                if kind == "NAPTR"
+                    && let Some(service) = value["service"].as_str()
+                {
+                    value["service"] = json!(service.to_ascii_lowercase());
+                }
+                value
+            })
+            .collect::<Vec<_>>();
+        if kind == "NAPTR" {
+            values.sort_by(|left, right| left["service"].as_str().cmp(&right["service"].as_str()));
+        }
+        values
+    };
+    let updated_at = host_records
+        .iter()
+        .map(|record| record.updated_at())
+        .max()
+        .unwrap_or_else(|| first.updated_at());
+
+    Ok(json!({
+        "id": id, "name": name.as_str(),
+        "zone": host_records.iter().find_map(|record| record.zone_id()).map(legacy_id),
+        "ttl": null, "comment": "", "ipaddresses": [],
+        "cnames": records_of("CNAME"), "mxs": records_of("MX"), "txts": records_of("TXT"),
+        "srvs": records_of("SRV"), "naptrs": records_of("NAPTR"),
+        "sshfps": records_of("SSHFP"),
+        "hinfo": records_of("HINFO").into_iter().next(),
+        "loc": records_of("LOC").into_iter().next(),
+        "hostgroups": [], "ptr_overrides": [], "roles": [], "bacnetid": null,
+        "communities": [], "contacts": [], "contact": "",
+        "created_at": first.created_at(), "updated_at": updated_at,
+    }))
+}
+
 async fn hosts(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -1963,6 +2064,22 @@ async fn hosts(
                 host_community_values(&state, host.id()).await?,
             )
         );
+    }
+    let wildcard_names = related
+        .records
+        .iter()
+        .filter(|record| record.owner_kind().is_none())
+        .filter_map(|record| {
+            let name = DnsName::new(record.owner_name()).ok()?;
+            is_wildcard_dns_owner(&name).then_some(name)
+        })
+        .collect::<BTreeSet<_>>();
+    for name in wildcard_names {
+        let id = legacy_name_id(name.as_str());
+        if query.id.is_some_and(|requested| requested != id) {
+            continue;
+        }
+        values.push(wildcard_host_json(&name, &related.records)?);
     }
     let values = values
         .into_iter()
@@ -2009,15 +2126,20 @@ async fn host_detail(
     state: web::Data<AppState>,
     name: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    let name = Hostname::new(name.into_inner())?;
+    let dns_name = DnsName::new(name.into_inner())?;
     authorize(
         &req,
         &state,
         actions::host::GET,
         actions::resource_kinds::HOST,
-        name.as_str(),
+        dns_name.as_str(),
     )
     .await?;
+    if is_wildcard_dns_owner(&dns_name) {
+        let related = host_related(&state).await?;
+        return Ok(HttpResponse::Ok().json(wildcard_host_json(&dns_name, &related.records)?));
+    }
+    let name = Hostname::new(dns_name.as_str())?;
     let host = state.services.hosts().get(&name).await?;
     let related = host_related(&state).await?;
     Ok(HttpResponse::Ok().json(host_json(

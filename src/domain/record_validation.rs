@@ -379,8 +379,16 @@ pub(crate) fn validate_owner_name(
     owner_name: &str,
     profile: Option<&RecordRfcProfile>,
 ) -> Result<(), AppError> {
+    let dns_name = DnsName::new(owner_name)?;
+    for (index, label) in dns_name.as_str().split('.').enumerate() {
+        if label.contains('*') && !(index == 0 && label == "*") {
+            return Err(AppError::validation(
+                "DNS wildcard is only allowed as the complete first owner label",
+            ));
+        }
+    }
+
     let Some(profile) = profile else {
-        DnsName::new(owner_name)?;
         return Ok(());
     };
 
