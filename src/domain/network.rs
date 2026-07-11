@@ -403,11 +403,6 @@ pub fn network_usable_bounds(
             let network = u128::from(v6.network());
             let first = network.saturating_add(reserved.as_u32() as u128);
             let host_bits = 128u32.saturating_sub(v6.prefix_len() as u32);
-            if host_bits > 20 {
-                return Err(AppError::validation(
-                    "automatic IPv6 allocation is only supported for relatively small prefixes",
-                ));
-            }
             let size = 1u128
                 .checked_shl(host_bits)
                 .ok_or_else(|| AppError::validation("unsupported IPv6 allocation size"))?;

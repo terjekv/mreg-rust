@@ -11,7 +11,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require};
+use crate::api::v2::authz::{request as authz_request, require};
 
 #[derive(Serialize, ToSchema)]
 pub struct RrsetResponse {
@@ -59,7 +59,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// Get an RRset by ID
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/rrsets/{id}",
+    path = "/api/v2/dns/rrsets/{id}",
     params(("id" = Uuid, Path, description = "RRset ID")),
     responses(
         (status = 200, description = "RRset found", body = RrsetResponse),
@@ -91,7 +91,7 @@ pub(crate) async fn get_rrset_endpoint(
 /// Delete an RRset
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/rrsets/{id}",
+    path = "/api/v2/dns/rrsets/{id}",
     params(("id" = Uuid, Path, description = "RRset ID")),
     responses(
         (status = 204, description = "RRset deleted"),

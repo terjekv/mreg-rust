@@ -29,7 +29,7 @@ pub struct HealthResponse {
 /// Health check
 #[utoipa::path(
     get,
-    path = "/api/v1/system/health",
+    path = "/api/v2/system/health",
     responses(
         (status = 200, description = "Service health", body = HealthResponse)
     ),
@@ -65,7 +65,7 @@ pub struct VersionResponse {
 /// Service version information
 #[utoipa::path(
     get,
-    path = "/api/v1/system/version",
+    path = "/api/v2/system/version",
     responses(
         (status = 200, description = "Version information", body = VersionResponse)
     ),
@@ -77,7 +77,7 @@ pub(crate) async fn version(state: web::Data<AppState>) -> Result<HttpResponse, 
         service: state.build_info.package_name.to_string(),
         version: state.build_info.version.to_string(),
         git_sha: state.build_info.git_sha.map(str::to_string),
-        api_base: "/api/v1",
+        api_base: "/api/v2",
     }))
 }
 
@@ -97,7 +97,7 @@ pub struct StatusResponse {
 /// Service status
 #[utoipa::path(
     get,
-    path = "/api/v1/system/status",
+    path = "/api/v2/system/status",
     responses(
         (status = 200, description = "Service status", body = StatusResponse)
     ),
@@ -142,7 +142,7 @@ pub(crate) async fn status(
 /// List audit history events
 #[utoipa::path(
     get,
-    path = "/api/v1/system/history",
+    path = "/api/v2/system/history",
     responses(
         (status = 200, description = "List of history events", body = SystemListResponse)
     ),

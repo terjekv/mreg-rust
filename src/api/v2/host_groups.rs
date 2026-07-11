@@ -133,7 +133,7 @@ impl HostGroupResponse {
 /// List host groups
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/host-groups",
+    path = "/api/v2/inventory/host-groups",
     responses(
         (status = 200, description = "Paginated list of host groups", body = HostGroupPageResponse)
     ),
@@ -166,7 +166,7 @@ pub(crate) async fn list_host_groups(
 /// Create a host group
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/host-groups",
+    path = "/api/v2/inventory/host-groups",
     request_body = CreateHostGroupRequest,
     responses(
         (status = 201, description = "Host group created", body = HostGroupResponse),
@@ -210,7 +210,7 @@ pub(crate) async fn create_host_group(
 /// Get a host group by name
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/host-groups/{name}",
+    path = "/api/v2/inventory/host-groups/{name}",
     params(("name" = String, Path, description = "Host group name")),
     responses(
         (status = 200, description = "Host group found", body = HostGroupResponse),
@@ -242,7 +242,7 @@ pub(crate) async fn get_host_group(
 /// Delete a host group
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/host-groups/{name}",
+    path = "/api/v2/inventory/host-groups/{name}",
     params(("name" = String, Path, description = "Host group name")),
     responses(
         (status = 204, description = "Host group deleted"),

@@ -91,6 +91,23 @@ pub(super) fn add_excluded_range_in_state(
     Ok(range)
 }
 
+pub(super) fn delete_excluded_range_in_state(
+    state: &mut MemoryState,
+    network: &CidrValue,
+    range_id: Uuid,
+) -> Result<(), AppError> {
+    let ranges = state
+        .excluded_ranges
+        .get_mut(&network.as_str())
+        .ok_or_else(|| AppError::not_found("excluded range was not found"))?;
+    let before = ranges.len();
+    ranges.retain(|range| range.id() != range_id);
+    if ranges.len() == before {
+        return Err(AppError::not_found("excluded range was not found"));
+    }
+    Ok(())
+}
+
 pub(super) fn list_networks_in_state(
     state: &MemoryState,
     page: &PageRequest,
@@ -367,6 +384,15 @@ impl NetworkStore for MemoryStorage {
     ) -> Result<ExcludedRange, AppError> {
         let mut state = self.state.write().await;
         add_excluded_range_in_state(&mut state, network, command)
+    }
+
+    async fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: Uuid,
+    ) -> Result<(), AppError> {
+        let mut state = self.state.write().await;
+        delete_excluded_range_in_state(&mut state, network, range_id)
     }
 
     async fn list_used_addresses(

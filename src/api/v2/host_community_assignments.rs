@@ -114,7 +114,7 @@ impl HostCommunityAssignmentResponse {
 /// List host-community assignments
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/network/host-community-assignments",
+    path = "/api/v2/policy/network/host-community-assignments",
     responses(
         (status = 200, description = "Paginated list of assignments", body = HostCommunityAssignmentPageResponse)
     ),
@@ -151,7 +151,7 @@ pub(crate) async fn list_host_community_assignments(
 /// Create a host-community assignment
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/network/host-community-assignments",
+    path = "/api/v2/policy/network/host-community-assignments",
     request_body = CreateHostCommunityAssignmentRequest,
     responses(
         (status = 201, description = "Assignment created", body = HostCommunityAssignmentResponse),
@@ -198,7 +198,7 @@ pub(crate) async fn create_host_community_assignment(
 /// Get a host-community assignment by ID
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/network/host-community-assignments/{mapping_id}",
+    path = "/api/v2/policy/network/host-community-assignments/{mapping_id}",
     params(("mapping_id" = Uuid, Path, description = "Mapping ID")),
     responses(
         (status = 200, description = "Assignment found", body = HostCommunityAssignmentResponse),
@@ -234,7 +234,7 @@ pub(crate) async fn get_host_community_assignment(
 /// Delete a host-community assignment
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/network/host-community-assignments/{mapping_id}",
+    path = "/api/v2/policy/network/host-community-assignments/{mapping_id}",
     params(("mapping_id" = Uuid, Path, description = "Mapping ID")),
     responses(
         (status = 204, description = "Assignment deleted"),

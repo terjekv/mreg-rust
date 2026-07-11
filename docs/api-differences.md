@@ -8,14 +8,14 @@ This document describes the key differences between the mreg-rust REST API and t
 
 | Concept | Old mreg | mreg-rust |
 |---------|----------|-----------|
-| Forward zones | `/api/v1/zones/forward/` | `/api/v1/dns/forward-zones` |
-| Reverse zones | `/api/v1/zones/reverse/` | `/api/v1/dns/reverse-zones` |
-| IP addresses | `/api/v1/ipaddresses/` | `/api/v1/inventory/ip-addresses` |
-| PTR overrides | `/api/v1/ptroverrides/` | `/api/v1/dns/ptr-overrides` |
-| Host groups | `/api/v1/hostgroups/` | `/api/v1/inventory/host-groups` |
-| Host policy | `/api/v1/hostpolicy/atoms/` | `/api/v1/policy/host/atoms` |
-| Host contacts | (on host model) | `/api/v1/inventory/host-contacts` |
-| Communities | (nested under networks) | `/api/v1/policy/network/communities` |
+| Forward zones | `/api/v1/zones/forward/` | `/api/v2/dns/forward-zones` |
+| Reverse zones | `/api/v1/zones/reverse/` | `/api/v2/dns/reverse-zones` |
+| IP addresses | `/api/v1/ipaddresses/` | `/api/v2/inventory/ip-addresses` |
+| PTR overrides | `/api/v1/ptroverrides/` | `/api/v2/dns/ptr-overrides` |
+| Host groups | `/api/v1/hostgroups/` | `/api/v2/inventory/host-groups` |
+| Host policy | `/api/v1/hostpolicy/atoms/` | `/api/v2/policy/host/atoms` |
+| Host contacts | (on host model) | `/api/v2/inventory/host-contacts` |
+| Communities | (nested under networks) | `/api/v2/policy/network/communities` |
 
 mreg-rust uses kebab-case consistently. The old mreg used a mix of concatenated words and nested paths.
 
@@ -36,14 +36,14 @@ mreg-rust uses kebab-case consistently. The old mreg used a mix of concatenated 
 **mreg-rust** has a single generic record endpoint:
 
 ```
-/api/v1/dns/records          (all record types)
-/api/v1/dns/record-types     (type definitions)
-/api/v1/dns/rrsets           (resource record sets)
+/api/v2/dns/records          (all record types)
+/api/v2/dns/record-types     (type definitions)
+/api/v2/dns/rrsets           (resource record sets)
 ```
 
 To create a CNAME in mreg-rust:
 ```json
-POST /api/v1/dns/records
+POST /api/v2/dns/records
 {
   "type_name": "CNAME",
   "owner_kind": "host",
@@ -58,11 +58,11 @@ This unified model supports all 18 built-in types plus runtime-defined custom ty
 
 ### HINFO
 
-**Old mreg**: HINFO was a field on the host model (`hinfo` field on `/api/v1/inventory/hosts/{name}`).
+**Old mreg**: HINFO was included in the host representation at `/api/v1/hosts/{name}` and also had `/api/v1/hinfos/` endpoints.
 
 **mreg-rust**: HINFO is a regular DNS record type. Create it like any other record:
 ```json
-POST /api/v1/dns/records
+POST /api/v2/dns/records
 {
   "type_name": "HINFO",
   "owner_kind": "host",
@@ -75,7 +75,7 @@ POST /api/v1/dns/records
 
 **Old mreg**: Contact was a text field on the host model.
 
-**mreg-rust**: Contacts are a separate entity (`/api/v1/inventory/host-contacts`) with email, display name, and a many-to-many relationship with hosts.
+**mreg-rust**: Contacts are a separate entity (`/api/v2/inventory/host-contacts`) with email, display name, and a many-to-many relationship with hosts.
 
 ### Wildcard hosts
 
@@ -87,7 +87,7 @@ POST /api/v1/dns/records
 
 **Old mreg**: IPs could be managed inline when creating/updating hosts, or via `/api/v1/ipaddresses/`.
 
-**mreg-rust**: IPs can be managed via `/api/v1/inventory/ip-addresses` or inline during host creation. `POST /api/v1/inventory/hosts` accepts an optional `ip_addresses` array:
+**mreg-rust**: IPs can be managed via `/api/v2/inventory/ip-addresses` or inline during host creation. `POST /api/v2/inventory/hosts` accepts an optional `ip_addresses` array:
 
 ```json
 {
@@ -102,7 +102,7 @@ POST /api/v1/dns/records
 }
 ```
 
-Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation), `allocation` (`"first_free"` or `"random"`, defaults to `"first_free"`), and optional `mac_address`. The request is atomic — if any IP assignment fails, the host is not created. Omitting `ip_addresses` creates the host without IPs (standalone `POST /api/v1/inventory/ip-addresses` still works for later assignment). IP assignment auto-creates A/AAAA and PTR records.
+Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation), `allocation` (`"first_free"` or `"random"`, defaults to `"first_free"`), and optional `mac_address`. The request is atomic — if any IP assignment fails, the host is not created. Omitting `ip_addresses` creates the host without IPs (standalone `POST /api/v2/inventory/ip-addresses` still works for later assignment). IP assignment auto-creates A/AAAA and PTR records.
 
 ### Network fields
 
@@ -116,10 +116,10 @@ Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation)
 
 **mreg-rust**: Cursor-based pagination with UUID cursors:
 ```
-GET /api/v1/inventory/hosts?limit=50
+GET /api/v2/inventory/hosts?limit=50
 → { items: [...], total: 123, next_cursor: "uuid-here" }
 
-GET /api/v1/inventory/hosts?limit=50&after=uuid-here
+GET /api/v2/inventory/hosts?limit=50&after=uuid-here
 → next page
 ```
 
@@ -129,9 +129,9 @@ GET /api/v1/inventory/hosts?limit=50&after=uuid-here
 
 **mreg-rust**: Operator-based filtering with `field__operator=value` syntax:
 ```
-GET /api/v1/inventory/hosts?name__contains=prod&zone__iequals=example.org
-GET /api/v1/inventory/hosts?created_at__gt=2024-01-01T00:00:00Z
-GET /api/v1/inventory/networks?family=4&description__icontains=production
+GET /api/v2/inventory/hosts?name__contains=prod&zone__iequals=example.org
+GET /api/v2/inventory/hosts?created_at__gt=2024-01-01T00:00:00Z
+GET /api/v2/inventory/networks?family=4&description__icontains=production
 ```
 
 See [pagination-sort-filter.md](pagination-sort-filter.md) for the full operator reference.
@@ -166,10 +166,10 @@ Authorization is still delegated to Treetop or the current development bypass/de
 
 ## Features in mreg-rust not in old mreg
 
-- **OpenAPI documentation** at `/swagger-ui/` with auto-generated specs
+- **OpenAPI documentation** at `/docs/` with auto-generated specs
 - **RFC 3597 raw RDATA** for custom/unknown DNS record types
 - **Import/export workflows** for bulk operations
-- **Audit trail** via `GET /api/v1/system/history`
+- **Audit trail** via `GET /api/v2/system/history`
 - **18 built-in DNS record types** (including CAA, TLSA, SVCB, HTTPS)
 - **Operator-based filtering** with negation, substring, comparison operators
 

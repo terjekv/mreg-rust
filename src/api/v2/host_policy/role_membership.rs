@@ -7,7 +7,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require};
+use crate::api::v2::authz::{request as authz_request, require};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(add_atom_to_role)
@@ -25,7 +25,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// Add an atom to a role
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/host/roles/{name}/atoms/{atom}",
+    path = "/api/v2/policy/host/roles/{name}/atoms/{atom}",
     params(
         ("name" = String, Path, description = "Role name"),
         ("atom" = String, Path, description = "Atom name"),
@@ -68,7 +68,7 @@ pub(crate) async fn add_atom_to_role(
 /// Remove an atom from a role
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/host/roles/{name}/atoms/{atom}",
+    path = "/api/v2/policy/host/roles/{name}/atoms/{atom}",
     params(
         ("name" = String, Path, description = "Role name"),
         ("atom" = String, Path, description = "Atom name"),
@@ -110,7 +110,7 @@ pub(crate) async fn remove_atom_from_role(
 /// Add a host to a role
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/host/roles/{name}/hosts/{host}",
+    path = "/api/v2/policy/host/roles/{name}/hosts/{host}",
     params(
         ("name" = String, Path, description = "Role name"),
         ("host" = String, Path, description = "Host name"),
@@ -152,7 +152,7 @@ pub(crate) async fn add_host_to_role(
 /// Remove a host from a role
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/host/roles/{name}/hosts/{host}",
+    path = "/api/v2/policy/host/roles/{name}/hosts/{host}",
     params(
         ("name" = String, Path, description = "Role name"),
         ("host" = String, Path, description = "Host name"),
@@ -193,7 +193,7 @@ pub(crate) async fn remove_host_from_role(
 /// Add a label to a role
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/host/roles/{name}/labels/{label}",
+    path = "/api/v2/policy/host/roles/{name}/labels/{label}",
     params(
         ("name" = String, Path, description = "Role name"),
         ("label" = String, Path, description = "Label name"),
@@ -235,7 +235,7 @@ pub(crate) async fn add_label_to_role(
 /// Remove a label from a role
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/host/roles/{name}/labels/{label}",
+    path = "/api/v2/policy/host/roles/{name}/labels/{label}",
     params(
         ("name" = String, Path, description = "Role name"),
         ("label" = String, Path, description = "Label name"),
@@ -277,14 +277,14 @@ pub(crate) async fn remove_label_from_role(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_role_and_add_atom() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

@@ -132,7 +132,7 @@ pub struct AuthProvidersResponse {
 /// List configured authentication providers.
 #[utoipa::path(
     get,
-    path = "/api/v1/auth/providers",
+    path = "/api/v2/auth/providers",
     responses(
         (status = 200, description = "Configured authentication providers", body = AuthProvidersResponse)
     ),
@@ -159,7 +159,7 @@ pub struct LogoutAllRequest {
 /// Login and obtain a bearer token.
 #[utoipa::path(
     post,
-    path = "/api/v1/auth/login",
+    path = "/api/v2/auth/login",
     request_body = LoginRequest,
     responses(
         (status = 200, description = "Authenticated session", body = LoginResponse),
@@ -204,7 +204,7 @@ async fn login_handler(
 /// Show the authenticated principal for the current request.
 #[utoipa::path(
     get,
-    path = "/api/v1/auth/me",
+    path = "/api/v2/auth/me",
     responses(
         (status = 200, description = "Current authenticated principal", body = MeResponse),
         (status = 401, description = "Authentication required")
@@ -228,7 +228,7 @@ pub(crate) async fn me(
 /// Revoke the current bearer token.
 #[utoipa::path(
     post,
-    path = "/api/v1/auth/logout",
+    path = "/api/v2/auth/logout",
     responses(
         (status = 204, description = "Current token revoked"),
         (status = 401, description = "Authentication required"),
@@ -249,7 +249,7 @@ pub(crate) async fn logout(
 /// Revoke all tokens for a principal.
 #[utoipa::path(
     post,
-    path = "/api/v1/auth/logout-all",
+    path = "/api/v2/auth/logout-all",
     request_body = LogoutAllRequest,
     responses(
         (status = 204, description = "All tokens revoked for the principal"),

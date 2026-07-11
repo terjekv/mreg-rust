@@ -388,6 +388,7 @@ pub struct UpdateForwardZone {
     pub primary_ns: Option<DnsName>,
     pub nameservers: Option<Vec<DnsName>>,
     pub email: Option<EmailAddressValue>,
+    pub serial_no: Option<SerialNumber>,
     pub refresh: Option<SoaSeconds>,
     pub retry: Option<SoaSeconds>,
     pub expire: Option<SoaSeconds>,

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use uuid::Uuid;
 
 use crate::{
     domain::{
@@ -37,6 +38,11 @@ pub trait NetworkStore: Send + Sync {
         network: &CidrValue,
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError>;
+    async fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: Uuid,
+    ) -> Result<(), AppError>;
     async fn list_used_addresses(
         &self,
         cidr: &CidrValue,

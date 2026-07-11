@@ -470,6 +470,17 @@ impl<'c> TxNetworkStore for PgTxStorage<'c> {
             command,
         )
     }
+    fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: Uuid,
+    ) -> Result<(), AppError> {
+        PostgresStorage::delete_excluded_range_in_conn(
+            &mut self.conn.borrow_mut(),
+            network,
+            range_id,
+        )
+    }
     fn list_used_addresses(
         &self,
         cidr: &CidrValue,

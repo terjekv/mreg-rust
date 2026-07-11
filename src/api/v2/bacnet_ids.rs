@@ -93,7 +93,7 @@ impl BacnetResponse {
 /// List BACnet ID assignments
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/bacnet-ids",
+    path = "/api/v2/inventory/bacnet-ids",
     responses(
         (status = 200, description = "Paginated list of BACnet ID assignments", body = BacnetPageResponse)
     ),
@@ -123,7 +123,7 @@ pub(crate) async fn list_bacnet_ids(
 /// Create a BACnet ID assignment
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/bacnet-ids",
+    path = "/api/v2/inventory/bacnet-ids",
     request_body = CreateBacnetRequest,
     responses(
         (status = 201, description = "BACnet ID assigned", body = BacnetResponse),
@@ -162,7 +162,7 @@ pub(crate) async fn create_bacnet_id(
 /// Get a BACnet ID assignment
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/bacnet-ids/{bacnet_id}",
+    path = "/api/v2/inventory/bacnet-ids/{bacnet_id}",
     params(("bacnet_id" = u32, Path, description = "BACnet ID")),
     responses(
         (status = 200, description = "BACnet ID found", body = BacnetResponse),
@@ -194,7 +194,7 @@ pub(crate) async fn get_bacnet_id(
 /// Delete a BACnet ID assignment
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/bacnet-ids/{bacnet_id}",
+    path = "/api/v2/inventory/bacnet-ids/{bacnet_id}",
     params(("bacnet_id" = u32, Path, description = "BACnet ID")),
     responses(
         (status = 204, description = "BACnet ID deleted"),

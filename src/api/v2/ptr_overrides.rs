@@ -99,7 +99,7 @@ impl PtrOverrideResponse {
 /// List PTR overrides
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/ptr-overrides",
+    path = "/api/v2/dns/ptr-overrides",
     responses(
         (status = 200, description = "Paginated list of PTR overrides", body = PtrOverridePageResponse)
     ),
@@ -132,7 +132,7 @@ pub(crate) async fn list_ptr_overrides(
 /// Create a PTR override
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/ptr-overrides",
+    path = "/api/v2/dns/ptr-overrides",
     request_body = CreatePtrOverrideRequest,
     responses(
         (status = 201, description = "PTR override created", body = PtrOverrideResponse),
@@ -171,7 +171,7 @@ pub(crate) async fn create_ptr_override(
 /// Get a PTR override by address
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/ptr-overrides/{address}",
+    path = "/api/v2/dns/ptr-overrides/{address}",
     params(("address" = String, Path, description = "IP address")),
     responses(
         (status = 200, description = "PTR override found", body = PtrOverrideResponse),
@@ -203,7 +203,7 @@ pub(crate) async fn get_ptr_override(
 /// Delete a PTR override
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/ptr-overrides/{address}",
+    path = "/api/v2/dns/ptr-overrides/{address}",
     params(("address" = String, Path, description = "IP address")),
     responses(
         (status = 204, description = "PTR override deleted"),

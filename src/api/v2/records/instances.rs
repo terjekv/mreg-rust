@@ -17,8 +17,8 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require, require_all};
-use crate::api::v1::records::typed_data::RecordKind;
+use crate::api::v2::authz::{request as authz_request, require, require_all};
+use crate::api::v2::records::typed_data::RecordKind;
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordRequest {
@@ -77,10 +77,10 @@ impl UpdateRecordRequest {
 /// matching the historical shape.  Consumers can dispatch on `type_name`
 /// against [`RecordKind`] to get a typed `data` payload for the 25 built-in
 /// types, and fall through to
-/// [`crate::api::v1::records::typed_data::OpaqueRecordKind`] for
+/// [`crate::api::v2::records::typed_data::OpaqueRecordKind`] for
 /// user-registered or RFC 3597 records.  The published OpenAPI schema is
 /// `oneOf` *without* a discriminator object — see the
-/// [`crate::api::v1::records::typed_data`] module docs for why and what client
+/// [`crate::api::v2::records::typed_data`] module docs for why and what client
 /// generators should do instead.
 #[derive(Serialize, ToSchema)]
 pub struct RecordResponse {
@@ -140,7 +140,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// Create a new record
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/records",
+    path = "/api/v2/dns/records",
     request_body = CreateRecordRequest,
     responses(
         (status = 201, description = "Record created", body = RecordResponse),
@@ -198,7 +198,7 @@ pub(crate) async fn create_record(
 /// Get a record by ID
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/records/{id}",
+    path = "/api/v2/dns/records/{id}",
     params(("id" = Uuid, Path, description = "Record ID")),
     responses(
         (status = 200, description = "Record found", body = RecordResponse),
@@ -230,7 +230,7 @@ pub(crate) async fn get_record_endpoint(
 /// Update a record
 #[utoipa::path(
     patch,
-    path = "/api/v1/dns/records/{id}",
+    path = "/api/v2/dns/records/{id}",
     params(("id" = Uuid, Path, description = "Record ID")),
     request_body = UpdateRecordRequest,
     responses(
@@ -290,7 +290,7 @@ pub(crate) async fn update_record_endpoint(
 /// Delete a record
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/records/{id}",
+    path = "/api/v2/dns/records/{id}",
     params(("id" = Uuid, Path, description = "Record ID")),
     responses(
         (status = 204, description = "Record deleted"),
@@ -323,14 +323,14 @@ pub(crate) async fn delete_record_endpoint(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn built_in_cname_record_can_be_created_for_host() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -372,7 +372,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -431,7 +431,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -506,7 +506,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -580,7 +580,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -691,7 +691,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -773,7 +773,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

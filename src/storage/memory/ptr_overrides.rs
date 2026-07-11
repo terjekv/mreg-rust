@@ -19,31 +19,15 @@ pub(super) fn create_ptr_override_in_state(
     state: &mut MemoryState,
     command: CreatePtrOverride,
 ) -> Result<PtrOverride, AppError> {
-    let host = state
+    state
         .hosts
         .get(command.host_name().as_str())
-        .cloned()
         .ok_or_else(|| {
             AppError::not_found(format!(
                 "host '{}' was not found",
                 command.host_name().as_str()
             ))
         })?;
-    let assignment = state
-        .ip_addresses
-        .get(&command.address().as_str())
-        .cloned()
-        .ok_or_else(|| {
-            AppError::not_found(format!(
-                "ip address '{}' was not found",
-                command.address().as_str()
-            ))
-        })?;
-    if assignment.host_id() != host.id() {
-        return Err(AppError::validation(
-            "PTR override address must belong to the supplied host",
-        ));
-    }
     let key = command.address().as_str();
     if state.ptr_overrides.contains_key(&key) {
         return Err(AppError::conflict(format!(

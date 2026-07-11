@@ -130,9 +130,9 @@ use super::{
     },
     networks::{
         add_excluded_range_in_state, count_unused_addresses_in_state, create_network_in_state,
-        delete_network_in_state, get_network_by_cidr_in_state, list_excluded_ranges_in_state,
-        list_networks_in_state, list_unused_addresses_in_state, list_used_addresses_in_state,
-        update_network_in_state,
+        delete_excluded_range_in_state, delete_network_in_state, get_network_by_cidr_in_state,
+        list_excluded_ranges_in_state, list_networks_in_state, list_unused_addresses_in_state,
+        list_used_addresses_in_state, update_network_in_state,
     },
     ptr_overrides::{
         create_ptr_override_in_state, delete_ptr_override_in_state,
@@ -513,6 +513,13 @@ impl<'tx> TxNetworkStore for MemTxStorage<'tx> {
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError> {
         add_excluded_range_in_state(&mut self.state.borrow_mut(), network, command)
+    }
+    fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: Uuid,
+    ) -> Result<(), AppError> {
+        delete_excluded_range_in_state(&mut self.state.borrow_mut(), network, range_id)
     }
     fn list_used_addresses(
         &self,

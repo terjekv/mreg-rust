@@ -41,7 +41,7 @@ DATABASE_URL="postgres://mreg:mreg@localhost:5433/mreg" diesel migration run
 Five-layer design with pluggable storage backends:
 
 ```
-src/api/v1/        → Actix-web HTTP handlers, request/response DTOs, OpenAPI via utoipa
+src/api/v2/        → Actix-web HTTP handlers, request/response DTOs, OpenAPI via utoipa
 src/authn/         → Authentication providers (none/forward/LDAP), JWT issuing/validation
 src/services/      → Audit recording + event emission on mutations, delegates to storage
 src/storage/       → Storage trait definitions + two backend implementations
@@ -79,8 +79,8 @@ Follow the existing pattern across all layers (use labels as the simplest exampl
 3. Memory backend: `src/storage/memory/foo.rs`
 4. Postgres backend: `src/storage/postgres/foo.rs`
 5. Service: `src/services/foo.rs`
-6. API handler: `src/api/v1/foo.rs`
-7. Register in `src/api/mod.rs` (OpenAPI paths + schemas) and `src/api/v1/mod.rs` (routes)
+6. API handler: `src/api/v2/foo.rs`
+7. Register in `src/api/mod.rs` (OpenAPI paths + schemas) and `src/api/v2/mod.rs` (routes)
 8. Register store trait in `src/storage/mod.rs` and both backend mod.rs files
 9. DB migration in `migrations/` (schema.rs auto-regenerates), model in `src/db/models.rs`
 

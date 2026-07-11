@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require};
+use crate::api::v2::authz::{request as authz_request, require};
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordFieldSchemaRequest {
@@ -115,7 +115,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// Create a new record type
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/record-types",
+    path = "/api/v2/dns/record-types",
     request_body = CreateRecordTypeRequest,
     responses(
         (status = 201, description = "Record type created", body = RecordTypeResponse),
@@ -152,7 +152,7 @@ pub(crate) async fn create_record_type(
 /// Delete a record type
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/record-types/{name}",
+    path = "/api/v2/dns/record-types/{name}",
     params(("name" = String, Path, description = "Record type name")),
     responses(
         (status = 204, description = "Record type deleted"),

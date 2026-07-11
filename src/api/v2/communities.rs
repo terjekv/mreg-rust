@@ -107,7 +107,7 @@ impl CommunityResponse {
 /// List communities
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/network/communities",
+    path = "/api/v2/policy/network/communities",
     responses(
         (status = 200, description = "Paginated list of communities", body = CommunityPageResponse)
     ),
@@ -140,7 +140,7 @@ pub(crate) async fn list_communities(
 /// Create a community
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/network/communities",
+    path = "/api/v2/policy/network/communities",
     request_body = CreateCommunityRequest,
     responses(
         (status = 201, description = "Community created", body = CommunityResponse),
@@ -186,7 +186,7 @@ pub(crate) async fn create_community(
 /// Get a community by ID
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/network/communities/{community_id}",
+    path = "/api/v2/policy/network/communities/{community_id}",
     params(("community_id" = Uuid, Path, description = "Community ID")),
     responses(
         (status = 200, description = "Community found", body = CommunityResponse),
@@ -218,7 +218,7 @@ pub(crate) async fn get_community(
 /// Delete a community
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/network/communities/{community_id}",
+    path = "/api/v2/policy/network/communities/{community_id}",
     params(("community_id" = Uuid, Path, description = "Community ID")),
     responses(
         (status = 204, description = "Community deleted"),
@@ -251,14 +251,14 @@ pub(crate) async fn delete_community(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_group_policy_community_and_mapping() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

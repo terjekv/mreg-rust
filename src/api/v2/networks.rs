@@ -435,7 +435,7 @@ impl ExcludedRangeResponse {
 /// List networks with optional filters
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/networks",
+    path = "/api/v2/inventory/networks",
     responses(
         (status = 200, description = "Paginated list of networks", body = NetworkPageResponse)
     ),
@@ -473,7 +473,7 @@ pub(crate) async fn list_networks(
 /// Create a network
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/networks",
+    path = "/api/v2/inventory/networks",
     request_body = CreateNetworkRequest,
     responses(
         (status = 201, description = "Network created", body = NetworkResponse),
@@ -517,7 +517,7 @@ pub(crate) async fn create_network(
 /// Get a network by CIDR
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/networks/{cidr}",
+    path = "/api/v2/inventory/networks/{cidr}",
     params(("cidr" = String, Path, description = "Network CIDR")),
     responses(
         (status = 200, description = "Network found", body = NetworkResponse),
@@ -549,7 +549,7 @@ pub(crate) async fn get_network(
 /// Update a network
 #[utoipa::path(
     patch,
-    path = "/api/v1/inventory/networks/{cidr}",
+    path = "/api/v2/inventory/networks/{cidr}",
     params(("cidr" = String, Path, description = "Network CIDR")),
     request_body = UpdateNetworkRequest,
     responses(
@@ -585,7 +585,7 @@ pub(crate) async fn update_network(
 /// List used addresses in a network
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/networks/{cidr}/used_addresses",
+    path = "/api/v2/inventory/networks/{cidr}/used_addresses",
     params(("cidr" = String, Path, description = "Network CIDR")),
     responses(
         (status = 200, description = "List of used IP addresses in the network", body = UsedAddressPageResponse)
@@ -620,7 +620,7 @@ pub(crate) async fn list_used_addresses(
 /// List unused addresses in a network
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/networks/{cidr}/unused_addresses",
+    path = "/api/v2/inventory/networks/{cidr}/unused_addresses",
     params(("cidr" = String, Path, description = "Network CIDR")),
     responses(
         (status = 200, description = "List of unused IP addresses in the network", body = UnusedAddressListResponse)
@@ -657,7 +657,7 @@ pub(crate) async fn list_unused_addresses(
 /// Delete a network
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/networks/{cidr}",
+    path = "/api/v2/inventory/networks/{cidr}",
     params(("cidr" = String, Path, description = "Network CIDR")),
     responses(
         (status = 204, description = "Network deleted"),
@@ -689,7 +689,7 @@ pub(crate) async fn delete_network(
 /// List excluded ranges for a network
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/networks/{cidr}/excluded-ranges",
+    path = "/api/v2/inventory/networks/{cidr}/excluded-ranges",
     params(("cidr" = String, Path, description = "Network CIDR")),
     responses(
         (status = 200, description = "List of excluded ranges", body = ExcludedRangePageResponse)
@@ -727,7 +727,7 @@ pub(crate) async fn list_excluded_ranges(
 /// Create an excluded range for a network
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/networks/excluded-ranges",
+    path = "/api/v2/inventory/networks/excluded-ranges",
     request_body = CreateExcludedRangeRequest,
     responses(
         (status = 201, description = "Excluded range created", body = ExcludedRangeResponse),
@@ -779,14 +779,14 @@ fn default_reserved() -> u32 {
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_network_and_excluded_range() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -819,7 +819,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

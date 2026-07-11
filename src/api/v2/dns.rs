@@ -25,7 +25,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// List record types
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/record-types",
+    path = "/api/v2/dns/record-types",
     responses(
         (status = 200, description = "List of record types", body = SystemListResponse)
     ),
@@ -61,7 +61,7 @@ pub(crate) async fn record_types(
 /// List RRsets
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/rrsets",
+    path = "/api/v2/dns/rrsets",
     responses(
         (status = 200, description = "List of RRsets", body = SystemListResponse)
     ),
@@ -122,7 +122,7 @@ impl ListRecordsQuery {
 /// List records with optional filters
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/records",
+    path = "/api/v2/dns/records",
     responses(
         (status = 200, description = "List of records", body = SystemListResponse)
     ),

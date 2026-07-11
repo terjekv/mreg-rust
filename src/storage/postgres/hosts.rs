@@ -329,7 +329,12 @@ impl PostgresStorage {
 
         let (network, address) = if let Some(address) = command.address().cloned() {
             let network = Self::query_network_containing_ip(connection, &address)?;
-            Self::ensure_address_usable(connection, &network, &address)?;
+            Self::ensure_address_usable(
+                connection,
+                &network,
+                &address,
+                command.allow_reserved_addresses(),
+            )?;
             (network, address)
         } else {
             let target_network = command.network().ok_or_else(|| {
@@ -351,12 +356,14 @@ impl PostgresStorage {
             command.mac_address(),
         )?;
 
+        let assignment_id = command.assignment_id().unwrap_or_else(Uuid::new_v4);
         let assignment = sql_query(
-            "INSERT INTO ip_addresses (host_id, attachment_id, address, family, mac_address)
-             VALUES ($1, $2, $3::inet, $4, $5)
-             RETURNING id, host_id, attachment_id, host(address) AS address, family::int AS family, $6 AS network_id,
+            "INSERT INTO ip_addresses (id, host_id, attachment_id, address, family, mac_address)
+             VALUES ($1, $2, $3, $4::inet, $5, $6)
+             RETURNING id, host_id, attachment_id, host(address) AS address, family::int AS family, $7 AS network_id,
                        mac_address, created_at, updated_at",
         )
+        .bind::<SqlUuid, _>(assignment_id)
         .bind::<SqlUuid, _>(host.id())
         .bind::<SqlUuid, _>(attachment.id())
         .bind::<Text, _>(address.as_str())

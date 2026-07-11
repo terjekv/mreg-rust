@@ -9,7 +9,7 @@ These three systems serve different purposes and should not be confused:
 | Concern | Mechanism | Purpose | Audience |
 |---------|-----------|---------|----------|
 | **Logging** (`tracing`) | Structured log lines to stdout/stderr | Operational diagnostics — request tracing, error details, startup info | Operators, log aggregators (ELK, Datadog) |
-| **Audit** (`/api/v1/system/history`) | Immutable records in the database via `AuditStore` | Compliance and accountability — who changed what, when | Security teams, compliance audits, internal forensics |
+| **Audit** (`/api/v2/system/history`) | Immutable records in the database via `AuditStore` | Compliance and accountability — who changed what, when | Security teams, compliance audits, internal forensics |
 | **Events** (`EventSink`) | Fire-and-forget delivery to external systems | Real-time integration — trigger workflows, sync caches, notify downstream | External services, automation pipelines |
 
 **Logging** is about what the server is doing. It includes HTTP requests, SQL queries, startup messages, and errors. It is configured via `RUST_LOG` and `MREG_JSON_LOGS`.
@@ -129,7 +129,7 @@ Build with: `cargo build --features redis`
 
 Sink failures are **fire-and-forget**. A failing sink never blocks or rolls back a mutation — the storage operation and audit record have already succeeded. Failures are logged at `warn` level.
 
-For guaranteed delivery, consumers should use the audit history API (`GET /api/v1/system/history`) as the source of truth and treat events as best-effort notifications.
+For guaranteed delivery, consumers should use the audit history API (`GET /api/v2/system/history`) as the source of truth and treat events as best-effort notifications.
 
 ## Feature flags
 

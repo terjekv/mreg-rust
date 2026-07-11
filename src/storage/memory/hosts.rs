@@ -79,7 +79,12 @@ pub(super) fn assign_ip_in_state(
 
     let (network, address) = if let Some(address) = command.address().cloned() {
         let network = most_specific_network_for_address(state, &address)?;
-        ensure_address_is_usable(state, &network, &address)?;
+        ensure_address_is_usable(
+            state,
+            &network,
+            &address,
+            command.allow_reserved_addresses(),
+        )?;
         (network, address)
     } else {
         let wanted_network = command.network().cloned().ok_or_else(|| {
@@ -115,7 +120,7 @@ pub(super) fn assign_ip_in_state(
         command.mac_address().cloned(),
     )?;
     let assignment = IpAddressAssignment::restore(
-        Uuid::new_v4(),
+        command.assignment_id().unwrap_or_else(Uuid::new_v4),
         host.id(),
         attachment.id(),
         address,
@@ -193,18 +198,21 @@ fn ensure_address_is_usable(
     state: &MemoryState,
     network: &Network,
     address: &IpAddressValue,
+    allow_reserved: bool,
 ) -> Result<(), AppError> {
     if !cidr_contains(network.cidr(), address) {
         return Err(AppError::validation(
             "IP address is outside the selected network",
         ));
     }
-    let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
-    let value = ip_to_u128(address.as_inner());
-    if value < first || value > last {
-        return Err(AppError::validation(
-            "IP address falls inside reserved or unusable network space",
-        ));
+    if !allow_reserved {
+        let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+        let value = ip_to_u128(address.as_inner());
+        if value < first || value > last {
+            return Err(AppError::validation(
+                "IP address falls inside reserved or unusable network space",
+            ));
+        }
     }
     if state
         .excluded_ranges
@@ -236,7 +244,7 @@ fn allocate_address_in_network(
             for candidate in first..=last {
                 let address =
                     IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())?;
-                if ensure_address_is_usable(state, network, &address).is_ok() {
+                if ensure_address_is_usable(state, network, &address, false).is_ok() {
                     return Ok(address);
                 }
             }
@@ -247,7 +255,7 @@ fn allocate_address_in_network(
         ipnet::IpNet::V6(_) => {
             for candidate in first..=last {
                 let address = IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
-                if ensure_address_is_usable(state, network, &address).is_ok() {
+                if ensure_address_is_usable(state, network, &address, false).is_ok() {
                     return Ok(address);
                 }
             }
@@ -266,40 +274,30 @@ fn allocate_random_address_in_network(
 
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
 
-    // Build the set of usable candidate values
-    let candidates: Vec<u128> = (first..=last)
-        .filter(|c| {
-            let addr = match network.cidr().as_inner() {
-                ipnet::IpNet::V4(_) => {
-                    IpAddressValue::new(std::net::Ipv4Addr::from(*c as u32).to_string())
-                }
-                ipnet::IpNet::V6(_) => {
-                    IpAddressValue::new(std::net::Ipv6Addr::from(*c).to_string())
-                }
-            };
-            match addr {
-                Ok(a) => ensure_address_is_usable(state, network, &a).is_ok(),
-                Err(_) => false,
-            }
-        })
-        .collect();
-
-    if candidates.is_empty() {
-        return Err(AppError::conflict(
-            "network has no remaining allocatable addresses",
-        ));
-    }
-
     let mut rng = rand::thread_rng();
-    let idx = rng.gen_range(0..candidates.len());
-    let chosen = candidates[idx];
-
-    match network.cidr().as_inner() {
+    let make_address = |candidate| match network.cidr().as_inner() {
         ipnet::IpNet::V4(_) => {
-            IpAddressValue::new(std::net::Ipv4Addr::from(chosen as u32).to_string())
+            IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())
         }
-        ipnet::IpNet::V6(_) => IpAddressValue::new(std::net::Ipv6Addr::from(chosen).to_string()),
+        ipnet::IpNet::V6(_) => IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string()),
+    };
+    // Sampling avoids materializing every address in IPv6 prefixes such as /64.
+    for _ in 0..128 {
+        let address = make_address(rng.gen_range(first..=last))?;
+        if ensure_address_is_usable(state, network, &address, false).is_ok() {
+            return Ok(address);
+        }
     }
+    // Dense small networks benefit from a deterministic fallback.
+    for candidate in first..=last {
+        let address = make_address(candidate)?;
+        if ensure_address_is_usable(state, network, &address, false).is_ok() {
+            return Ok(address);
+        }
+    }
+    Err(AppError::conflict(
+        "network has no remaining allocatable addresses",
+    ))
 }
 
 // ---------------------------------------------------------------------

@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require};
+use crate::api::v2::authz::{request as authz_request, require};
 
 crate::page_response!(
     RolePageResponse,
@@ -92,7 +92,7 @@ impl RoleResponse {
 /// List all host-policy roles
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/host/roles",
+    path = "/api/v2/policy/host/roles",
     params(PageRequest),
     responses(
         (status = 200, description = "Paginated list of roles", body = RolePageResponse)
@@ -126,7 +126,7 @@ pub(crate) async fn list_roles(
 /// Create a new host-policy role
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/host/roles",
+    path = "/api/v2/policy/host/roles",
     request_body = CreateRoleRequest,
     responses(
         (status = 201, description = "Role created", body = RoleResponse),
@@ -167,7 +167,7 @@ pub(crate) async fn create_role(
 /// Get a host-policy role by name (includes atoms, hosts, labels)
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/host/roles/{name}",
+    path = "/api/v2/policy/host/roles/{name}",
     params(("name" = String, Path, description = "Role name")),
     responses(
         (status = 200, description = "Role found", body = RoleResponse),
@@ -199,7 +199,7 @@ pub(crate) async fn get_role(
 /// Update a host-policy role's description
 #[utoipa::path(
     patch,
-    path = "/api/v1/policy/host/roles/{name}",
+    path = "/api/v2/policy/host/roles/{name}",
     params(("name" = String, Path, description = "Role name")),
     request_body = UpdateRoleRequest,
     responses(
@@ -228,6 +228,7 @@ pub(crate) async fn update_role(
     }
     require(&state, authz).await?;
     let command = UpdateHostPolicyRole {
+        name: None,
         description: request.description,
     };
     let role = state
@@ -241,7 +242,7 @@ pub(crate) async fn update_role(
 /// Delete a host-policy role
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/host/roles/{name}",
+    path = "/api/v2/policy/host/roles/{name}",
     params(("name" = String, Path, description = "Role name")),
     responses(
         (status = 204, description = "Role deleted"),

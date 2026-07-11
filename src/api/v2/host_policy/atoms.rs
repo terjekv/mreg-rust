@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require};
+use crate::api::v2::authz::{request as authz_request, require};
 
 crate::page_response!(
     AtomPageResponse,
@@ -86,7 +86,7 @@ impl AtomResponse {
 /// List all host-policy atoms
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/host/atoms",
+    path = "/api/v2/policy/host/atoms",
     params(PageRequest),
     responses(
         (status = 200, description = "Paginated list of atoms", body = AtomPageResponse)
@@ -120,7 +120,7 @@ pub(crate) async fn list_atoms(
 /// Create a new host-policy atom
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/host/atoms",
+    path = "/api/v2/policy/host/atoms",
     request_body = CreateAtomRequest,
     responses(
         (status = 201, description = "Atom created", body = AtomResponse),
@@ -161,7 +161,7 @@ pub(crate) async fn create_atom(
 /// Get a host-policy atom by name
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/host/atoms/{name}",
+    path = "/api/v2/policy/host/atoms/{name}",
     params(("name" = String, Path, description = "Atom name")),
     responses(
         (status = 200, description = "Atom found", body = AtomResponse),
@@ -193,7 +193,7 @@ pub(crate) async fn get_atom(
 /// Update a host-policy atom's description
 #[utoipa::path(
     patch,
-    path = "/api/v1/policy/host/atoms/{name}",
+    path = "/api/v2/policy/host/atoms/{name}",
     params(("name" = String, Path, description = "Atom name")),
     request_body = UpdateAtomRequest,
     responses(
@@ -222,6 +222,7 @@ pub(crate) async fn update_atom(
     }
     require(&state, authz).await?;
     let command = UpdateHostPolicyAtom {
+        name: None,
         description: request.description,
     };
     let atom = state
@@ -235,7 +236,7 @@ pub(crate) async fn update_atom(
 /// Delete a host-policy atom
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/host/atoms/{name}",
+    path = "/api/v2/policy/host/atoms/{name}",
     params(("name" = String, Path, description = "Atom name")),
     responses(
         (status = 204, description = "Atom deleted"),
@@ -269,14 +270,14 @@ pub(crate) async fn delete_atom(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_and_get_atom() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -308,7 +309,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -362,7 +363,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

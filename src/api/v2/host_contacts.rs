@@ -109,7 +109,7 @@ impl HostContactResponse {
 /// List host contacts
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/host-contacts",
+    path = "/api/v2/inventory/host-contacts",
     responses(
         (status = 200, description = "Paginated list of host contacts", body = HostContactPageResponse)
     ),
@@ -142,7 +142,7 @@ pub(crate) async fn list_host_contacts(
 /// Create a host contact
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/host-contacts",
+    path = "/api/v2/inventory/host-contacts",
     request_body = CreateHostContactRequest,
     responses(
         (status = 201, description = "Host contact created", body = HostContactResponse),
@@ -181,7 +181,7 @@ pub(crate) async fn create_host_contact(
 /// Get a host contact by email
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/host-contacts/{email}",
+    path = "/api/v2/inventory/host-contacts/{email}",
     params(("email" = String, Path, description = "Contact email")),
     responses(
         (status = 200, description = "Host contact found", body = HostContactResponse),
@@ -213,7 +213,7 @@ pub(crate) async fn get_host_contact(
 /// Delete a host contact
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/host-contacts/{email}",
+    path = "/api/v2/inventory/host-contacts/{email}",
     params(("email" = String, Path, description = "Contact email")),
     responses(
         (status = 204, description = "Host contact deleted"),
@@ -246,14 +246,14 @@ pub(crate) async fn delete_host_contact(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_and_filter_host_contact() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

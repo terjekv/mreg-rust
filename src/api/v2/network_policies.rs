@@ -101,7 +101,7 @@ impl NetworkPolicyResponse {
 /// List network policies
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/network/policies",
+    path = "/api/v2/policy/network/policies",
     responses(
         (status = 200, description = "Paginated list of network policies", body = NetworkPolicyPageResponse)
     ),
@@ -138,7 +138,7 @@ pub(crate) async fn list_network_policies(
 /// Create a network policy
 #[utoipa::path(
     post,
-    path = "/api/v1/policy/network/policies",
+    path = "/api/v2/policy/network/policies",
     request_body = CreateNetworkPolicyRequest,
     responses(
         (status = 201, description = "Network policy created", body = NetworkPolicyResponse),
@@ -182,7 +182,7 @@ pub(crate) async fn create_network_policy(
 /// Get a network policy by name
 #[utoipa::path(
     get,
-    path = "/api/v1/policy/network/policies/{name}",
+    path = "/api/v2/policy/network/policies/{name}",
     params(("name" = String, Path, description = "Policy name")),
     responses(
         (status = 200, description = "Network policy found", body = NetworkPolicyResponse),
@@ -214,7 +214,7 @@ pub(crate) async fn get_network_policy(
 /// Delete a network policy
 #[utoipa::path(
     delete,
-    path = "/api/v1/policy/network/policies/{name}",
+    path = "/api/v2/policy/network/policies/{name}",
     params(("name" = String, Path, description = "Policy name")),
     responses(
         (status = 204, description = "Network policy deleted"),

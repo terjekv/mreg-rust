@@ -354,7 +354,7 @@ impl IpAddressResponse {
 /// List hosts with optional filters
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/hosts",
+    path = "/api/v2/inventory/hosts",
     responses(
         (status = 200, description = "Paginated list of hosts", body = HostPageResponse)
     ),
@@ -393,7 +393,7 @@ pub(crate) async fn list_hosts(
 /// Create a new host
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/hosts",
+    path = "/api/v2/inventory/hosts",
     request_body = CreateHostRequest,
     responses(
         (status = 201, description = "Host created", body = HostResponse),
@@ -446,7 +446,7 @@ pub(crate) async fn create_host(
 /// Get a host by name
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/hosts/{name}",
+    path = "/api/v2/inventory/hosts/{name}",
     params(("name" = String, Path, description = "Hostname (FQDN)")),
     responses(
         (status = 200, description = "Host found", body = HostResponse),
@@ -516,7 +516,7 @@ fn build_host_update_authz(
 /// Update a host
 #[utoipa::path(
     patch,
-    path = "/api/v1/inventory/hosts/{name}",
+    path = "/api/v2/inventory/hosts/{name}",
     params(("name" = String, Path, description = "Hostname (FQDN)")),
     request_body = UpdateHostRequest,
     responses(
@@ -563,7 +563,7 @@ pub(crate) async fn update_host(
 /// Delete a host
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/hosts/{name}",
+    path = "/api/v2/inventory/hosts/{name}",
     params(("name" = String, Path, description = "Hostname (FQDN)")),
     responses(
         (status = 204, description = "Host deleted"),
@@ -590,7 +590,7 @@ pub(crate) async fn delete_host(
 /// List all IP address assignments
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/ip-addresses",
+    path = "/api/v2/inventory/ip-addresses",
     responses(
         (status = 200, description = "List of IP address assignments", body = IpAddressPageResponse)
     ),
@@ -625,7 +625,7 @@ pub(crate) async fn list_ip_addresses(
 /// List IP addresses for a host
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/hosts/{name}/ip-addresses",
+    path = "/api/v2/inventory/hosts/{name}/ip-addresses",
     params(("name" = String, Path, description = "Hostname (FQDN)")),
     responses(
         (status = 200, description = "List of IP address assignments for host", body = IpAddressPageResponse)
@@ -664,7 +664,7 @@ pub(crate) async fn list_host_ip_addresses(
 /// Assign an IP address to a host
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/ip-addresses",
+    path = "/api/v2/inventory/ip-addresses",
     request_body = AssignIpAddressRequest,
     responses(
         (status = 201, description = "IP address assigned", body = IpAddressResponse),
@@ -729,7 +729,7 @@ pub struct UpdateIpAddressRequest {
 /// Update an IP address assignment
 #[utoipa::path(
     patch,
-    path = "/api/v1/inventory/ip-addresses/{address}",
+    path = "/api/v2/inventory/ip-addresses/{address}",
     params(("address" = String, Path, description = "IP address")),
     request_body = UpdateIpAddressRequest,
     responses(
@@ -770,7 +770,7 @@ pub(crate) async fn update_ip_address(
 /// Unassign an IP address
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/ip-addresses/{address}",
+    path = "/api/v2/inventory/ip-addresses/{address}",
     params(("address" = String, Path, description = "IP address")),
     responses(
         (status = 204, description = "IP address unassigned"),
@@ -803,14 +803,14 @@ pub(crate) async fn unassign_ip_address(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn auto_allocate_ip_skips_reserved_and_excluded_ranges() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -875,7 +875,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -972,7 +972,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

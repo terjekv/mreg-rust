@@ -4,7 +4,7 @@ use std::hint::black_box;
 
 use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 
-use mreg_rust::api::v1::records::instances::RecordResponse;
+use mreg_rust::api::v2::records::instances::RecordResponse;
 
 #[library_benchmark]
 fn project_typed_record() {

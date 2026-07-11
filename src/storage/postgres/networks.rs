@@ -32,6 +32,24 @@ struct BigIntValueRow {
 }
 
 impl PostgresStorage {
+    pub(in crate::storage::postgres) fn delete_excluded_range_in_conn(
+        connection: &mut PgConnection,
+        network: &CidrValue,
+        range_id: uuid::Uuid,
+    ) -> Result<(), AppError> {
+        let network_row = Self::query_network_by_cidr(connection, network)?;
+        let deleted = sql_query(
+            "DELETE FROM network_excluded_ranges WHERE id = $1 AND network_id = $2",
+        )
+        .bind::<SqlUuid, _>(range_id)
+        .bind::<SqlUuid, _>(network_row.id())
+        .execute(connection)?;
+        if deleted == 0 {
+            return Err(AppError::not_found("excluded range was not found"));
+        }
+        Ok(())
+    }
+
     pub(super) fn query_networks(connection: &mut PgConnection) -> Result<Vec<Network>, AppError> {
         let rows = sql_query(
             "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at
@@ -162,6 +180,7 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         network: &Network,
         address: &IpAddressValue,
+        allow_reserved: bool,
     ) -> Result<(), AppError> {
         if !cidr_contains(network.cidr(), address) {
             return Err(AppError::validation(
@@ -169,12 +188,14 @@ impl PostgresStorage {
             ));
         }
 
-        let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
-        let value = ip_to_u128(address.as_inner());
-        if value < first || value > last {
-            return Err(AppError::validation(
-                "IP address falls inside reserved or unusable network space",
-            ));
+        if !allow_reserved {
+            let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+            let value = ip_to_u128(address.as_inner());
+            if value < first || value > last {
+                return Err(AppError::validation(
+                    "IP address falls inside reserved or unusable network space",
+                ));
+            }
         }
 
         let overlap = sql_query(
@@ -237,7 +258,7 @@ impl PostgresStorage {
                     IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?
                 }
             };
-            if Self::ensure_address_usable(connection, network, &address).is_ok() {
+            if Self::ensure_address_usable(connection, network, &address, false).is_ok() {
                 return Ok(address);
             }
         }
@@ -821,6 +842,19 @@ impl NetworkStore for PostgresStorage {
                     .map_err(map_unique("excluded range already exists"))?
                     .into_domain()
                 })
+            })
+            .await
+    }
+
+    async fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: uuid::Uuid,
+    ) -> Result<(), AppError> {
+        let network = network.clone();
+        self.database
+            .run(move |connection| {
+                Self::delete_excluded_range_in_conn(connection, &network, range_id)
             })
             .await
     }

@@ -68,7 +68,7 @@ impl NameServerResponse {
 /// List all nameservers
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/nameservers",
+    path = "/api/v2/dns/nameservers",
     params(PageRequest),
     responses(
         (status = 200, description = "Paginated list of nameservers", body = NameServerPageResponse)
@@ -105,7 +105,7 @@ pub(crate) async fn list_nameservers(
 /// Create a new nameserver
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/nameservers",
+    path = "/api/v2/dns/nameservers",
     request_body = CreateNameServerRequest,
     responses(
         (status = 201, description = "Nameserver created", body = NameServerResponse),
@@ -143,7 +143,7 @@ pub(crate) async fn create_nameserver(
 /// Get a nameserver by name
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/nameservers/{name}",
+    path = "/api/v2/dns/nameservers/{name}",
     params(("name" = String, Path, description = "Nameserver FQDN")),
     responses(
         (status = 200, description = "Nameserver found", body = NameServerResponse),
@@ -182,7 +182,7 @@ pub struct UpdateNameServerRequest {
 /// Update a nameserver
 #[utoipa::path(
     patch,
-    path = "/api/v1/dns/nameservers/{name}",
+    path = "/api/v2/dns/nameservers/{name}",
     params(("name" = String, Path, description = "Nameserver FQDN")),
     request_body = UpdateNameServerRequest,
     responses(
@@ -225,7 +225,7 @@ pub(crate) async fn update_nameserver(
 /// Delete a nameserver
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/nameservers/{name}",
+    path = "/api/v2/dns/nameservers/{name}",
     params(("name" = String, Path, description = "Nameserver FQDN")),
     responses(
         (status = 204, description = "Nameserver deleted"),
@@ -258,14 +258,14 @@ pub(crate) async fn delete_nameserver(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_and_get_nameserver() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

@@ -48,7 +48,7 @@ The storage layer is pluggable at startup (`MREG_STORAGE_BACKEND=auto|memory|pos
 
 Here is a concrete example: creating a label via `POST /inventory/labels`. It uses the DTO (data transfer object) pattern to separate API concerns from domain logic, and the command pattern to encapsulate validated operations.
 
-**1. API handler** (`src/api/v1/labels.rs`) — Receives the HTTP request, deserializes the JSON body into a `CreateLabelRequest` DTO (a plain serde struct with `name: String, description: String`). Calls `into_command()` which converts the raw strings into validated domain types: `LabelName::new(self.name)?` validates the name (lowercase, no special characters). If validation fails, the handler returns a 400 immediately. The result is a `CreateLabel` command — a domain object that is guaranteed to carry valid data.
+**1. API handler** (`src/api/v2/labels.rs`) — Receives the HTTP request, deserializes the JSON body into a `CreateLabelRequest` DTO (a plain serde struct with `name: String, description: String`). Calls `into_command()` which converts the raw strings into validated domain types: `LabelName::new(self.name)?` validates the name (lowercase, no special characters). If validation fails, the handler returns a 400 immediately. The result is a `CreateLabel` command — a domain object that is guaranteed to carry valid data.
 
 ```rust
 // API DTO → domain command (validation happens here)
@@ -215,7 +215,7 @@ Django mreg uses Django signals for side-effects. mreg-rust has:
 - **Network permissions** (`/permissions/netgroupregex/`) -- mreg-rust delegates all authorization to Treetop instead of maintaining its own permission tables
 - **Force/override flags** -- the CLI's `-force` and `-override` flags have no equivalent; operations either succeed or fail based on constraints
 - **Direct database import** from Django mreg's PostgreSQL schema -- planned but deferred (see [migration-backlog.md](migration-backlog.md))
-- **Compatibility API layer** (`/api/compat/`) for legacy mreg-cli -- planned but not yet implemented (see [api-compatibility.md](api-compatibility.md))
+- **Full wire-compatible legacy API** -- `/api/v1/` now provides a route bridge, but payload, pagination, and identifier translation remain incomplete (see [api-compatibility.md](api-compatibility.md))
 
 ## Testing
 

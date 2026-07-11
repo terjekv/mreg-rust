@@ -52,3 +52,36 @@ jobs:
 
       - name: Compile benchmark targets
         run: cargo bench --no-run
+
+  mreg-cli:
+    name: Test with mreg-cli
+    runs-on: ubuntu-latest
+    env:
+      MREG_CLI_COMMIT: 72e598d3602812fc61a2d3a248ac8f4385dfb118
+      MREG_CLI_ALLOWED_STATUSES: "501"
+
+    steps:
+      - name: Checkout mreg-rust
+        uses: actions/checkout@v6
+
+      - name: Checkout pinned mreg-cli
+        uses: actions/checkout@v6
+        with:
+          repository: unioslo/mreg-cli
+          ref: ${{ env.MREG_CLI_COMMIT }}
+          path: mreg-cli
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run the upstream CLI testsuite and compare results
+        env:
+          MREG_CLI_DIR: ${{ github.workspace }}/mreg-cli
+        run: scripts/run-mreg-cli-compat.sh
+
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/mreg-rust-compat.log

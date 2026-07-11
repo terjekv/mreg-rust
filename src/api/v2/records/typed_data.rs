@@ -19,7 +19,7 @@
 //! - otherwise the response falls into [`RecordKind::Opaque`], which preserves
 //!   the dynamic `type_name` string and leaves `data` as either `null`
 //!   (RFC 3597 raw RDATA records) or an opaque JSON object (operator-defined
-//!   types registered via `POST /api/v1/dns/record-types`).
+//!   types registered via `POST /api/v2/dns/record-types`).
 //!
 //! ## OpenAPI / client-generation caveat
 //!

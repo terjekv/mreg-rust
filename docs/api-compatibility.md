@@ -1,162 +1,164 @@
-# API Compatibility Layer
+# Original mreg API compatibility
 
-## Purpose
+This document records the compatibility implemented when the original
+mreg-rust API moved from `/api/v1` to `/api/v2`.
 
-The `/api/compat/` prefix provides a translation layer that maps the old Django mreg API endpoints and payload formats to the mreg-rust internal API. This allows existing mreg-cli clients and integrations to work against the new server without modification.
+The comparison was made on 2026-07-11 against unioslo/mreg `master` commit
+`bbe8fa73d00fb7e8b3b7e06114c6f7519eb56a14`, specifically:
 
-The compatibility layer is a thin adapter — it deserializes old-format requests, transforms them to the internal domain model, calls the same storage layer, and serializes responses in the old format.
+- [`mreg/api/urls.py`](https://github.com/unioslo/mreg/blob/bbe8fa73d00fb7e8b3b7e06114c6f7519eb56a14/mreg/api/urls.py)
+- [`mreg/api/v1/urls.py`](https://github.com/unioslo/mreg/blob/bbe8fa73d00fb7e8b3b7e06114c6f7519eb56a14/mreg/api/v1/urls.py)
+- [`hostpolicy/api/v1/urls.py`](https://github.com/unioslo/mreg/blob/bbe8fa73d00fb7e8b3b7e06114c6f7519eb56a14/hostpolicy/api/v1/urls.py)
+- [OpenAPI schema fix PR #628](https://github.com/unioslo/mreg/pull/628), head
+  `29d39bf0bdf6f8cb993b39e1be51b71dd2219527` at the time of review
 
-## Architecture
+## Compatibility model
 
-```
-Old client → /api/compat/zones/forward/ → compat handler → ZoneStore → response → old format
-New client → /api/v1/dns/forward-zones      → v1 handler     → ZoneStore → response → new format
-```
+- The native mreg-rust contract is now `/api/v2` and its Rust modules live in
+  `src/api/v2`.
+- Read routes for which mreg-rust stores the required data are rendered
+  directly in legacy response shapes.
+- No `/api/v1` resource route redirects to v2. Even when the operation is
+  similar, a redirect would expose v2 pagination, identifiers, validation, or
+  status codes and would therefore not be the same answer.
+- Known legacy operations with no honest v2 equivalent return `501 Not
+  Implemented` and a JSON explanation. They are not redirected to a vaguely
+  similar operation which could read or mutate the wrong data.
+- Unknown paths continue to return `404 Not Found`.
+- Legacy mutations which do not yet have a request-and-response adapter return
+  501. Native v2's presence is diagnostic only and is never used as a redirect.
 
-Both paths use the same storage traits and domain types. The only difference is the HTTP surface: URL paths, request field names, and response shapes.
+This is not yet complete wire compatibility. Every implemented v1 route has a
+dedicated handler; the remaining known routes fail explicitly.
 
-## Implementation location
+## Unversioned `/api` endpoints
 
-```
-src/api/compat/
-├── mod.rs              configure() + shared helpers
-├── zones.rs            /api/compat/zones/forward/, /api/compat/zones/reverse/
-├── hosts.rs            /api/compat/hosts/
-├── records.rs          /api/compat/cnames/, /api/compat/txts/, /api/compat/mxs/, etc.
-├── networks.rs         /api/compat/networks/
-├── ipaddresses.rs      /api/compat/ipaddresses/
-├── hostgroups.rs       /api/compat/hostgroups/
-├── hostpolicy.rs       /api/compat/hostpolicy/atoms/, /api/compat/hostpolicy/roles/
-└── ptroverrides.rs     /api/compat/ptroverrides/
-```
-
-Registered in `src/api/mod.rs`:
-```rust
-cfg.service(web::scope("/api/compat").configure(compat::configure))
-```
-
-## Endpoint mapping
-
-### Zones
-
-| Old endpoint | Compat endpoint | Internal call |
+| Original endpoint | Result | Notes |
 |---|---|---|
-| `GET /api/v1/zones/forward/` | `GET /api/compat/zones/forward/` | `ZoneStore::list_forward_zones` |
-| `POST /api/v1/zones/forward/` | `POST /api/compat/zones/forward/` | `ZoneStore::create_forward_zone` |
-| `GET /api/v1/zones/forward/{name}` | `GET /api/compat/zones/forward/{name}` | `ZoneStore::get_forward_zone_by_name` |
-| `PATCH /api/v1/zones/forward/{name}` | `PATCH /api/compat/zones/forward/{name}` | `ZoneStore::update_forward_zone` |
-| `DELETE /api/v1/zones/forward/{name}` | `DELETE /api/compat/zones/forward/{name}` | `ZoneStore::delete_forward_zone` |
+| `POST /api/token-auth/` | Direct implementation | Accepts the original form-encoded username/password request and returns `{ "token": ... }`. |
+| `POST /api/token-logout/` | Direct implementation | Revokes the current mreg-rust token and returns the legacy 200 status. |
+| `GET /api/token-is-valid/` | Direct implementation | Authentication middleware accepts the original `Authorization: Token ...` scheme (and Bearer for migration); handler returns 200. |
+| `GET /api/meta/user` | Partial direct implementation | Preserves the main object shape and identity/groups. Django flags, network-regex permissions, login history, and token last-used data do not exist in the Rust model. |
+| `GET /api/meta/version` | Direct implementation | Returns `{ "version": ... }`. |
+| `GET /api/meta/libraries` | Partial direct implementation | Reports the Rust implementation and major Actix/utoipa versions; Python/Django/libpq package reporting is not applicable. |
+| `GET /api/meta/health/heartbeat` | Direct implementation | Returns Unix `start_time` and seconds of `uptime`. |
+| `GET /api/meta/health/ldap` | 501 | Auth scopes do not expose a safe, public LDAP bind-health operation. |
+| `GET /api/meta/metrics` | 501 | mreg-rust does not currently include a Prometheus registry/exporter. |
 
-Same pattern for reverse zones at `/api/compat/zones/reverse/`.
+## Direct v1 resource adapters
 
-### Hosts
+The following GET families have direct handlers which query the Rust services
+and serialize legacy DRF-style responses. No entry in this table is a redirect.
 
-| Old endpoint | Compat endpoint | Internal call |
+| Original v1 family | Direct coverage and caveats |
 |---|---|---|
-| `GET /api/v1/inventory/hosts/` | `GET /api/compat/hosts/` | `HostStore::list_hosts` |
-| `POST /api/v1/inventory/hosts/` | `POST /api/compat/hosts/` | `HostStore::create_host` + optional `assign_ip_address` |
-| `GET /api/v1/inventory/hosts/{name}` | `GET /api/compat/hosts/{name}` | `HostStore::get_host_by_name` |
-| `PATCH /api/v1/inventory/hosts/{name}` | `PATCH /api/compat/hosts/{name}` | `HostStore::update_host` |
-| `DELETE /api/v1/inventory/hosts/{name}` | `DELETE /api/compat/hosts/{name}` | `HostStore::delete_host` |
+| `bacnet/ids/` | List and BACnet-ID detail. |
+| `hosts/` | List, hostname detail, create/update/rename/delete, contacts, policy roles, PTR overrides, groups, and DNS records. Host renames preserve contact relationships. |
+| `hostgroups/` | List/detail, create/delete, and nested group, host, and owner reads and mutations. Legacy IDs are stable synthetic values. |
+| `ipaddresses/` | Collection/detail, assignment, address/MAC update, host move, and removal. Legacy IDs derive from the stable assignment UUID and remain stable across address/host changes. |
+| `labels/` | Collection/detail/name lookup, create, rename/update, and delete. |
+| `nameservers/` | List/detail keyed by name. |
+| `ptroverrides/` | Collection, create/change/delete, host projection, and network-level projections. |
+| DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. Exact collection filters prevent records of the same type from being mistaken for one another. |
+| `networks/` | List/CIDR detail, create/update/delete, excluded-range mutations, lookup by IP, reserved/used/unused counts and lists, first/random unused address, host and PTR projections, and communities. |
+| Forward/reverse zones | List/detail, forward-zone create/update/delete, nameserver replacement, forward-delegation create/list/comment/delete, hostname/delegation lookup, delegation detail by name, and generated BIND-style zone files. |
+| Network and host policy | Network-policy list/create/detail/delete when no legacy attributes are requested; host-policy atom/role CRUD, rename, atom/host membership, labels, and reverse membership projections. |
+| `history/` | Collection rendered from Rust history records. Old integer history item identity is unavailable. |
 
-**Note**: The old `POST /hosts/` could create a host and assign an IP in one request. The compat handler should decompose this into two internal calls.
+## Direct v1 read adapters
 
-### Per-record-type endpoints
+The following GET responses are built from the Rust domain and service layer;
+they do not redirect to v2:
 
-Each old record endpoint maps to the generic record store with a fixed `type_name`:
+- host-specific contact lists;
+- host-group group, host, and owner membership lists, including DRF-style
+  pagination envelopes;
+- network lookup by IP;
+- network first/random unused address, reserved address list, used/unused
+  counts and lists, used host mapping, and PTR override mappings;
+- every `dhcphosts/...` export, including IPv4, IPv6, CIDR ranges, and the
+  IPv6-by-IPv4/MAC projection;
+- forward-zone lookup by hostname, including delegation detection;
+- forward/reverse zone nameserver lists and delegation lookup by name;
+- host-policy role atom and host membership lists;
+- forward and reverse BIND-style `zonefiles/{name}` output.
 
-| Old endpoint | Compat endpoint | Maps to |
-|---|---|---|
-| `/api/v1/cnames/` | `/api/compat/cnames/` | `POST /records` with type_name=CNAME |
-| `/api/v1/txts/` | `/api/compat/txts/` | `POST /records` with type_name=TXT |
-| `/api/v1/mxs/` | `/api/compat/mxs/` | `POST /records` with type_name=MX |
-| `/api/v1/srvs/` | `/api/compat/srvs/` | `POST /records` with type_name=SRV |
-| `/api/v1/naptrs/` | `/api/compat/naptrs/` | `POST /records` with type_name=NAPTR |
-| `/api/v1/sshfps/` | `/api/compat/sshfps/` | `POST /records` with type_name=SSHFP |
-| `/api/v1/locs/` | `/api/compat/locs/` | `POST /records` with type_name=LOC |
+These adapters retain the normal mreg-rust authentication and Treetop
+authorization checks.
 
-The compat handler translates old field names to the generic record `data` payload. For example, old CNAME:
-```json
-// Old format:
-{"host": 123, "name": "alias.example.org", "cname": "real.example.org", "ttl": 300}
+The v1 mutation layer also implements the stateful CLI paths for forward zones,
+networks and excluded ranges, hosts and contacts, IPv4/IPv6 assignments (including
+the original forced network/broadcast semantics), host groups, forward-zone
+delegations, labels, host policy, PTR overrides, and the legacy DNS record types.
+These call the Rust service layer directly and then emit the original status and
+response shape; they do not round-trip through v2.
 
-// Translated to:
-{"type_name": "CNAME", "owner_kind": "host", "owner_name": "alias.example.org",
- "ttl": 300, "data": {"target": "real.example.org"}}
-```
+Collection adapters use original DRF page-number envelopes (`count`, `next`,
+`previous`, `results`) rather than v2 cursor pagination. Original `Token`
+authentication, legacy 404 bodies, and normal Treetop authorization are also
+applied at the v1 boundary.
 
-### IP addresses
+## Explicitly unavailable routes
 
-| Old endpoint | Compat endpoint | Internal call |
-|---|---|---|
-| `GET /api/v1/ipaddresses/` | `GET /api/compat/ipaddresses/` | `HostStore::list_ip_addresses` |
-| `POST /api/v1/ipaddresses/` | `POST /api/compat/ipaddresses/` | `HostStore::assign_ip_address` |
-| `PATCH /api/v1/ipaddresses/{id}` | `PATCH /api/compat/ipaddresses/{id}` | `HostStore::update_ip_address` |
-| `DELETE /api/v1/ipaddresses/{id}` | `DELETE /api/compat/ipaddresses/{id}` | `HostStore::unassign_ip_address` |
+Known but unadapted mutations return 501 instead of redirecting. Most are
+implementation backlog rather than fundamentally impossible: they need legacy
+payload validation, identifier resolution, mutation calls, and legacy response
+status/body adapters. The genuinely unavailable information is narrower:
 
-**Note**: The old API uses integer IDs for IP addresses. The compat layer needs to map between old integer IDs and our UUID-based system.
+- legacy integer primary keys were not retained. V1 adapters synthesize stable
+  opaque integer identifiers where the CLI needs identity; the literal Django
+  primary-key values cannot be reproduced;
+- exact Django history responses cannot currently be reproduced. Rust stores
+  the operations and affected resources, but its audit records do not retain
+  Django content-type IDs or the same per-model action payloads. The remaining
+  pre-gap CLI mismatches are host/group history rendering rather than failed
+  mutations;
+- `permissions/netgroupregex/...` (authorization is delegated to Treetop in
+  mreg-rust and the Django permission model is not stored);
+- `networkpolicyattributes/...` (mreg-rust policies do not expose the legacy
+  attribute model);
+- Django-only user flags, login history, token last-used metadata, and exact
+  Python library inventory;
+- LDAP health and Prometheus metrics as noted above.
 
-### Networks
+All other 501s should be treated as adapters still to implement, not as claims
+that the system lacks the underlying data or operation. The pinned CLI suite now
+reaches explicit 501s only for legacy permission management and network-policy
+attributes. Label information also encounters 501 while asking for permissions
+attached to a label; the label and host-policy portions of that response are
+implemented.
 
-| Old endpoint | Compat endpoint | Internal call |
-|---|---|---|
-| `GET /api/v1/inventory/networks/` | `GET /api/compat/networks/` | `NetworkStore::list_networks` |
-| `POST /api/v1/inventory/networks/` | `POST /api/compat/networks/` | `NetworkStore::create_network` |
-| `GET /api/v1/inventory/networks/{network}` | `GET /api/compat/networks/{network}` | `NetworkStore::get_network_by_cidr` |
-| `GET /api/v1/inventory/networks/{network}/used_addresses/` | `GET /api/compat/networks/{network}/used_addresses/` | `NetworkStore::list_used_addresses` |
-| `GET /api/v1/inventory/networks/{network}/unused_addresses/` | `GET /api/compat/networks/{network}/unused_addresses/` | `NetworkStore::list_unused_addresses` |
+## mreg-cli compatibility CI
 
-### Host groups
+The `mreg-cli` CI job pins upstream mreg-cli commit
+`72e598d3602812fc61a2d3a248ac8f4385dfb118`, runs its 401-command recorded
+testsuite, and compares recordings. Exact matches pass. A changed command is
+accepted only when its requests contain an allowlisted explicit status (501 by
+default). Because the suite is stateful, an unsupported mutation marks later
+differences as unverified downstream behavior rather than false matches; a
+difference before the first such mutation fails the job. A mutating CLI command
+whose unsupported GET preflight prevents its POST/PATCH/DELETE also taints later
+state. Permission commands are explicitly non-tainting, as permitted for this
+compatibility job.
 
-| Old endpoint | Compat endpoint | Internal call |
-|---|---|---|
-| `GET /api/v1/hostgroups/` | `GET /api/compat/hostgroups/` | `AncillaryStore::list_host_groups` |
-| `POST /api/v1/hostgroups/` | `POST /api/compat/hostgroups/` | `AncillaryStore::create_host_group` |
+Run the same path locally with `scripts/run-mreg-cli-compat.sh`. The script
+handles Linux host networking and Docker Desktop on macOS. The final recorded
+run on 2026-07-11 completed all 401 commands with 284 exact command matches, 24
+explicit 501 gaps, 56 commands unverified after the first unsupported
+network-policy-attribute mutation, and 37 unexpected recording differences.
+Many of the latter commands complete with the same user-visible result but still
+expose a response-field, ordering, or state-projection mismatch in their recorded
+HTTP exchange; they remain red because the goal is equality, not merely command
+success. Six are the known history-rendering mismatches described above.
 
-### Host policy
+## OpenAPI and documentation
 
-| Old endpoint | Compat endpoint | Internal call |
-|---|---|---|
-| `POST /api/v1/hostpolicy/atoms/` | `POST /api/compat/hostpolicy/atoms/` | `HostPolicyStore::create_atom` |
-| `POST /api/v1/hostpolicy/roles/` | `POST /api/compat/hostpolicy/roles/` | `HostPolicyStore::create_role` |
+The v2 OpenAPI document advertises version `2.0.0` and every native path under
+`/api/v2`. Swagger UI and the schema are available at the PR #628-compatible
+locations `/docs/` and `/docs/schema`. The previous mreg-rust locations
+`/swagger-ui/` and `/api-docs/openapi.json` remain aliases.
 
-## Payload translation
-
-### Pagination
-
-Old format (Django REST framework):
-```json
-{"count": 42, "next": "http://...", "previous": null, "results": [...]}
-```
-
-Compat translation from internal:
-```json
-// Internal: { items: [...], total: 42, next_cursor: "uuid" }
-// Compat:   { count: 42, next: "/api/compat/hosts/?cursor=uuid", previous: null, results: [...] }
-```
-
-### Error responses
-
-Old format:
-```json
-{"detail": "Not found."}
-```
-
-Compat translation from internal:
-```json
-// Internal: { error: "not_found", message: "host 'x' was not found" }
-// Compat:   { detail: "host 'x' was not found" }
-```
-
-## Implementation status
-
-The compatibility layer is planned but **not yet implemented**. It can be built incrementally, starting with the most-used endpoints (hosts, zones, networks) and expanding to cover the full old API surface.
-
-## When to use which API
-
-| Use case | Recommended API |
-|----------|----------------|
-| New integrations | `/api/v1/` — full feature set, modern design |
-| Existing mreg-cli | `/api/compat/` — backwards compatible |
-| Migration period | Both — `/api/compat/` for existing clients, `/api/v1/` for new work |
-| Long term | `/api/v1/` only — compat layer may be sunset |
+PR #628 also proposes `/docs/redoc` and a YAML schema. mreg-rust does not bundle
+the ReDoc sidecar assets, and utoipa serves the schema as JSON, so `/docs/redoc`
+and YAML serialization are not matched. JSON is an OpenAPI-native encoding of
+the same document.

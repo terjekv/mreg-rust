@@ -67,7 +67,7 @@ impl LabelResponse {
 /// List all labels
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/labels",
+    path = "/api/v2/inventory/labels",
     params(PageRequest),
     responses(
         (status = 200, description = "Paginated list of labels", body = LabelPageResponse)
@@ -97,7 +97,7 @@ pub(crate) async fn list_labels(
 /// Create a new label
 #[utoipa::path(
     post,
-    path = "/api/v1/inventory/labels",
+    path = "/api/v2/inventory/labels",
     request_body = CreateLabelRequest,
     responses(
         (status = 201, description = "Label created", body = LabelResponse),
@@ -134,7 +134,7 @@ pub(crate) async fn create_label(
 /// Get a label by name
 #[utoipa::path(
     get,
-    path = "/api/v1/inventory/labels/{name}",
+    path = "/api/v2/inventory/labels/{name}",
     params(("name" = String, Path, description = "Label name")),
     responses(
         (status = 200, description = "Label found", body = LabelResponse),
@@ -171,7 +171,7 @@ pub struct UpdateLabelRequest {
 /// Update a label
 #[utoipa::path(
     patch,
-    path = "/api/v1/inventory/labels/{name}",
+    path = "/api/v2/inventory/labels/{name}",
     params(("name" = String, Path, description = "Label name")),
     request_body = UpdateLabelRequest,
     responses(
@@ -207,7 +207,7 @@ pub(crate) async fn update_label(
 /// Delete a label
 #[utoipa::path(
     delete,
-    path = "/api/v1/inventory/labels/{name}",
+    path = "/api/v2/inventory/labels/{name}",
     params(("name" = String, Path, description = "Label name")),
     responses(
         (status = 204, description = "Label deleted"),
@@ -240,14 +240,14 @@ pub(crate) async fn delete_label(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_and_get_label() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -279,7 +279,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -325,7 +325,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

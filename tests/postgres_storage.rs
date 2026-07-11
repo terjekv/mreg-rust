@@ -169,7 +169,7 @@ async fn call_auth_json(request: actix_http::Request, state: AppState) -> (Statu
         App::new()
             .app_data(web::Data::new(state))
             .wrap(middleware::Authn)
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
     let response = test::call_service(&app, request).await;

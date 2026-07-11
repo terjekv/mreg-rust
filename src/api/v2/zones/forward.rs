@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{
+use crate::api::v2::authz::{
     UpdateAuthzBuilder, request as authz_request, require, require_all, string_set,
 };
 
@@ -173,7 +173,7 @@ fn build_forward_zone_update_authz(
 /// List all forward zones
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/forward-zones",
+    path = "/api/v2/dns/forward-zones",
     params(PageRequest),
     responses(
         (status = 200, description = "Paginated list of forward zones", body = ForwardZonePageResponse)
@@ -210,7 +210,7 @@ pub(crate) async fn list_forward_zones(
 /// Create a forward zone
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/forward-zones",
+    path = "/api/v2/dns/forward-zones",
     request_body = CreateForwardZoneRequest,
     responses(
         (status = 201, description = "Forward zone created", body = ForwardZoneResponse),
@@ -260,7 +260,7 @@ pub(crate) async fn create_forward_zone(
 /// Get a forward zone by name
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/forward-zones/{name}",
+    path = "/api/v2/dns/forward-zones/{name}",
     params(("name" = String, Path, description = "Zone name")),
     responses(
         (status = 200, description = "Forward zone found", body = ForwardZoneResponse),
@@ -292,7 +292,7 @@ pub(crate) async fn get_forward_zone(
 /// Update a forward zone
 #[utoipa::path(
     patch,
-    path = "/api/v1/dns/forward-zones/{name}",
+    path = "/api/v2/dns/forward-zones/{name}",
     params(("name" = String, Path, description = "Zone name")),
     request_body = UpdateForwardZoneRequest,
     responses(
@@ -331,6 +331,7 @@ pub(crate) async fn update_forward_zone(
         primary_ns,
         nameservers,
         email,
+        serial_no: None,
         refresh,
         retry,
         expire,
@@ -348,7 +349,7 @@ pub(crate) async fn update_forward_zone(
 /// Delete a forward zone
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/forward-zones/{name}",
+    path = "/api/v2/dns/forward-zones/{name}",
     params(("name" = String, Path, description = "Zone name")),
     responses(
         (status = 204, description = "Forward zone deleted"),
@@ -381,14 +382,14 @@ pub(crate) async fn delete_forward_zone(
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn create_and_get_forward_zone() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -431,7 +432,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

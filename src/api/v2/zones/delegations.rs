@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{request as authz_request, require, string_set};
+use crate::api::v2::authz::{request as authz_request, require, string_set};
 
 crate::page_response!(
     ForwardZoneDelegationPageResponse,
@@ -112,7 +112,7 @@ impl ReverseZoneDelegationResponse {
 /// List delegations for a forward zone
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/forward-zones/{zone_name}/delegations",
+    path = "/api/v2/dns/forward-zones/{zone_name}/delegations",
     params(
         ("zone_name" = String, Path, description = "Forward zone name"),
         PageRequest,
@@ -154,7 +154,7 @@ pub(crate) async fn list_forward_zone_delegations(
 /// Create a delegation for a forward zone
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/forward-zones/{zone_name}/delegations",
+    path = "/api/v2/dns/forward-zones/{zone_name}/delegations",
     params(("zone_name" = String, Path, description = "Forward zone name")),
     request_body = CreateDelegationRequest,
     responses(
@@ -211,7 +211,7 @@ pub(crate) async fn create_forward_zone_delegation(
 /// Delete a forward zone delegation
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/forward-zone-delegations/{id}",
+    path = "/api/v2/dns/forward-zone-delegations/{id}",
     params(("id" = Uuid, Path, description = "Delegation ID")),
     responses(
         (status = 204, description = "Delegation deleted"),
@@ -250,7 +250,7 @@ pub(crate) async fn delete_forward_zone_delegation(
 /// List delegations for a reverse zone
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/reverse-zones/{zone_name}/delegations",
+    path = "/api/v2/dns/reverse-zones/{zone_name}/delegations",
     params(
         ("zone_name" = String, Path, description = "Reverse zone name"),
         PageRequest,
@@ -292,7 +292,7 @@ pub(crate) async fn list_reverse_zone_delegations(
 /// Create a delegation for a reverse zone
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/reverse-zones/{zone_name}/delegations",
+    path = "/api/v2/dns/reverse-zones/{zone_name}/delegations",
     params(("zone_name" = String, Path, description = "Reverse zone name")),
     request_body = CreateDelegationRequest,
     responses(
@@ -349,7 +349,7 @@ pub(crate) async fn create_reverse_zone_delegation(
 /// Delete a reverse zone delegation
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/reverse-zone-delegations/{id}",
+    path = "/api/v2/dns/reverse-zone-delegations/{id}",
     params(("id" = Uuid, Path, description = "Delegation ID")),
     responses(
         (status = 204, description = "Delegation deleted"),

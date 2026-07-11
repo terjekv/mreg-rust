@@ -12,7 +12,7 @@ output and artifact metadata are stored on the completed run.
 
 ## API Endpoints
 
-All paths are relative to `/api/v1`.
+All paths are relative to `/api/v2`.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -425,11 +425,11 @@ for embedding into an existing configuration file.
 
 Export runs use the shared task queue rather than executing inline. The lifecycle is:
 
-1. **Create run** -- `POST /api/v1/workflows/export-runs` validates the request, looks up the
+1. **Create run** -- `POST /api/v2/workflows/export-runs` validates the request, looks up the
    named template, creates a task with `kind: "export_run"` and
    `payload: { "run_id": "<uuid>" }`, and returns the run with `status: "queued"`.
 
-2. **Claim task** -- A worker calls `POST /api/v1/workflows/tasks/run-next`. The endpoint
+2. **Claim task** -- A worker calls `POST /api/v2/workflows/tasks/run-next`. The endpoint
    claims the next available task (any kind). If the claimed task is an
    `export_run`, it proceeds to step 3.
 
@@ -440,7 +440,7 @@ Export runs use the shared task queue rather than executing inline. The lifecycl
 
 4. **Retrieve result** -- The `run-next` response includes the full run object
    (with rendered output) in the `workflow_result` field. The run can also be
-   found later via `GET /api/v1/workflows/export-runs`.
+   found later via `GET /api/v2/workflows/export-runs`.
 
 Run statuses: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
 
@@ -503,7 +503,7 @@ functions are registered beyond the defaults.
 Create a template that lists all networks with their descriptions:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/workflows/export-templates \
+curl -X POST http://localhost:8080/api/v2/workflows/export-templates \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "network-report",
@@ -518,7 +518,7 @@ Create and execute a run:
 
 ```bash
 # Queue the run
-curl -X POST http://localhost:8080/api/v1/workflows/export-runs \
+curl -X POST http://localhost:8080/api/v2/workflows/export-runs \
   -H 'Content-Type: application/json' \
   -d '{
     "template_name": "network-report",
@@ -526,7 +526,7 @@ curl -X POST http://localhost:8080/api/v1/workflows/export-runs \
   }'
 
 # Execute the next pending task (returns the rendered output)
-curl -X POST http://localhost:8080/api/v1/workflows/tasks/run-next
+curl -X POST http://localhost:8080/api/v2/workflows/tasks/run-next
 ```
 
 The response includes the rendered output in `workflow_result.rendered_output`.
@@ -534,7 +534,7 @@ The response includes the rendered output in `workflow_result.rendered_output`.
 ### Rendering a forward zone file
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/workflows/export-runs \
+curl -X POST http://localhost:8080/api/v2/workflows/export-runs \
   -H 'Content-Type: application/json' \
   -d '{
     "template_name": "bind-forward-zone",
@@ -542,5 +542,5 @@ curl -X POST http://localhost:8080/api/v1/workflows/export-runs \
     "parameters": { "zone_name": "example.com" }
   }'
 
-curl -X POST http://localhost:8080/api/v1/workflows/tasks/run-next
+curl -X POST http://localhost:8080/api/v2/workflows/tasks/run-next
 ```

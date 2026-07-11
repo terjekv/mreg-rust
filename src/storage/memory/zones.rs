@@ -184,7 +184,9 @@ pub(super) fn update_forward_zone_in_state(
     let expire = command.expire.unwrap_or_else(|| zone.expire());
     let soa_ttl = command.soa_ttl.unwrap_or_else(|| zone.soa_ttl());
     let default_ttl = command.default_ttl.unwrap_or_else(|| zone.default_ttl());
-    let next_serial = zone.serial_no().next_rfc1912(now.date_naive())?;
+    let next_serial = command
+        .serial_no
+        .unwrap_or(zone.serial_no().next_rfc1912(now.date_naive())?);
     let updated = ForwardZone::restore(
         zone.id(),
         zone.name().clone(),

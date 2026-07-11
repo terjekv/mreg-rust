@@ -44,7 +44,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// List tasks
 #[utoipa::path(
     get,
-    path = "/api/v1/workflows/tasks",
+    path = "/api/v2/workflows/tasks",
     responses(
         (status = 200, description = "List of tasks", body = SystemListResponse)
     ),
@@ -76,7 +76,7 @@ pub(crate) async fn tasks(
 /// List imports
 #[utoipa::path(
     get,
-    path = "/api/v1/workflows/imports",
+    path = "/api/v2/workflows/imports",
     responses(
         (status = 200, description = "List of import batches", body = SystemListResponse)
     ),
@@ -108,7 +108,7 @@ pub(crate) async fn imports(
 /// List export templates
 #[utoipa::path(
     get,
-    path = "/api/v1/workflows/export-templates",
+    path = "/api/v2/workflows/export-templates",
     responses(
         (status = 200, description = "List of export templates", body = SystemListResponse)
     ),
@@ -144,7 +144,7 @@ pub(crate) async fn export_templates(
 /// List export runs
 #[utoipa::path(
     get,
-    path = "/api/v1/workflows/export-runs",
+    path = "/api/v2/workflows/export-runs",
     responses(
         (status = 200, description = "List of export runs", body = SystemListResponse)
     ),
@@ -256,7 +256,7 @@ impl CreateExportRunRequest {
 /// Create an import batch
 #[utoipa::path(
     post,
-    path = "/api/v1/workflows/imports",
+    path = "/api/v2/workflows/imports",
     request_body = CreateImportRequest,
     responses(
         (status = 201, description = "Import batch created", body = Value),
@@ -297,7 +297,7 @@ pub(crate) async fn create_import(
 /// Create an export template
 #[utoipa::path(
     post,
-    path = "/api/v1/workflows/export-templates",
+    path = "/api/v2/workflows/export-templates",
     request_body = CreateExportTemplateRequest,
     responses(
         (status = 201, description = "Export template created", body = Value),
@@ -335,7 +335,7 @@ pub(crate) async fn create_export_template(
 /// Create an export run
 #[utoipa::path(
     post,
-    path = "/api/v1/workflows/export-runs",
+    path = "/api/v2/workflows/export-runs",
     request_body = CreateExportRunRequest,
     responses(
         (status = 201, description = "Export run created", body = Value),
@@ -375,7 +375,7 @@ pub(crate) async fn create_export_run(
 /// Run the next pending task
 #[utoipa::path(
     post,
-    path = "/api/v1/workflows/tasks/run-next",
+    path = "/api/v2/workflows/tasks/run-next",
     responses(
         (status = 200, description = "Task result or no task available", body = TaskRunResponse)
     ),
@@ -555,14 +555,14 @@ fn parse_task_uuid(payload: &Value, key: &str) -> Result<Uuid, AppError> {
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
 
-    use crate::api::v1::tests::test_state;
+    use crate::api::v2::tests::test_state;
 
     #[actix_web::test]
     async fn import_batch_is_atomic_when_one_item_is_invalid() {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 
@@ -620,7 +620,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(test_state()))
-                .configure(|cfg| crate::api::v1::configure(cfg, false)),
+                .configure(|cfg| crate::api::v2::configure(cfg, false)),
         )
         .await;
 

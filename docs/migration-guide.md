@@ -14,7 +14,7 @@ This guide covers migrating from the original Django-based mreg to mreg-rust. It
 
 ### Approach: API-based import
 
-The recommended migration path is to export from the old mreg API and import into mreg-rust using the bulk import endpoint (`POST /api/v1/workflows/imports`).
+The recommended migration path is to export from the old mreg API and import into mreg-rust using the bulk import endpoint (`POST /api/v2/workflows/imports`).
 
 **Migration order** (respects foreign key dependencies):
 
@@ -40,7 +40,7 @@ The recommended migration path is to export from the old mreg API and import int
 For bulk operations, use the import endpoint which provides atomicity:
 
 ```json
-POST /api/v1/workflows/imports
+POST /api/v2/workflows/imports
 {
   "requested_by": "migration-script",
   "items": [
@@ -57,7 +57,7 @@ POST /api/v1/workflows/imports
 ```
 
 Note that this call stages a batch and creates a queued import task. Execution
-happens when a worker runs `POST /api/v1/workflows/tasks/run-next`.
+happens when a worker runs `POST /api/v2/workflows/tasks/run-next`.
 
 For full execution lifecycle, status semantics, and reference ordering rules,
 see [import-format.md](import-format.md) (`Execution Model`, `Status Lifecycle`,
@@ -208,11 +208,11 @@ $TTL {{ zone.default_ttl }}
 
 ### For mreg-cli users
 
-The existing mreg-cli will not work directly against mreg-rust due to different URL paths and payload formats. Options:
+The existing mreg-cli will not work transparently against mreg-rust due to different payload formats and identifiers. Options:
 
-1. **Wait for `/api/compat/`** — a compatibility layer is planned (see [api-compatibility.md](api-compatibility.md))
-2. **Use the new API directly** — curl, httpie, or a new CLI
-3. **Use Swagger UI** — available at `/swagger-ui/` for interactive exploration
+1. **Use the `/api/v1/` route bridge** — it redirects safe legacy paths and reports unsupported operations explicitly; see [api-compatibility.md](api-compatibility.md)
+2. **Use the v2 API directly** — curl, httpie, or a v2-aware CLI
+3. **Use Swagger UI** — available at `/docs/` for interactive exploration
 
 ### Authentication changes
 
@@ -227,8 +227,8 @@ Authorization is still delegated to Treetop (or bypassed in dev mode). See [auth
 ### Running in parallel
 
 During migration, both old and new mreg can run simultaneously against separate databases. Use a reverse proxy to route traffic:
-- `/api/v1/` → mreg-rust (new clients)
-- `/api/compat/` → mreg-rust compat layer (old clients, when implemented)
+- `/api/v2/` → mreg-rust (new clients)
+- `/api/v1/` → mreg-rust route compatibility bridge (old clients)
 - Old mreg stays on its existing URL until fully migrated
 
 ### Zone serial numbers

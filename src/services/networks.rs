@@ -165,6 +165,32 @@ pub async fn add_excluded_range(
     Ok(range)
 }
 
+pub async fn delete_excluded_range(
+    storage: &DynStorage,
+    cidr: &CidrValue,
+    range: &ExcludedRange,
+    events: &EventSinkClient,
+) -> Result<(), AppError> {
+    let cidr = cidr.clone();
+    let range = range.clone();
+    let history = storage
+        .transaction(move |tx| {
+            tx.networks().delete_excluded_range(&cidr, range.id())?;
+            tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "excluded_range",
+                Some(range.id()),
+                format!("{}-{}", range.start_ip().as_str(), range.end_ip().as_str()),
+                actions::DELETE,
+                json!({"start_ip": range.start_ip().as_str(), "end_ip": range.end_ip().as_str()}),
+            ))
+        })
+        .await?;
+
+    events.emit(&DomainEvent::from(&history)).await;
+    Ok(())
+}
+
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "network"))]
 pub async fn list_used_addresses(
     store: &(dyn NetworkStore + Send + Sync),

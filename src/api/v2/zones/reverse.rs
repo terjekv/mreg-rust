@@ -15,7 +15,7 @@ use crate::{
     errors::AppError,
 };
 
-use crate::api::v1::authz::{
+use crate::api::v2::authz::{
     UpdateAuthzBuilder, request as authz_request, require, require_all, string_set,
 };
 
@@ -177,7 +177,7 @@ fn build_reverse_zone_update_authz(
 /// List all reverse zones
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/reverse-zones",
+    path = "/api/v2/dns/reverse-zones",
     params(PageRequest),
     responses(
         (status = 200, description = "Paginated list of reverse zones", body = ReverseZonePageResponse)
@@ -214,7 +214,7 @@ pub(crate) async fn list_reverse_zones(
 /// Create a reverse zone
 #[utoipa::path(
     post,
-    path = "/api/v1/dns/reverse-zones",
+    path = "/api/v2/dns/reverse-zones",
     request_body = CreateReverseZoneRequest,
     responses(
         (status = 201, description = "Reverse zone created", body = ReverseZoneResponse),
@@ -264,7 +264,7 @@ pub(crate) async fn create_reverse_zone(
 /// Get a reverse zone by name
 #[utoipa::path(
     get,
-    path = "/api/v1/dns/reverse-zones/{name}",
+    path = "/api/v2/dns/reverse-zones/{name}",
     params(("name" = String, Path, description = "Zone name")),
     responses(
         (status = 200, description = "Reverse zone found", body = ReverseZoneResponse),
@@ -296,7 +296,7 @@ pub(crate) async fn get_reverse_zone(
 /// Update a reverse zone
 #[utoipa::path(
     patch,
-    path = "/api/v1/dns/reverse-zones/{name}",
+    path = "/api/v2/dns/reverse-zones/{name}",
     params(("name" = String, Path, description = "Zone name")),
     request_body = UpdateReverseZoneRequest,
     responses(
@@ -352,7 +352,7 @@ pub(crate) async fn update_reverse_zone(
 /// Delete a reverse zone
 #[utoipa::path(
     delete,
-    path = "/api/v1/dns/reverse-zones/{name}",
+    path = "/api/v2/dns/reverse-zones/{name}",
     params(("name" = String, Path, description = "Zone name")),
     responses(
         (status = 204, description = "Reverse zone deleted"),

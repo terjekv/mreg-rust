@@ -417,6 +417,13 @@ impl NetworkService<'_> {
     ) -> Result<ExcludedRange, AppError> {
         networks::add_excluded_range(self.storage, cidr, command, self.events).await
     }
+    pub async fn delete_excluded_range(
+        &self,
+        cidr: &CidrValue,
+        range: &ExcludedRange,
+    ) -> Result<(), AppError> {
+        networks::delete_excluded_range(self.storage, cidr, range, self.events).await
+    }
     pub async fn list_used_addresses(
         &self,
         cidr: &CidrValue,

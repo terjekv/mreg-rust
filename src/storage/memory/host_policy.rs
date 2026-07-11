@@ -87,21 +87,57 @@ pub(super) fn update_atom_in_state(
                 "host policy atom '{}' was not found",
                 name.as_str()
             ))
-        })?;
+    })?;
     let now = Utc::now();
+    let new_name = command.name.unwrap_or_else(|| atom.name().clone());
+    if new_name != *atom.name() && state.host_policy_atoms.contains_key(new_name.as_str()) {
+        return Err(AppError::conflict(format!(
+            "host policy atom '{}' already exists",
+            new_name.as_str()
+        )));
+    }
     let description = command
         .description
         .unwrap_or_else(|| atom.description().to_string());
     let updated = HostPolicyAtom::restore(
         atom.id(),
-        atom.name().clone(),
+        new_name.clone(),
         description,
         atom.created_at(),
         now,
     );
+    state.host_policy_atoms.remove(name.as_str());
     state
         .host_policy_atoms
-        .insert(name.as_str().to_string(), updated.clone());
+        .insert(new_name.as_str().to_string(), updated.clone());
+    if new_name != *name {
+        for role in state.host_policy_roles.values_mut() {
+            if !role.atoms().iter().any(|atom_name| atom_name == name.as_str()) {
+                continue;
+            }
+            let atoms = role
+                .atoms()
+                .iter()
+                .map(|atom_name| {
+                    if atom_name == name.as_str() {
+                        new_name.as_str().to_string()
+                    } else {
+                        atom_name.clone()
+                    }
+                })
+                .collect();
+            *role = HostPolicyRole::restore(
+                role.id(),
+                role.name().clone(),
+                role.description().to_string(),
+                atoms,
+                role.hosts().to_vec(),
+                role.labels().to_vec(),
+                role.created_at(),
+                now,
+            );
+        }
+    }
     Ok(updated)
 }
 
@@ -237,14 +273,21 @@ pub(super) fn update_role_in_state(
                 "host policy role '{}' was not found",
                 name.as_str()
             ))
-        })?;
+    })?;
     let now = Utc::now();
+    let new_name = command.name.unwrap_or_else(|| role.name().clone());
+    if new_name != *role.name() && state.host_policy_roles.contains_key(new_name.as_str()) {
+        return Err(AppError::conflict(format!(
+            "host policy role '{}' already exists",
+            new_name.as_str()
+        )));
+    }
     let description = command
         .description
         .unwrap_or_else(|| role.description().to_string());
     let updated = HostPolicyRole::restore(
         role.id(),
-        role.name().clone(),
+        new_name.clone(),
         description,
         role.atoms().to_vec(),
         role.hosts().to_vec(),
@@ -252,9 +295,10 @@ pub(super) fn update_role_in_state(
         role.created_at(),
         now,
     );
+    state.host_policy_roles.remove(name.as_str());
     state
         .host_policy_roles
-        .insert(name.as_str().to_string(), updated.clone());
+        .insert(new_name.as_str().to_string(), updated.clone());
     Ok(updated)
 }
 
