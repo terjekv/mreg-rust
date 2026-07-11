@@ -24,7 +24,7 @@ For authentication flow and endpoint behavior, see [authentication.md](authentic
 | `MREG_AUTH_TOKEN_TTL_SECONDS` | `3600` | Maximum lifetime for mreg-issued access tokens in `scoped` mode |
 | `MREG_AUTH_JWT_SIGNING_KEY` | — | HMAC secret used to sign and validate mreg-issued access tokens in `scoped` mode |
 | `MREG_AUTH_JWT_ISSUER` | `mreg-rust` | Issuer claim for mreg-issued access tokens |
-| `MREG_AUTH_SCOPES_FILE` | — | Path to the JSON auth scope registry used in `scoped` mode |
+| `MREG_AUTH_CONFIG_PATH` | — | Path to the TOML authentication provider registry used in `scoped` mode |
 | `MREG_EVENT_WEBHOOK_URL` | — | URL to POST domain events to as JSON. See [event-system.md](event-system.md). |
 | `MREG_EVENT_WEBHOOK_TIMEOUT_MS` | `5000` | Timeout for webhook HTTP requests in milliseconds |
 | `MREG_EVENT_AMQP_URL` | — | AMQP connection URL for event publishing (requires `amqp` feature) |
@@ -84,9 +84,10 @@ In `scoped` mode, protected endpoints require `Authorization: Bearer <token>`. `
 
 `GET /api/v1/system/health` and `GET /api/v1/system/version` remain unauthenticated.
 
-## Auth Scopes
+## Authentication Providers
 
-In `scoped` mode, mreg-rust loads one or more auth scopes from `MREG_AUTH_SCOPES_FILE`.
+In `scoped` mode, mreg-rust loads one or more authentication providers from
+`MREG_AUTH_CONFIG_PATH`.
 
 Supported scope kinds:
 
@@ -94,7 +95,8 @@ Supported scope kinds:
 - `ldap`
 - `remote`
 
-Each scope has a unique startup-defined `name`. Clients log in with `username` in `scope:username` form, for example `local:admin` or `ldap-primary:bob`.
+Each provider has a unique startup-defined `scope`. Clients send `identity_scope`
+and `username` as separate login fields.
 
 Authenticated identity is namespace-aware:
 
@@ -104,38 +106,24 @@ Authenticated identity is namespace-aware:
 - group namespace is `["mreg", scope]`
 - the stable serialized principal key is `mreg::<scope>::<username>`
 
-Example scope registry:
+Example provider registry:
 
-```json
-{
-  "scopes": [
-    {
-      "name": "local",
-      "kind": "local",
-      "users": [
-        {
-          "username": "admin",
-          "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$...",
-          "groups": ["ops", "net"]
-        }
-      ]
-    },
-    {
-      "name": "remote-sso",
-      "kind": "remote",
-      "login_url": "https://auth.example.org/api/login",
-      "jwt_issuer": "auth.example.org",
-      "jwt_hmac_secret": "change-me"
-    }
-  ]
-}
+```toml
+[[providers]]
+scope = "local"
+kind = "local"
+
+[[providers.users]]
+username = "admin"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+groups = ["ops", "net"]
 ```
 
-See [../auth-scopes.example.json](../auth-scopes.example.json) for a fuller example.
+See [../auth-providers.example.toml](../auth-providers.example.toml) for a fuller example.
 
 ### Local scopes
 
-`local` scopes define static users directly in the scopes file:
+`local` providers define static users directly in the provider file:
 
 - `username`
 - `password_hash`
@@ -148,15 +136,19 @@ Passwords use Argon2id PHC strings.
 `ldap` scopes define:
 
 - `url`
-- `timeout_ms`
-- `user_search_base`
-- `user_search_filter`
-- `group_search_base`
-- `group_search_filter`
-- optional `bind_dn`
-- optional `bind_password`
+- `connect_timeout_seconds` and `operation_timeout_seconds`
+- `user_base_dn`, `user_filter`, and `user_scope`
+- `username_attribute` and `subject_attribute`
+- optional `display_name_attribute` and `email_attribute`
+- `group_attributes`, `group_rules`, and optional `group_filters`
+- optional paired `bind_dn` and `bind_password`
 
-LDAP authentication is search -> bind -> group lookup.
+`ldaps://` uses implicit TLS. `ldap://` requires verified StartTLS before any
+credentials or directory data are sent.
+
+Group rules map raw LDAP attribute values to canonical group names. Group filters
+then evaluate those extracted names; they do not evaluate the complete raw LDAP
+attribute value.
 
 ### Remote scopes
 
@@ -182,6 +174,7 @@ The upstream JWT is used only during login. mreg-rust validates it, extracts ide
 
 ```json
 {
+  "identity_scope": "local",
   "username": "alice",
   "password": "secret",
   "service_name": "mreg",
@@ -190,5 +183,8 @@ The upstream JWT is used only during login. mreg-rust validates it, extracts ide
 ```
 
 `service_name` and `otp_code` are optional. Remote scopes may use them; local and LDAP scopes ignore them.
+
+`GET /api/v1/auth/providers` is unauthenticated and lists safe provider metadata
+from the same registry used to route login requests.
 
 `GET /api/v1/auth/me` returns the resolved principal and token expiry for the current request.

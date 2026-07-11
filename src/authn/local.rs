@@ -13,15 +13,15 @@ use tokio::{sync::Semaphore, task::spawn_blocking};
 
 use crate::{config::LocalUserConfig, errors::AppError};
 
-use super::{AuthenticatedIdentity, BackendLoginRequest, ScopeAuthenticator};
+use super::{AuthProviderBackend, AuthenticatedIdentity, BackendLoginRequest};
 
 #[derive(Clone)]
-pub struct LocalScopeAuthenticator {
+pub struct LocalAuthProvider {
     users: HashMap<String, LocalUserConfig>,
     dummy_hash: String,
 }
 
-impl LocalScopeAuthenticator {
+impl LocalAuthProvider {
     pub fn new(users: Vec<LocalUserConfig>) -> Self {
         let salt = SaltString::encode_b64(b"mreg-dummy-salt").expect("static dummy salt is valid");
         let dummy_hash = Argon2::default()
@@ -50,8 +50,8 @@ fn verification_limiter() -> Arc<Semaphore> {
 }
 
 #[async_trait]
-impl ScopeAuthenticator for LocalScopeAuthenticator {
-    async fn login(
+impl AuthProviderBackend for LocalAuthProvider {
+    async fn authenticate(
         &self,
         credentials: BackendLoginRequest,
     ) -> Result<AuthenticatedIdentity, AppError> {

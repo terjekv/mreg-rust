@@ -6,6 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use url::Url;
+use utoipa::ToSchema;
 
 use crate::errors::AppError;
 
@@ -24,15 +25,15 @@ pub enum AuthMode {
     Scoped,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum AuthScopeKind {
+pub enum AuthProviderKind {
     Local,
     Ldap,
     Remote,
 }
 
-impl AuthScopeKind {
+impl AuthProviderKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Local => "local",
@@ -42,41 +43,57 @@ impl AuthScopeKind {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuthScopesDocument {
-    pub scopes: Vec<AuthScopeConfig>,
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct AuthProvidersDocument {
+    #[serde(default)]
+    pub providers: Vec<AuthProviderConfig>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuthScopeConfig {
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AuthProviderConfig {
+    #[serde(rename = "scope")]
     pub name: String,
     #[serde(flatten)]
-    pub backend: AuthScopeBackendConfig,
+    pub backend: AuthProviderBackendConfig,
 }
 
-impl AuthScopeConfig {
-    pub fn kind(&self) -> AuthScopeKind {
+impl AuthProviderConfig {
+    pub fn kind(&self) -> AuthProviderKind {
         self.backend.kind()
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AuthScopeBackendConfig {
+pub enum AuthProviderBackendConfig {
     Local {
         #[serde(default)]
         users: Vec<LocalUserConfig>,
     },
     Ldap {
         url: String,
-        #[serde(default = "default_auth_timeout_ms")]
-        timeout_ms: u64,
-        user_search_base: String,
-        user_search_filter: String,
-        group_search_base: String,
-        group_search_filter: String,
         bind_dn: Option<String>,
         bind_password: Option<String>,
+        #[serde(default = "default_ldap_connect_timeout_seconds")]
+        connect_timeout_seconds: u64,
+        #[serde(default = "default_ldap_operation_timeout_seconds")]
+        operation_timeout_seconds: u64,
+        user_base_dn: String,
+        user_filter: String,
+        #[serde(default = "default_ldap_search_scope")]
+        user_scope: LdapSearchScope,
+        #[serde(default = "default_ldap_username_attribute")]
+        username_attribute: String,
+        #[serde(default = "default_ldap_subject_attribute")]
+        subject_attribute: String,
+        display_name_attribute: Option<String>,
+        email_attribute: Option<String>,
+        #[serde(default)]
+        group_attributes: Vec<String>,
+        #[serde(default)]
+        group_filters: Vec<String>,
+        #[serde(default)]
+        group_rules: Vec<GroupMappingRuleConfig>,
     },
     Remote {
         login_url: String,
@@ -95,17 +112,32 @@ pub enum AuthScopeBackendConfig {
     },
 }
 
-impl AuthScopeBackendConfig {
-    pub fn kind(&self) -> AuthScopeKind {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LdapSearchScope {
+    Base,
+    One,
+    #[default]
+    Subtree,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupMappingRuleConfig {
+    pub pattern: String,
+    pub name: String,
+}
+
+impl AuthProviderBackendConfig {
+    pub fn kind(&self) -> AuthProviderKind {
         match self {
-            Self::Local { .. } => AuthScopeKind::Local,
-            Self::Ldap { .. } => AuthScopeKind::Ldap,
-            Self::Remote { .. } => AuthScopeKind::Remote,
+            Self::Local { .. } => AuthProviderKind::Local,
+            Self::Ldap { .. } => AuthProviderKind::Ldap,
+            Self::Remote { .. } => AuthProviderKind::Remote,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LocalUserConfig {
     pub username: String,
     pub password_hash: String,
@@ -113,7 +145,7 @@ pub struct LocalUserConfig {
     pub groups: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub listen: IpAddr,
     pub port: u16,
@@ -132,8 +164,8 @@ pub struct Config {
     pub auth_token_ttl_seconds: u64,
     pub auth_jwt_signing_key: Option<String>,
     pub auth_jwt_issuer: String,
-    pub auth_scopes_file: Option<String>,
-    pub auth_scopes: Vec<AuthScopeConfig>,
+    pub auth_config_path: Option<String>,
+    pub auth_providers: Vec<AuthProviderConfig>,
     pub event_webhook_url: Option<String>,
     pub event_webhook_timeout_ms: u64,
     pub event_amqp_url: Option<String>,
@@ -164,8 +196,8 @@ impl Default for Config {
             auth_token_ttl_seconds: 3600,
             auth_jwt_signing_key: None,
             auth_jwt_issuer: "mreg-rust".to_string(),
-            auth_scopes_file: None,
-            auth_scopes: Vec::new(),
+            auth_config_path: None,
+            auth_providers: Vec::new(),
             event_webhook_url: None,
             event_webhook_timeout_ms: 5000,
             event_amqp_url: None,
@@ -180,9 +212,9 @@ impl Default for Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, AppError> {
-        let auth_scopes_file = env::var("MREG_AUTH_SCOPES_FILE").ok();
-        let auth_scopes = match &auth_scopes_file {
-            Some(path) => read_auth_scopes_file(path)?,
+        let auth_config_path = env::var("MREG_AUTH_CONFIG_PATH").ok();
+        let auth_providers = match &auth_config_path {
+            Some(path) => read_auth_providers_file(path)?,
             None => Vec::new(),
         };
 
@@ -220,8 +252,8 @@ impl Config {
             auth_jwt_signing_key: env::var("MREG_AUTH_JWT_SIGNING_KEY").ok(),
             auth_jwt_issuer: env::var("MREG_AUTH_JWT_ISSUER")
                 .unwrap_or_else(|_| "mreg-rust".to_string()),
-            auth_scopes_file,
-            auth_scopes,
+            auth_config_path,
+            auth_providers,
             event_webhook_url: env::var("MREG_EVENT_WEBHOOK_URL").ok(),
             event_webhook_timeout_ms: parse_or_default("MREG_EVENT_WEBHOOK_TIMEOUT_MS", 5000)?,
             event_amqp_url: env::var("MREG_EVENT_AMQP_URL").ok(),
@@ -257,12 +289,12 @@ impl Config {
                         "MREG_AUTH_JWT_SIGNING_KEY must be at least 32 bytes (256 bits) for HS256 security",
                     ));
                 }
-                if self.auth_scopes.is_empty() {
+                if self.auth_providers.is_empty() {
                     return Err(AppError::config(
                         "scoped auth requires at least one configured auth scope",
                     ));
                 }
-                validate_scopes(&self.auth_scopes, self.allow_unsafe_urls)?;
+                validate_providers(&self.auth_providers, self.allow_unsafe_urls)?;
             }
         }
         if let Some(url) = &self.treetop_url {
@@ -277,6 +309,26 @@ impl Config {
 
 fn default_auth_timeout_ms() -> u64 {
     5000
+}
+
+fn default_ldap_connect_timeout_seconds() -> u64 {
+    5
+}
+
+fn default_ldap_operation_timeout_seconds() -> u64 {
+    10
+}
+
+fn default_ldap_search_scope() -> LdapSearchScope {
+    LdapSearchScope::Subtree
+}
+
+fn default_ldap_username_attribute() -> String {
+    "uid".to_string()
+}
+
+fn default_ldap_subject_attribute() -> String {
+    "dn".to_string()
 }
 
 fn default_forward_username_claim() -> String {
@@ -300,22 +352,10 @@ fn validate_external_url(url: &str, key: &str, allow_unsafe: bool) -> Result<(),
     Ok(())
 }
 
-fn validate_ldap_url(url: &str, allow_unsafe: bool) -> Result<(), AppError> {
-    let parsed = Url::parse(url)
-        .map_err(|_| AppError::config(format!("ldap.url is not a valid URL: {url}")))?;
-    match parsed.scheme() {
-        "ldaps" => Ok(()),
-        "ldap" if allow_unsafe => Ok(()),
-        "ldap" => Err(AppError::config(
-            "ldap.url must use ldaps (set MREG_ALLOW_UNSAFE_URLS=true to allow plaintext ldap in dev/test)",
-        )),
-        scheme => Err(AppError::config(format!(
-            "ldap.url must use ldap or ldaps, got `{scheme}`"
-        ))),
-    }
-}
-
-fn validate_scopes(scopes: &[AuthScopeConfig], allow_unsafe_urls: bool) -> Result<(), AppError> {
+fn validate_providers(
+    scopes: &[AuthProviderConfig],
+    allow_unsafe_urls: bool,
+) -> Result<(), AppError> {
     let mut seen_scope_names = BTreeSet::new();
     for scope in scopes {
         if !is_valid_scope_name(&scope.name) {
@@ -331,7 +371,7 @@ fn validate_scopes(scopes: &[AuthScopeConfig], allow_unsafe_urls: bool) -> Resul
             )));
         }
         match &scope.backend {
-            AuthScopeBackendConfig::Local { users } => {
+            AuthProviderBackendConfig::Local { users } => {
                 let mut seen_usernames = BTreeSet::new();
                 for user in users {
                     validate_raw_identity_component(&user.username, "local username")?;
@@ -352,41 +392,76 @@ fn validate_scopes(scopes: &[AuthScopeConfig], allow_unsafe_urls: bool) -> Resul
                     }
                 }
             }
-            AuthScopeBackendConfig::Ldap {
+            AuthProviderBackendConfig::Ldap {
                 url,
-                user_search_base,
-                user_search_filter,
-                group_search_base,
-                group_search_filter,
                 bind_dn,
                 bind_password,
+                connect_timeout_seconds,
+                operation_timeout_seconds,
+                user_base_dn,
+                user_filter,
+                username_attribute,
+                subject_attribute,
+                display_name_attribute,
+                email_attribute,
+                group_attributes,
+                group_filters,
+                group_rules,
                 ..
             } => {
                 require_non_empty("ldap.url", url)?;
-                validate_ldap_url(url, allow_unsafe_urls)?;
-                require_non_empty("ldap.user_search_base", user_search_base)?;
-                require_non_empty("ldap.user_search_filter", user_search_filter)?;
-                require_non_empty("ldap.group_search_base", group_search_base)?;
-                require_non_empty("ldap.group_search_filter", group_search_filter)?;
+                validate_ldap_url(url)?;
+                if *connect_timeout_seconds == 0 || *operation_timeout_seconds == 0 {
+                    return Err(AppError::config("LDAP timeouts must be positive"));
+                }
+                require_non_empty("ldap.user_base_dn", user_base_dn)?;
+                require_non_empty("ldap.user_filter", user_filter)?;
+                if !user_filter.contains("{username}") {
+                    return Err(AppError::config(
+                        "ldap.user_filter must contain `{username}`",
+                    ));
+                }
+                require_non_empty("ldap.username_attribute", username_attribute)?;
+                require_non_empty("ldap.subject_attribute", subject_attribute)?;
+                for (label, attribute) in [
+                    ("ldap.display_name_attribute", display_name_attribute),
+                    ("ldap.email_attribute", email_attribute),
+                ] {
+                    if let Some(attribute) = attribute {
+                        require_non_empty(label, attribute)?;
+                    }
+                }
+                for attribute in group_attributes {
+                    require_non_empty("ldap.group_attributes", attribute)?;
+                }
                 match (bind_dn.as_deref(), bind_password.as_deref()) {
                     (Some(dn), Some(password)) => {
                         require_non_empty("ldap.bind_dn", dn)?;
                         require_non_empty("ldap.bind_password", password)?;
                     }
-                    (Some(_), None) => {
-                        return Err(AppError::config(
-                            "ldap.bind_password is required when ldap.bind_dn is configured",
-                        ));
-                    }
-                    (None, Some(_)) => {
-                        return Err(AppError::config(
-                            "ldap.bind_dn is required when ldap.bind_password is configured",
-                        ));
-                    }
                     (None, None) => {}
+                    _ => {
+                        return Err(AppError::config(
+                            "ldap.bind_dn and ldap.bind_password must be configured together",
+                        ));
+                    }
+                }
+                for filter in group_filters {
+                    regex::Regex::new(filter).map_err(|error| {
+                        AppError::config(format!("invalid LDAP group filter `{filter}`: {error}"))
+                    })?;
+                }
+                for rule in group_rules {
+                    regex::Regex::new(&rule.pattern).map_err(|error| {
+                        AppError::config(format!(
+                            "invalid LDAP group rule `{}`: {error}",
+                            rule.pattern
+                        ))
+                    })?;
+                    require_non_empty("ldap.group_rules.name", &rule.name)?;
                 }
             }
-            AuthScopeBackendConfig::Remote {
+            AuthProviderBackendConfig::Remote {
                 login_url,
                 jwt_issuer,
                 jwks_url,
@@ -456,12 +531,26 @@ fn is_valid_scope_name(value: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
 }
 
-fn read_auth_scopes_file(path: &str) -> Result<Vec<AuthScopeConfig>, AppError> {
+fn validate_ldap_url(value: &str) -> Result<(), AppError> {
+    let parsed = Url::parse(value)
+        .map_err(|error| AppError::config(format!("invalid LDAP URL: {error}")))?;
+    if parsed.host_str().is_none() {
+        return Err(AppError::config("LDAP URL must include a host"));
+    }
+    match parsed.scheme() {
+        "ldap" | "ldaps" => Ok(()),
+        scheme => Err(AppError::config(format!(
+            "LDAP URL must use ldap or ldaps, got `{scheme}`"
+        ))),
+    }
+}
+
+fn read_auth_providers_file(path: &str) -> Result<Vec<AuthProviderConfig>, AppError> {
     let raw = fs::read_to_string(path)
         .map_err(|error| AppError::config(format!("failed to read {path}: {error}")))?;
-    let document = serde_json::from_str::<AuthScopesDocument>(&raw)
+    let document = toml::from_str::<AuthProvidersDocument>(&raw)
         .map_err(|error| AppError::config(format!("failed to parse {path}: {error}")))?;
-    Ok(document.scopes)
+    Ok(document.providers)
 }
 
 fn parse_or_default<T>(key: &str, default: T) -> Result<T, AppError>
@@ -549,9 +638,9 @@ mod tests {
     /// A signing key of exactly 32 bytes, valid for HS256.
     const VALID_SIGNING_KEY: &str = "this_is_exactly_32_bytes_long_!!";
 
-    fn temp_json_path(name: &str) -> PathBuf {
+    fn temp_toml_path(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("mreg-rust-{name}-{}.json", Uuid::new_v4()));
+        path.push(format!("mreg-rust-{name}-{}.toml", Uuid::new_v4()));
         path
     }
 
@@ -559,9 +648,9 @@ mod tests {
         Config {
             auth_mode: AuthMode::Scoped,
             auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
-            auth_scopes: vec![AuthScopeConfig {
+            auth_providers: vec![AuthProviderConfig {
                 name: "local".to_string(),
-                backend: AuthScopeBackendConfig::Local { users: Vec::new() },
+                backend: AuthProviderBackendConfig::Local { users: Vec::new() },
             }],
             ..Config::default()
         }
@@ -572,14 +661,14 @@ mod tests {
         let config = Config {
             auth_mode: AuthMode::Scoped,
             auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
-            auth_scopes: vec![
-                AuthScopeConfig {
+            auth_providers: vec![
+                AuthProviderConfig {
                     name: "local".to_string(),
-                    backend: AuthScopeBackendConfig::Local { users: Vec::new() },
+                    backend: AuthProviderBackendConfig::Local { users: Vec::new() },
                 },
-                AuthScopeConfig {
+                AuthProviderConfig {
                     name: "local".to_string(),
-                    backend: AuthScopeBackendConfig::Local { users: Vec::new() },
+                    backend: AuthProviderBackendConfig::Local { users: Vec::new() },
                 },
             ],
             ..Config::default()
@@ -596,9 +685,9 @@ mod tests {
         let config = Config {
             auth_mode: AuthMode::Scoped,
             auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
-            auth_scopes: vec![AuthScopeConfig {
+            auth_providers: vec![AuthProviderConfig {
                 name: "remote".to_string(),
-                backend: AuthScopeBackendConfig::Remote {
+                backend: AuthProviderBackendConfig::Remote {
                     login_url: "https://auth.example/login".to_string(),
                     timeout_ms: 5000,
                     default_service_name: None,
@@ -621,9 +710,9 @@ mod tests {
         let config = Config {
             auth_mode: AuthMode::Scoped,
             auth_jwt_signing_key: Some("tooshort".to_string()),
-            auth_scopes: vec![AuthScopeConfig {
+            auth_providers: vec![AuthProviderConfig {
                 name: "local".to_string(),
-                backend: AuthScopeBackendConfig::Local { users: Vec::new() },
+                backend: AuthProviderBackendConfig::Local { users: Vec::new() },
             }],
             ..Config::default()
         };
@@ -672,9 +761,9 @@ mod tests {
         let config = Config {
             auth_mode: AuthMode::Scoped,
             auth_jwt_signing_key: Some(VALID_SIGNING_KEY.to_string()),
-            auth_scopes: vec![AuthScopeConfig {
+            auth_providers: vec![AuthProviderConfig {
                 name: "remote".to_string(),
-                backend: AuthScopeBackendConfig::Remote {
+                backend: AuthProviderBackendConfig::Remote {
                     login_url: "http://auth.example/login".to_string(),
                     timeout_ms: 5000,
                     default_service_name: None,
@@ -694,13 +783,6 @@ mod tests {
             err.to_string().contains("https"),
             "expected https error for login_url, got: {err}"
         );
-    }
-
-    #[test]
-    fn ldap_scope_requires_ldaps_by_default() {
-        assert!(validate_ldap_url("ldap://ldap.example.org", false).is_err());
-        assert!(validate_ldap_url("ldaps://ldap.example.org", false).is_ok());
-        assert!(validate_ldap_url("ldap://localhost", true).is_ok());
     }
 
     #[test]
@@ -753,40 +835,63 @@ mod tests {
     }
 
     #[test]
-    fn read_auth_scopes_file_parses_local_scope_registry() {
-        let path = temp_json_path("auth-scopes");
+    fn read_auth_providers_file_parses_local_provider_registry() {
+        let path = temp_toml_path("auth-providers");
         fs::write(
             &path,
-            r#"{
-  "scopes": [
-    {
-      "name": "local",
-      "kind": "local",
-      "users": [
-        {
-          "username": "admin",
-          "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$abc$def",
-          "groups": ["ops", "net"]
-        }
-      ]
-    }
-  ]
-}"#,
+            r#"[[providers]]
+scope = "local"
+kind = "local"
+
+[[providers.users]]
+username = "admin"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$abc$def"
+groups = ["ops", "net"]
+"#,
         )
         .unwrap();
 
-        let scopes = read_auth_scopes_file(path.to_str().unwrap()).unwrap();
+        let scopes = read_auth_providers_file(path.to_str().unwrap()).unwrap();
         let _ = fs::remove_file(&path);
 
         assert_eq!(scopes.len(), 1);
         assert_eq!(scopes[0].name, "local");
         match &scopes[0].backend {
-            AuthScopeBackendConfig::Local { users } => {
+            AuthProviderBackendConfig::Local { users } => {
                 assert_eq!(users.len(), 1);
                 assert_eq!(users[0].username, "admin");
                 assert_eq!(users[0].groups, vec!["ops", "net"]);
             }
-            other => panic!("expected local scope, got {other:?}"),
+            _ => panic!("expected local provider"),
         }
+    }
+
+    #[test]
+    fn example_provider_registry_parses_with_ldap_group_mapping() {
+        let document =
+            toml::from_str::<AuthProvidersDocument>(include_str!("../auth-providers.example.toml"))
+                .unwrap();
+        let ldap = document
+            .providers
+            .iter()
+            .find(|provider| provider.name == "ldap-primary")
+            .unwrap();
+        let actual = match &ldap.backend {
+            AuthProviderBackendConfig::Ldap {
+                group_filters,
+                group_rules,
+                ..
+            } => (
+                document.providers.len(),
+                group_filters.clone(),
+                group_rules.len(),
+            ),
+            _ => unreachable!("ldap-primary must be an LDAP provider"),
+        };
+
+        assert_eq!(
+            actual,
+            (3, vec!["^mreg-".to_string(), "^admin$".to_string()], 1)
+        );
     }
 }

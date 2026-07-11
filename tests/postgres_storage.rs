@@ -41,7 +41,7 @@ use mreg_rust::{
     authn::AuthnClient,
     authz::AuthorizerClient,
     config::{
-        AuthMode, AuthScopeBackendConfig, AuthScopeConfig, Config, LocalUserConfig,
+        AuthMode, AuthProviderBackendConfig, AuthProviderConfig, Config, LocalUserConfig,
         StorageBackendSetting,
     },
     events::EventSinkClient,
@@ -109,9 +109,9 @@ async fn postgres_scoped_auth_state(
         allow_dev_authz_bypass,
         auth_mode: AuthMode::Scoped,
         auth_jwt_signing_key: Some("postgres-test-jwt-signing-secret".to_string()),
-        auth_scopes: vec![AuthScopeConfig {
+        auth_providers: vec![AuthProviderConfig {
             name: scope_name.to_string(),
-            backend: AuthScopeBackendConfig::Local {
+            backend: AuthProviderBackendConfig::Local {
                 users: vec![LocalUserConfig {
                     username: "admin".to_string(),
                     password_hash: local_password_hash("secret"),
@@ -2640,7 +2640,6 @@ async fn postgres_builtin_bootstrap_is_idempotent_across_fresh_contexts()
 async fn postgres_auth_login_and_me_work_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-login";
-    let login_username = format!("{scope}:admin");
     let principal_key = format!("mreg::{scope}::admin");
     let Some(state_a) = postgres_scoped_auth_state(scope, true).await else {
         eprintln!(
@@ -2655,7 +2654,7 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
     let (status, body) = call_auth_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":login_username,"password":"secret"}))
+            .set_json(json!({"identity_scope":scope,"username":"admin","password":"secret"}))
             .to_request(),
         state_a.clone(),
     )
@@ -2702,7 +2701,6 @@ async fn postgres_auth_login_and_me_work_across_fresh_app_states()
 async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-logout";
-    let login_username = format!("{scope}:admin");
     let Some(state_a) = postgres_scoped_auth_state(scope, true).await else {
         eprintln!(
             "{}",
@@ -2716,7 +2714,7 @@ async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
     let (status, body) = call_auth_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":login_username,"password":"secret"}))
+            .set_json(json!({"identity_scope":scope,"username":"admin","password":"secret"}))
             .to_request(),
         state_a.clone(),
     )
@@ -2759,7 +2757,6 @@ async fn postgres_auth_logout_revokes_token_across_fresh_app_states()
 async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
 -> Result<(), Box<dyn std::error::Error>> {
     let scope = "local-logout-all";
-    let login_username = format!("{scope}:admin");
     let principal_key = format!("mreg::{scope}::admin");
     let Some(state_a) = postgres_scoped_auth_state(scope, true).await else {
         eprintln!(
@@ -2774,7 +2771,7 @@ async fn postgres_auth_logout_all_revokes_token_across_fresh_app_states()
     let (status, body) = call_auth_json(
         test::TestRequest::post()
             .uri("/auth/login")
-            .set_json(json!({"username":login_username,"password":"secret"}))
+            .set_json(json!({"identity_scope":scope,"username":"admin","password":"secret"}))
             .to_request(),
         state_a.clone(),
     )

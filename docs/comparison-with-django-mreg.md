@@ -199,7 +199,7 @@ Django mreg uses Django REST framework token authentication.
 mreg-rust supports two modes:
 
 - **`none`** -- identity trusted from `X-Mreg-User`/`X-Mreg-Groups` headers (dev/test)
-- **`scoped`** -- login with `scope:username` against configured backends (local users with Argon2id, LDAP bind, or remote JWT delegation), receiving an mreg-issued JWT with a namespace-aware principal such as `["mreg","local"] + "admin"`
+- **`scoped`** -- login with separate `identity_scope` and `username` fields against configured providers (local users with Argon2id, LDAP bind, or remote JWT delegation), receiving an mreg-issued JWT with a namespace-aware principal such as `["mreg","local"] + "admin"`
 
 Authorization is still delegated to Treetop for policy evaluation, same as in Django mreg.
 
