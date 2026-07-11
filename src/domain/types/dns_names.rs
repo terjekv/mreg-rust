@@ -199,29 +199,30 @@ fn normalize_dns_name(value: &str) -> Result<String, AppError> {
 }
 
 fn validate_hostname(value: &str) -> Result<(), AppError> {
-    if value.contains('*') {
-        return Err(AppError::validation("hostname cannot contain '*'"));
-    }
-    if value.contains('_') {
-        return Err(AppError::validation("hostname cannot contain '_'"));
-    }
-
     for label in value.split('.') {
-        if label.is_empty() {
+        let bytes = label.as_bytes();
+        if bytes.is_empty() {
             return Err(AppError::validation("hostname contains empty label"));
         }
-        if label.starts_with('-') || label.ends_with('-') {
+        if bytes.first() == Some(&b'-') || bytes.last() == Some(&b'-') {
             return Err(AppError::validation(
                 "hostname labels cannot start or end with '-'",
             ));
         }
-        if !label
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        if let Some(byte) = bytes
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_alphanumeric() && *byte != b'-')
         {
-            return Err(AppError::validation(
-                "hostname labels must be alphanumeric or '-'",
-            ));
+            match byte {
+                b'*' => return Err(AppError::validation("hostname cannot contain '*'")),
+                b'_' => return Err(AppError::validation("hostname cannot contain '_'")),
+                _ => {
+                    return Err(AppError::validation(
+                        "hostname labels must be alphanumeric or '-'",
+                    ));
+                }
+            }
         }
     }
 

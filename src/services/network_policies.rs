@@ -32,7 +32,7 @@ pub async fn create_network_policy(
         .transaction(move |tx| {
             let item = tx.network_policies().create_network_policy(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "network_policy",
                 Some(item.id()),
                 item.name().as_str(),
@@ -70,7 +70,7 @@ pub async fn delete_network_policy(
                 .get_network_policy_by_name(&name_owned)?;
             tx.network_policies().delete_network_policy(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "network_policy",
                 Some(old.id()),
                 old.name().as_str(),

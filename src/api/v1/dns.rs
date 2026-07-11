@@ -35,6 +35,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 pub(crate) async fn record_types(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -49,7 +50,7 @@ pub(crate) async fn record_types(
     let page = state
         .services
         .records()
-        .list_types(&PageRequest::default())
+        .list_types(&query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,
@@ -70,6 +71,7 @@ pub(crate) async fn record_types(
 pub(crate) async fn rrsets(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -84,7 +86,7 @@ pub(crate) async fn rrsets(
     let page = state
         .services
         .records()
-        .list_rrsets(&PageRequest::default())
+        .list_rrsets(&query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,

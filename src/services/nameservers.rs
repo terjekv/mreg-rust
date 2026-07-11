@@ -30,7 +30,7 @@ pub async fn create(
         .transaction(move |tx| {
             let ns = tx.nameservers().create_nameserver(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "nameserver",
                 Some(ns.id()),
                 ns.name().as_str(),
@@ -67,7 +67,7 @@ pub async fn update(
             let old = tx.nameservers().get_nameserver_by_name(&name_owned)?;
             let new = tx.nameservers().update_nameserver(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "nameserver",
                 Some(new.id()),
                 new.name().as_str(),
@@ -95,7 +95,7 @@ pub async fn delete(
             let old = tx.nameservers().get_nameserver_by_name(&name_owned)?;
             tx.nameservers().delete_nameserver(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "nameserver",
                 Some(old.id()),
                 old.name().as_str(),

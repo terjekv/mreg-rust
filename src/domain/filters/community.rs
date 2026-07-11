@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::apply::apply_string_filter;
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
-use super::sql::{build_sql_conditions, op_to_sql};
+use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
 use crate::domain::{
     attachment::AttachmentCommunityAssignment, community::Community,
     host_community_assignment::HostCommunityAssignment,
@@ -61,11 +61,11 @@ impl AttachmentCommunityAssignmentFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         build_sql_conditions(
             &[
-                (&self.community_name, "c.name::text"),
-                (&self.policy_name, "np.name::text"),
-                (&self.host, "h.name::text"),
-                (&self.network, "n.network::text"),
-                (&self.mac_address, "a.mac_address"),
+                (&self.community_name, "c.name::text", SqlBindType::Text),
+                (&self.policy_name, "np.name::text", SqlBindType::Text),
+                (&self.host, "h.name::text", SqlBindType::Text),
+                (&self.network, "n.network::text", SqlBindType::Text),
+                (&self.mac_address, "a.mac_address", SqlBindType::Text),
             ],
             &None,
             &[],
@@ -78,23 +78,23 @@ impl AttachmentCommunityAssignmentFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "community_name" => {
-                    validate_op("community_name", &op, FieldType::String)?;
+                    validate_op("community_name", &op, FieldType::String, &value)?;
                     filter.community_name.push(FilterCondition { op, value });
                 }
                 "policy_name" => {
-                    validate_op("policy_name", &op, FieldType::String)?;
+                    validate_op("policy_name", &op, FieldType::String, &value)?;
                     filter.policy_name.push(FilterCondition { op, value });
                 }
                 "host" => {
-                    validate_op("host", &op, FieldType::String)?;
+                    validate_op("host", &op, FieldType::String, &value)?;
                     filter.host.push(FilterCondition { op, value });
                 }
                 "network" => {
-                    validate_op("network", &op, FieldType::Cidr)?;
+                    validate_op("network", &op, FieldType::Cidr, &value)?;
                     filter.network.push(FilterCondition { op, value });
                 }
                 "mac_address" => {
-                    validate_op("mac_address", &op, FieldType::String)?;
+                    validate_op("mac_address", &op, FieldType::String, &value)?;
                     filter.mac_address.push(FilterCondition { op, value });
                 }
                 _ => {
@@ -148,10 +148,10 @@ impl CommunityFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         build_sql_conditions(
             &[
-                (&self.policy_name, "np.name::text"),
-                (&self.name, "c.name::text"),
-                (&self.description, "c.description"),
-                (&self.network, "n.network::text"),
+                (&self.policy_name, "np.name::text", SqlBindType::Text),
+                (&self.name, "c.name::text", SqlBindType::Text),
+                (&self.description, "c.description", SqlBindType::Text),
+                (&self.network, "n.network::text", SqlBindType::Text),
             ],
             &self.search,
             &["c.name::text", "c.description"],
@@ -165,19 +165,19 @@ impl CommunityFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "policy_name" => {
-                    validate_op("policy_name", &op, FieldType::String)?;
+                    validate_op("policy_name", &op, FieldType::String, &value)?;
                     filter.policy_name.push(FilterCondition { op, value });
                 }
                 "name" => {
-                    validate_op("name", &op, FieldType::String)?;
+                    validate_op("name", &op, FieldType::String, &value)?;
                     filter.name.push(FilterCondition { op, value });
                 }
                 "description" => {
-                    validate_op("description", &op, FieldType::String)?;
+                    validate_op("description", &op, FieldType::String, &value)?;
                     filter.description.push(FilterCondition { op, value });
                 }
                 "network" => {
-                    validate_op("network", &op, FieldType::Cidr)?;
+                    validate_op("network", &op, FieldType::Cidr, &value)?;
                     filter.network.push(FilterCondition { op, value });
                 }
                 _ => {
@@ -230,9 +230,9 @@ impl HostCommunityAssignmentFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         let (mut clauses, mut values) = build_sql_conditions(
             &[
-                (&self.community_name, "c.name::text"),
-                (&self.policy_name, "np.name::text"),
-                (&self.host, "h.name::text"),
+                (&self.community_name, "c.name::text", SqlBindType::Text),
+                (&self.policy_name, "np.name::text", SqlBindType::Text),
+                (&self.host, "h.name::text", SqlBindType::Text),
             ],
             &None,
             &[],
@@ -260,19 +260,19 @@ impl HostCommunityAssignmentFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "community_name" => {
-                    validate_op("community_name", &op, FieldType::String)?;
+                    validate_op("community_name", &op, FieldType::String, &value)?;
                     filter.community_name.push(FilterCondition { op, value });
                 }
                 "policy_name" => {
-                    validate_op("policy_name", &op, FieldType::String)?;
+                    validate_op("policy_name", &op, FieldType::String, &value)?;
                     filter.policy_name.push(FilterCondition { op, value });
                 }
                 "host" => {
-                    validate_op("host", &op, FieldType::String)?;
+                    validate_op("host", &op, FieldType::String, &value)?;
                     filter.host.push(FilterCondition { op, value });
                 }
                 "address" => {
-                    validate_op("address", &op, FieldType::String)?;
+                    validate_op("address", &op, FieldType::String, &value)?;
                     filter.address.push(FilterCondition { op, value });
                 }
                 _ => {

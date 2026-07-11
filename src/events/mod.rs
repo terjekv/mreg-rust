@@ -7,11 +7,14 @@ pub mod amqp;
 pub mod redis;
 
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
+use tracing::warn;
+use url::Url;
 use uuid::Uuid;
 
 use crate::audit::HistoryEvent;
@@ -97,6 +100,7 @@ impl EventSink for CompositeSink {
 #[derive(Clone)]
 pub struct EventSinkClient {
     inner: Arc<dyn EventSink>,
+    delivery_slots: Arc<Semaphore>,
 }
 
 impl EventSinkClient {
@@ -104,13 +108,17 @@ impl EventSinkClient {
     pub fn noop() -> Self {
         Self {
             inner: Arc::new(NoopSink),
+            delivery_slots: Arc::new(Semaphore::new(64)),
         }
     }
 
     /// Wrap a caller-supplied sink. Intended for tests that need to inspect
     /// emitted events.
     pub fn with_sink(inner: Arc<dyn EventSink>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            delivery_slots: Arc::new(Semaphore::new(64)),
+        }
     }
 
     /// Build an event sink client from configuration.
@@ -153,17 +161,42 @@ impl EventSinkClient {
             _ => Arc::new(CompositeSink::new(sinks)),
         };
 
-        Self { inner }
+        Self {
+            inner,
+            delivery_slots: Arc::new(Semaphore::new(64)),
+        }
     }
 
     /// Schedule background delivery of a domain event. Never fails callers.
     pub async fn emit(&self, event: &DomainEvent) {
+        let Ok(permit) = Arc::clone(&self.delivery_slots).try_acquire_owned() else {
+            warn!(
+                event_id = %event.id,
+                resource_kind = %event.resource_kind,
+                action = %event.action,
+                "event delivery capacity exhausted; event remains available in audit history"
+            );
+            return;
+        };
         let sink = Arc::clone(&self.inner);
         let event = event.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             sink.emit(&event).await;
         });
     }
+}
+
+pub(crate) fn safe_url_for_log(raw: &str) -> String {
+    let Ok(url) = Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    let host = url.host_str().unwrap_or("<unknown-host>");
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    format!("{}://{host}{port}/…", url.scheme())
 }
 
 #[cfg(test)]
@@ -280,6 +313,7 @@ mod tests {
                 delivered: Arc::clone(&delivered),
                 notify: Arc::clone(&notify),
             }),
+            delivery_slots: Arc::new(Semaphore::new(64)),
         };
         let event = DomainEvent {
             id: Uuid::new_v4(),
@@ -320,5 +354,13 @@ mod tests {
         assert_eq!(domain.actor, "admin");
         assert_eq!(domain.resource_kind, "label");
         assert_eq!(domain.action, "create");
+    }
+
+    #[test]
+    fn log_url_redacts_credentials_path_and_query() {
+        assert_eq!(
+            safe_url_for_log("https://user:secret@hooks.example/private/token?key=value"),
+            "https://hooks.example/…"
+        );
     }
 }

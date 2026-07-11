@@ -1,0 +1,9 @@
+DROP INDEX IF EXISTS idx_host_policy_role_labels_label_id;
+DROP INDEX IF EXISTS idx_host_policy_role_hosts_host_id;
+DROP INDEX IF EXISTS idx_host_policy_role_atoms_atom_id;
+DROP INDEX IF EXISTS idx_host_group_parents_parent_id;
+DROP INDEX IF EXISTS idx_host_group_hosts_host_id;
+DROP INDEX IF EXISTS idx_host_contacts_hosts_contact_id;
+DROP INDEX IF EXISTS idx_rrsets_anchor_id;
+DROP INDEX IF EXISTS idx_records_owner_id;
+DROP INDEX IF EXISTS idx_ip_addresses_host_id;

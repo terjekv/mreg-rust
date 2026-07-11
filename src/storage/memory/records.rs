@@ -296,6 +296,7 @@ pub(super) fn resolve_record_owner(
 }
 
 fn best_matching_zone_for_owner_name(state: &MemoryState, owner_name: &DnsName) -> Option<Uuid> {
+    let owner_name = owner_name.as_str();
     state
         .forward_zones
         .values()
@@ -306,12 +307,16 @@ fn best_matching_zone_for_owner_name(state: &MemoryState, owner_name: &DnsName) 
                 .values()
                 .map(|zone| (zone.id(), zone.name().as_str())),
         )
-        .filter(|(_, zone_name)| {
-            owner_name.as_str() == *zone_name
-                || owner_name.as_str().ends_with(&format!(".{}", zone_name))
-        })
+        .filter(|(_, zone_name)| is_same_or_subdomain(owner_name, zone_name))
         .max_by_key(|(_, zone_name)| zone_name.len())
         .map(|(zone_id, _)| zone_id)
+}
+
+fn is_same_or_subdomain(owner_name: &str, zone_name: &str) -> bool {
+    owner_name == zone_name
+        || owner_name
+            .strip_suffix(zone_name)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 pub(super) fn list_record_types_in_state(
@@ -659,18 +664,17 @@ pub(super) fn delete_records_by_owner_in_state(
     state: &mut MemoryState,
     owner_id: Uuid,
 ) -> Result<u64, AppError> {
-    let mut removed_records = Vec::new();
-    let mut kept = Vec::new();
-    for record in state.records.drain(..) {
+    let original_len = state.records.len();
+    let mut rrset_ids = HashSet::new();
+    state.records.retain(|record| {
         if record.owner_id() == Some(owner_id) {
-            removed_records.push(record);
+            rrset_ids.insert(record.rrset_id());
+            false
         } else {
-            kept.push(record);
+            true
         }
-    }
-    state.records = kept;
-    let count = removed_records.len() as u64;
-    let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
+    });
+    let count = original_len.saturating_sub(state.records.len()) as u64;
     for rrset_id in rrset_ids {
         if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
             state.rrsets.remove(&rrset_id);
@@ -878,5 +882,17 @@ impl RecordStore for MemoryStorage {
     ) -> Result<u64, AppError> {
         let mut state = self.state.write().await;
         rename_record_owner_in_state(&mut state, owner_id, new_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_same_or_subdomain;
+
+    #[test]
+    fn zone_membership_requires_a_label_boundary() {
+        assert!(is_same_or_subdomain("example.org", "example.org"));
+        assert!(is_same_or_subdomain("host.example.org", "example.org"));
+        assert!(!is_same_or_subdomain("notexample.org", "example.org"));
     }
 }

@@ -32,7 +32,7 @@ pub async fn create_host_contact(
         .transaction(move |tx| {
             let contact = tx.host_contacts().create_host_contact(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_contact",
                 Some(contact.id()),
                 contact.email().as_str(),
@@ -68,7 +68,7 @@ pub async fn delete_host_contact(
             let old = tx.host_contacts().get_host_contact_by_email(&email_owned)?;
             tx.host_contacts().delete_host_contact(&email_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_contact",
                 Some(old.id()),
                 old.email().as_str(),

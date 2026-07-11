@@ -13,7 +13,7 @@ use crate::{
             CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork,
             cidr_contains, ip_to_u128, network_usable_bounds,
         },
-        pagination::{Page, PageRequest},
+        pagination::{Page, PageRequest, SortDirection},
         types::{CidrValue, IpAddressValue},
     },
     errors::AppError,
@@ -22,7 +22,7 @@ use crate::{
 
 use super::PostgresStorage;
 use super::helpers::{
-    TextValueRow, map_unique, rows_to_page, run_count_query, run_dynamic_query, vec_to_page,
+    TextValueRow, limited_rows_to_page, map_unique, run_count_query, run_dynamic_query, vec_to_page,
 };
 
 #[derive(diesel::QueryableByName)]
@@ -256,7 +256,7 @@ impl PostgresStorage {
                 n.reserved, n.created_at, n.updated_at \
                 FROM networks n";
 
-        let (clauses, values) = filter.sql_conditions();
+        let (clauses, mut values) = filter.sql_conditions();
         let where_str = if clauses.is_empty() {
             String::new()
         } else {
@@ -274,19 +274,37 @@ impl PostgresStorage {
             }
         };
         let order_dir = match page.sort_direction() {
-            crate::domain::pagination::SortDirection::Asc => "ASC",
-            crate::domain::pagination::SortDirection::Desc => "DESC",
+            SortDirection::Asc => "ASC",
+            SortDirection::Desc => "DESC",
         };
         let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
         let total = run_count_query(connection, &count_sql, &values)?;
 
-        let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
+        let cursor_clause = if let Some(cursor) = page.after() {
+            let idx = values.len() + 1;
+            values.push(cursor.to_string());
+            format!(
+                " WHERE _ord > COALESCE((SELECT _ord FROM ranked WHERE id = ${idx}::uuid), 9223372036854775807)"
+            )
+        } else {
+            String::new()
+        };
+        let limit_clause = if page.limit() != u64::MAX {
             format!(" LIMIT {}", page.limit() + 1)
         } else {
             String::new()
         };
         let query_str = format!(
-            "{base}{where_str} ORDER BY {order_col} {order_dir}, n.id{limit_clause}"
+            "WITH ranked AS (
+                 SELECT n.id, n.network::text AS network, n.description, n.vlan,
+                        n.dns_delegated, n.category, n.location, n.frozen, n.reserved,
+                        n.created_at, n.updated_at,
+                        ROW_NUMBER() OVER (ORDER BY {order_col} {order_dir}, n.id) AS _ord
+                 FROM networks n {where_str}
+             )
+             SELECT id, network, description, vlan, dns_delegated, category, location,
+                    frozen, reserved, created_at, updated_at
+             FROM ranked{cursor_clause} ORDER BY _ord{limit_clause}"
         );
 
         let rows = run_dynamic_query::<NetworkRow>(connection, &query_str, &values)?;
@@ -295,7 +313,7 @@ impl PostgresStorage {
             .map(NetworkRow::into_domain)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(rows_to_page(all_items, page, total))
+        Ok(limited_rows_to_page(all_items, page, total))
     }
 
     pub(in crate::storage::postgres) fn create_network_in_conn(
@@ -365,9 +383,7 @@ impl PostgresStorage {
             .bind::<Integer, _>(reserved)
             .bind::<Text, _>(cidr.as_str())
             .get_result::<NetworkRow>(connection)
-            .map_err(|_| {
-                AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
-            })?
+            .map_err(|_| AppError::not_found(format!("network '{}' was not found", cidr.as_str())))?
             .into_domain()
         })
     }
@@ -415,8 +431,7 @@ impl PostgresStorage {
         let description = command.description().to_string();
         connection.transaction::<ExcludedRange, AppError, _>(|connection| {
             let network_row = Self::query_network_by_cidr(connection, network)?;
-            if !network_row.contains(command.start_ip())
-                || !network_row.contains(command.end_ip())
+            if !network_row.contains(command.start_ip()) || !network_row.contains(command.end_ip())
             {
                 return Err(AppError::validation(
                     "excluded range must be fully contained inside the network",
@@ -538,8 +553,7 @@ impl PostgresStorage {
         let network = Self::query_network_by_cidr(connection, cidr)?;
         let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
         let usable_span = last.saturating_sub(first).saturating_add(1);
-        let allocated =
-            Self::count_allocated_addresses_in_network(connection, &network)? as u128;
+        let allocated = Self::count_allocated_addresses_in_network(connection, &network)? as u128;
         let excluded = Self::query_excluded_ranges(connection, cidr)?;
         let excluded_count = excluded
             .iter()
@@ -631,54 +645,7 @@ impl NetworkStore for PostgresStorage {
         let page = page.clone();
         let filter = filter.clone();
         self.database
-            .run(move |c| {
-                let base = "SELECT n.id, n.network::text AS network, n.description, \
-                        n.vlan, n.dns_delegated, n.category, n.location, n.frozen, \
-                        n.reserved, n.created_at, n.updated_at \
-                        FROM networks n";
-
-                let (clauses, values) = filter.sql_conditions();
-                let where_str = if clauses.is_empty() {
-                    String::new()
-                } else {
-                    format!(" WHERE {}", clauses.join(" AND "))
-                };
-                let order_col = match page.sort_by() {
-                    Some("description") => "n.description",
-                    Some("created_at") => "n.created_at",
-                    Some("updated_at") => "n.updated_at",
-                    None => "n.network::text",
-                    Some(other) => {
-                        return Err(AppError::validation(format!(
-                            "unsupported sort_by field for networks: {other}"
-                        )));
-                    }
-                };
-                let order_dir = match page.sort_direction() {
-                    crate::domain::pagination::SortDirection::Asc => "ASC",
-                    crate::domain::pagination::SortDirection::Desc => "DESC",
-                };
-                let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
-                let total = run_count_query(c, &count_sql, &values)?;
-
-                let limit_clause = if page.after().is_none() && page.limit() != u64::MAX {
-                    format!(" LIMIT {}", page.limit() + 1)
-                } else {
-                    String::new()
-                };
-                let query_str = format!(
-                    "{base}{where_str} ORDER BY {order_col} {order_dir}, n.id{limit_clause}"
-                );
-
-                let rows = run_dynamic_query::<NetworkRow>(c, &query_str, &values)?;
-                let all_items: Vec<Network> = rows
-                    .into_iter()
-                    .map(NetworkRow::into_domain)
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                // contains_ip is pushed to SQL via sql_conditions(); no Rust-side filter needed.
-                Ok(rows_to_page(all_items, &page, total))
-            })
+            .run(move |c| Self::list_networks_in_conn(c, &page, &filter))
             .await
     }
 

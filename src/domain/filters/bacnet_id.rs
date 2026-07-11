@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::apply::{apply_string_filter, apply_u32_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
-use super::sql::build_sql_conditions;
+use super::sql::{SqlBindType, build_sql_conditions};
 use crate::domain::bacnet::BacnetIdAssignment;
 use crate::errors::AppError;
 
@@ -32,7 +32,10 @@ impl BacnetIdFilter {
 
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         build_sql_conditions(
-            &[(&self.bacnet_id, "b.id"), (&self.host, "h.name::text")],
+            &[
+                (&self.bacnet_id, "b.id", SqlBindType::Integer),
+                (&self.host, "h.name::text", SqlBindType::Text),
+            ],
             &None,
             &[],
         )
@@ -45,11 +48,11 @@ impl BacnetIdFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "bacnet_id" => {
-                    validate_op("bacnet_id", &op, FieldType::Numeric)?;
+                    validate_op("bacnet_id", &op, FieldType::Numeric, &value)?;
                     filter.bacnet_id.push(FilterCondition { op, value });
                 }
                 "host" => {
-                    validate_op("host", &op, FieldType::String)?;
+                    validate_op("host", &op, FieldType::String, &value)?;
                     filter.host.push(FilterCondition { op, value });
                 }
                 _ => {

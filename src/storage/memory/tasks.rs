@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -188,11 +188,45 @@ impl TaskStore for MemoryStorage {
     async fn claim_next_task(&self) -> Result<Option<TaskEnvelope>, AppError> {
         let mut state = self.state.write().await;
         let now = Utc::now();
+        let stale_before = now - Duration::minutes(15);
+        for task in state.tasks.values_mut() {
+            if matches!(task.status(), TaskStatus::Running)
+                && task
+                    .started_at()
+                    .is_some_and(|started| started < stale_before)
+            {
+                let exhausted = task.attempts() >= task.max_attempts();
+                *task = TaskEnvelope::restore(
+                    task.id(),
+                    task.kind().to_string(),
+                    if exhausted {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Queued
+                    },
+                    task.payload().clone(),
+                    task.progress().clone(),
+                    task.result().cloned(),
+                    if exhausted {
+                        Some("task lease expired after maximum attempts".to_string())
+                    } else {
+                        task.error_summary().map(str::to_string)
+                    },
+                    task.attempts(),
+                    task.max_attempts(),
+                    task.available_at(),
+                    if exhausted { task.started_at() } else { None },
+                    if exhausted { Some(now) } else { None },
+                )?;
+            }
+        }
         let next_task_id = state
             .tasks
             .values()
             .filter(|task| {
-                matches!(task.status(), TaskStatus::Queued) && task.available_at() <= now
+                matches!(task.status(), TaskStatus::Queued)
+                    && task.available_at() <= now
+                    && task.attempts() < task.max_attempts()
             })
             .min_by_key(|task| (task.available_at(), task.id()))
             .map(|task| task.id());

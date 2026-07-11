@@ -98,6 +98,7 @@ mod tests {
         authz::AuthorizerClient,
         config::{Config, StorageBackendSetting},
         events::EventSinkClient,
+        middleware::Authn,
         services::Services,
         storage::{ReadableStorage, build_storage},
     };
@@ -223,5 +224,36 @@ mod tests {
         let response = test::call_service(&app, request).await;
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[actix_web::test]
+    async fn audit_history_uses_authenticated_request_actor() {
+        let state = test_state();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .wrap(Authn)
+                .configure(|cfg| super::configure(cfg, false)),
+        )
+        .await;
+
+        let create = test::TestRequest::post()
+            .uri("/inventory/labels")
+            .insert_header(("X-Mreg-User", "alice"))
+            .set_json(serde_json::json!({"name": "actor-test", "description": "test"}))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, create).await.status(),
+            StatusCode::CREATED
+        );
+
+        let history = test::TestRequest::get()
+            .uri("/system/history")
+            .insert_header(("X-Mreg-User", "alice"))
+            .to_request();
+        let response = test::call_service(&app, history).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(body["items"][0]["actor"], "alice");
     }
 }

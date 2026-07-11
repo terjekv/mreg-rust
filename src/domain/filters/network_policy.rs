@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::apply::{apply_datetime_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
-use super::sql::build_sql_conditions;
+use super::sql::{SqlBindType, build_sql_conditions};
 use crate::domain::network_policy::NetworkPolicy;
 use crate::errors::AppError;
 
@@ -56,10 +56,10 @@ impl NetworkPolicyFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         build_sql_conditions(
             &[
-                (&self.name, "np.name::text"),
-                (&self.description, "np.description"),
-                (&self.created_at, "np.created_at"),
-                (&self.updated_at, "np.updated_at"),
+                (&self.name, "np.name::text", SqlBindType::Text),
+                (&self.description, "np.description", SqlBindType::Text),
+                (&self.created_at, "np.created_at", SqlBindType::Timestamp),
+                (&self.updated_at, "np.updated_at", SqlBindType::Timestamp),
             ],
             &self.search,
             &["np.name::text", "np.description"],
@@ -73,19 +73,19 @@ impl NetworkPolicyFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "name" => {
-                    validate_op("name", &op, FieldType::String)?;
+                    validate_op("name", &op, FieldType::String, &value)?;
                     filter.name.push(FilterCondition { op, value });
                 }
                 "description" => {
-                    validate_op("description", &op, FieldType::String)?;
+                    validate_op("description", &op, FieldType::String, &value)?;
                     filter.description.push(FilterCondition { op, value });
                 }
                 "created_at" => {
-                    validate_op("created_at", &op, FieldType::DateTime)?;
+                    validate_op("created_at", &op, FieldType::DateTime, &value)?;
                     filter.created_at.push(FilterCondition { op, value });
                 }
                 "updated_at" => {
-                    validate_op("updated_at", &op, FieldType::DateTime)?;
+                    validate_op("updated_at", &op, FieldType::DateTime, &value)?;
                     filter.updated_at.push(FilterCondition { op, value });
                 }
                 _ => {

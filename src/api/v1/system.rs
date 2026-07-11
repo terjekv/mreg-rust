@@ -152,6 +152,7 @@ pub(crate) async fn status(
 pub(crate) async fn history(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -163,7 +164,7 @@ pub(crate) async fn history(
         ),
     )
     .await?;
-    let page = state.services.audit().list(&PageRequest::default()).await?;
+    let page = state.services.audit().list(&query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(SystemListResponse::from_page(
         page,
         state.reader.backend_kind(),

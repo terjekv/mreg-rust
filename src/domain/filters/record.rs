@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::apply::apply_string_filter;
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
-use super::sql::build_sql_conditions;
+use super::sql::{SqlBindType, build_sql_conditions};
 use crate::domain::resource_records::{RecordInstance, RecordOwnerKind};
 use crate::errors::AppError;
 
@@ -51,9 +51,9 @@ impl RecordFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         build_sql_conditions(
             &[
-                (&self.type_name, "rt.name"),
-                (&self.owner_kind, "rs.anchor_kind"),
-                (&self.owner_name, "rs.owner_name"),
+                (&self.type_name, "rt.name", SqlBindType::Text),
+                (&self.owner_kind, "rs.anchor_kind", SqlBindType::Text),
+                (&self.owner_name, "rs.owner_name", SqlBindType::Text),
             ],
             &None,
             &[],
@@ -67,15 +67,15 @@ impl RecordFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "type_name" => {
-                    validate_op("type_name", &op, FieldType::String)?;
+                    validate_op("type_name", &op, FieldType::String, &value)?;
                     filter.type_name.push(FilterCondition { op, value });
                 }
                 "owner_kind" => {
-                    validate_op("owner_kind", &op, FieldType::Enum)?;
+                    validate_op("owner_kind", &op, FieldType::Enum, &value)?;
                     filter.owner_kind.push(FilterCondition { op, value });
                 }
                 "owner_name" => {
-                    validate_op("owner_name", &op, FieldType::String)?;
+                    validate_op("owner_name", &op, FieldType::String, &value)?;
                     filter.owner_name.push(FilterCondition { op, value });
                 }
                 _ => {

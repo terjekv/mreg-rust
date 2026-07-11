@@ -29,7 +29,7 @@ email_address = "0.2.9"
 ipnet = { version = "2.11.0", features = ["serde"] }
 macaddr = "1.0.1"
 minijinja = { version = "2.12.0", features = ["loader", "json"] }
-reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
 url = "2"
 actix-governor = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }

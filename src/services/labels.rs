@@ -30,7 +30,7 @@ pub async fn create(
         .transaction(move |tx| {
             let label = tx.labels().create_label(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "label",
                 Some(label.id()),
                 label.name().as_str(),
@@ -67,7 +67,7 @@ pub async fn update(
             let old = tx.labels().get_label_by_name(&name_owned)?;
             let new = tx.labels().update_label(&name_owned, command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "label",
                 Some(new.id()),
                 new.name().as_str(),
@@ -98,7 +98,7 @@ pub async fn delete(
             let old = tx.labels().get_label_by_name(&name_owned)?;
             tx.labels().delete_label(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "label",
                 Some(old.id()),
                 old.name().as_str(),

@@ -11,7 +11,7 @@ use actix_web::{
     http::header,
 };
 
-use crate::{AppState, errors::AppError};
+use crate::{AppState, audit, authn, errors::AppError};
 
 pub struct Authn;
 
@@ -81,10 +81,16 @@ where
             .await;
 
             match auth_result {
-                Ok(()) => service
-                    .call(req)
-                    .await
-                    .map(ServiceResponse::map_into_left_body),
+                Ok(()) => {
+                    let actor = req
+                        .extensions()
+                        .get::<authn::PrincipalContext>()
+                        .map(|context| context.principal.key())
+                        .unwrap_or_else(|| authn::header_principal(req.request()).key());
+                    audit::actor::scope(actor, service.call(req))
+                        .await
+                        .map(ServiceResponse::map_into_left_body)
+                }
                 Err(error) => Ok(req.into_response(error.error_response().map_into_right_body())),
             }
         })

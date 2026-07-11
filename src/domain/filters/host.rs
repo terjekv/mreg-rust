@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::apply::{apply_datetime_filter, apply_optional_string_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
-use super::sql::{build_sql_conditions, op_to_sql};
+use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
 use crate::domain::host::{Host, IpAddressAssignment};
 use crate::errors::AppError;
 
@@ -83,11 +83,11 @@ impl HostFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         let (mut clauses, mut values) = build_sql_conditions(
             &[
-                (&self.name, "h.name::text"),
-                (&self.zone, "fz.name::text"),
-                (&self.comment, "h.comment"),
-                (&self.created_at, "h.created_at"),
-                (&self.updated_at, "h.updated_at"),
+                (&self.name, "h.name::text", SqlBindType::Text),
+                (&self.zone, "fz.name::text", SqlBindType::Text),
+                (&self.comment, "h.comment", SqlBindType::Text),
+                (&self.created_at, "h.created_at", SqlBindType::Timestamp),
+                (&self.updated_at, "h.updated_at", SqlBindType::Timestamp),
             ],
             &self.search,
             &["h.name::text", "fz.name::text", "h.comment"],
@@ -119,27 +119,27 @@ impl HostFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "name" => {
-                    validate_op("name", &op, FieldType::String)?;
+                    validate_op("name", &op, FieldType::String, &value)?;
                     filter.name.push(FilterCondition { op, value });
                 }
                 "zone" => {
-                    validate_op("zone", &op, FieldType::String)?;
+                    validate_op("zone", &op, FieldType::String, &value)?;
                     filter.zone.push(FilterCondition { op, value });
                 }
                 "comment" => {
-                    validate_op("comment", &op, FieldType::String)?;
+                    validate_op("comment", &op, FieldType::String, &value)?;
                     filter.comment.push(FilterCondition { op, value });
                 }
                 "created_at" => {
-                    validate_op("created_at", &op, FieldType::DateTime)?;
+                    validate_op("created_at", &op, FieldType::DateTime, &value)?;
                     filter.created_at.push(FilterCondition { op, value });
                 }
                 "updated_at" => {
-                    validate_op("updated_at", &op, FieldType::DateTime)?;
+                    validate_op("updated_at", &op, FieldType::DateTime, &value)?;
                     filter.updated_at.push(FilterCondition { op, value });
                 }
                 "address" => {
-                    validate_op("address", &op, FieldType::String)?;
+                    validate_op("address", &op, FieldType::String, &value)?;
                     filter.address.push(FilterCondition { op, value });
                 }
                 _ => {

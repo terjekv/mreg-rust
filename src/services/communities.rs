@@ -33,7 +33,7 @@ pub async fn create_community(
         .transaction(move |tx| {
             let item = tx.communities().create_community(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "community",
                 Some(item.id()),
                 item.name().as_str(),
@@ -68,7 +68,7 @@ pub async fn delete_community(
             let old = tx.communities().get_community(community_id)?;
             tx.communities().delete_community(community_id)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "community",
                 Some(old.id()),
                 old.name().as_str(),

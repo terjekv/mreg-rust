@@ -83,30 +83,44 @@ pub(super) fn apply_datetime_filter(value: DateTime<Utc>, cond: &FilterCondition
 
 /// Apply a numeric (u32) filter by parsing the condition value.
 pub(super) fn apply_u32_filter(value: u32, cond: &FilterCondition) -> bool {
-    let Ok(target) = cond.value.parse::<u32>() else {
-        return false;
-    };
+    let scalar = || cond.value.parse::<u32>().ok();
     match cond.op {
-        FilterOp::Equals => value == target,
-        FilterOp::Gt => value > target,
-        FilterOp::Gte => value >= target,
-        FilterOp::Lt => value < target,
-        FilterOp::Lte => value <= target,
+        FilterOp::Equals => scalar().is_some_and(|target| value == target),
+        FilterOp::Gt => scalar().is_some_and(|target| value > target),
+        FilterOp::Gte => scalar().is_some_and(|target| value >= target),
+        FilterOp::Lt => scalar().is_some_and(|target| value < target),
+        FilterOp::Lte => scalar().is_some_and(|target| value <= target),
         FilterOp::In => cond
             .value
             .split(',')
             .filter_map(|v| v.trim().parse::<u32>().ok())
             .any(|v| v == value),
-        FilterOp::NotEquals => value != target,
-        FilterOp::NotGt => value <= target,
-        FilterOp::NotGte => value < target,
-        FilterOp::NotLt => value >= target,
-        FilterOp::NotLte => value > target,
+        FilterOp::NotEquals => scalar().is_some_and(|target| value != target),
+        FilterOp::NotGt => scalar().is_some_and(|target| value <= target),
+        FilterOp::NotGte => scalar().is_some_and(|target| value < target),
+        FilterOp::NotLt => scalar().is_some_and(|target| value >= target),
+        FilterOp::NotLte => scalar().is_some_and(|target| value > target),
         FilterOp::NotIn => !cond
             .value
             .split(',')
             .filter_map(|v| v.trim().parse::<u32>().ok())
             .any(|v| v == value),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_in_filters_parse_each_list_item() {
+        let condition = FilterCondition {
+            op: FilterOp::In,
+            value: "1, 42, 100".to_string(),
+        };
+
+        assert!(apply_u32_filter(42, &condition));
+        assert!(!apply_u32_filter(7, &condition));
     }
 }

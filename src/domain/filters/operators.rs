@@ -1,9 +1,11 @@
+use chrono::DateTime;
+
 use crate::errors::AppError;
 
 // ─── Filter operator types ──────────────────────────────────────────
 
 /// Supported filter operators.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterOp {
     Equals,
     IEquals,
@@ -138,10 +140,22 @@ pub enum FieldType {
 }
 
 /// Validate that an operator is valid for a field type. Returns an error if not.
-pub fn validate_op(field_name: &str, op: &FilterOp, field_type: FieldType) -> Result<(), AppError> {
+#[inline]
+pub fn validate_op(
+    field_name: &str,
+    op: &FilterOp,
+    field_type: FieldType,
+    value: &str,
+) -> Result<(), AppError> {
+    // String fields accept every parsed operator and require no value parsing.
+    // Keep this common path independent of the typed-value validation below.
+    if matches!(field_type, FieldType::String) {
+        return Ok(());
+    }
+
     let base = base_of(op);
     let allowed = match field_type {
-        FieldType::String => return Ok(()), // all ops allowed on strings
+        FieldType::String => unreachable!("string fields return above"),
         FieldType::DateTime => matches!(
             base,
             FilterOp::Equals
@@ -171,14 +185,42 @@ pub fn validate_op(field_name: &str, op: &FilterOp, field_type: FieldType) -> Re
                 | FilterOp::IsNull
         ),
     };
-    if allowed {
-        Ok(())
-    } else {
-        Err(AppError::validation(format!(
+    if !allowed {
+        return Err(AppError::validation(format!(
             "operator '{}' is not valid for field '{field_name}' (type: {field_type:?})",
             op_name(op)
-        )))
+        )));
     }
+
+    if matches!(base, FilterOp::IsNull) {
+        return Ok(());
+    }
+    match field_type {
+        FieldType::DateTime => {
+            DateTime::parse_from_rfc3339(value).map_err(|_| {
+                AppError::validation(format!(
+                    "filter value for '{field_name}' must be an RFC 3339 timestamp"
+                ))
+            })?;
+        }
+        FieldType::Numeric => {
+            let invalid = if matches!(base, FilterOp::In) {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .any(|value| value.parse::<i64>().is_err())
+            } else {
+                value.parse::<i64>().is_err()
+            };
+            if invalid {
+                return Err(AppError::validation(format!(
+                    "filter value for '{field_name}' must contain valid integers"
+                )));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Get the base (non-negated) form of an operator.
@@ -198,7 +240,7 @@ pub(super) fn base_of(op: &FilterOp) -> FilterOp {
         FilterOp::NotLte => FilterOp::Lte,
         FilterOp::NotIn => FilterOp::In,
         FilterOp::NotIsNull => FilterOp::IsNull,
-        other => other.clone(),
+        other => *other,
     }
 }
 

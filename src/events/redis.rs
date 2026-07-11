@@ -3,7 +3,7 @@ use redis::AsyncCommands;
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use super::{DomainEvent, EventSink};
+use super::{DomainEvent, EventSink, safe_url_for_log};
 
 /// Emits events to a Redis Stream via `XADD`.
 pub struct RedisSink {
@@ -48,7 +48,7 @@ impl EventSink for RedisSink {
         let mut conn = match self.get_or_connect().await {
             Ok(c) => c,
             Err(error) => {
-                warn!(url = %self.url, %error, "Redis connection failed, dropping event");
+                warn!(url = %safe_url_for_log(&self.url), %error, "Redis connection failed, dropping event");
                 return;
             }
         };

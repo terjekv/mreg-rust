@@ -32,7 +32,7 @@ pub async fn create_host_group(
         .transaction(move |tx| {
             let group = tx.host_groups().create_host_group(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_group",
                 Some(group.id()),
                 group.name().as_str(),
@@ -68,7 +68,7 @@ pub async fn delete_host_group(
             let old = tx.host_groups().get_host_group_by_name(&name_owned)?;
             tx.host_groups().delete_host_group(&name_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "host_group",
                 Some(old.id()),
                 old.name().as_str(),

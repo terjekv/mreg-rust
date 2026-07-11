@@ -32,7 +32,7 @@ pub async fn create_ptr_override(
         .transaction(move |tx| {
             let item = tx.ptr_overrides().create_ptr_override(command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "ptr_override",
                 Some(item.id()),
                 item.address().as_str(),
@@ -70,7 +70,7 @@ pub async fn delete_ptr_override(
                 .get_ptr_override_by_address(&address_owned)?;
             tx.ptr_overrides().delete_ptr_override(&address_owned)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::SYSTEM,
+                actor::current(),
                 "ptr_override",
                 Some(old.id()),
                 old.address().as_str(),

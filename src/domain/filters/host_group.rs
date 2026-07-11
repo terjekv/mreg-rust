@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::apply::{apply_datetime_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
-use super::sql::{build_sql_conditions, op_to_sql};
+use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
 use crate::domain::host_group::HostGroup;
 use crate::errors::AppError;
 
@@ -66,10 +66,10 @@ impl HostGroupFilter {
     pub fn sql_conditions(&self) -> (Vec<String>, Vec<String>) {
         let (mut clauses, mut values) = build_sql_conditions(
             &[
-                (&self.name, "hg.name::text"),
-                (&self.description, "hg.description"),
-                (&self.created_at, "hg.created_at"),
-                (&self.updated_at, "hg.updated_at"),
+                (&self.name, "hg.name::text", SqlBindType::Text),
+                (&self.description, "hg.description", SqlBindType::Text),
+                (&self.created_at, "hg.created_at", SqlBindType::Timestamp),
+                (&self.updated_at, "hg.updated_at", SqlBindType::Timestamp),
             ],
             &self.search,
             &["hg.name::text", "hg.description"],
@@ -102,23 +102,23 @@ impl HostGroupFilter {
             let (field, op) = parse_filter_key(&key)?;
             match field.as_str() {
                 "name" => {
-                    validate_op("name", &op, FieldType::String)?;
+                    validate_op("name", &op, FieldType::String, &value)?;
                     filter.name.push(FilterCondition { op, value });
                 }
                 "description" => {
-                    validate_op("description", &op, FieldType::String)?;
+                    validate_op("description", &op, FieldType::String, &value)?;
                     filter.description.push(FilterCondition { op, value });
                 }
                 "created_at" => {
-                    validate_op("created_at", &op, FieldType::DateTime)?;
+                    validate_op("created_at", &op, FieldType::DateTime, &value)?;
                     filter.created_at.push(FilterCondition { op, value });
                 }
                 "updated_at" => {
-                    validate_op("updated_at", &op, FieldType::DateTime)?;
+                    validate_op("updated_at", &op, FieldType::DateTime, &value)?;
                     filter.updated_at.push(FilterCondition { op, value });
                 }
                 "host" => {
-                    validate_op("host", &op, FieldType::String)?;
+                    validate_op("host", &op, FieldType::String, &value)?;
                     filter.host.push(FilterCondition { op, value });
                 }
                 _ => {

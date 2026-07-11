@@ -128,9 +128,35 @@ impl ResponseError for AppError {
             tracing::warn!(error_kind = kind, %status, error = %self, "client error");
         }
 
+        let message = if status.is_server_error() {
+            match self {
+                AppError::Authz(_) => "authorization service error".to_string(),
+                AppError::Unavailable(_) => "service temporarily unavailable".to_string(),
+                _ => "internal server error".to_string(),
+            }
+        } else {
+            self.to_string()
+        };
+
         HttpResponse::build(status).json(ErrorBody {
             error: kind,
-            message: self.to_string(),
+            message,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::{ResponseError, body::to_bytes};
+
+    use super::AppError;
+
+    #[actix_web::test]
+    async fn internal_error_details_are_not_exposed() {
+        let response = AppError::internal("password=secret database detail").error_response();
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!body.contains("secret"));
+        assert!(body.contains("internal server error"));
     }
 }
