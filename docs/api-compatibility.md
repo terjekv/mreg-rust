@@ -62,7 +62,7 @@ and serialize legacy DRF-style responses. No entry in this table is a redirect.
 | DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. Exact collection filters prevent records of the same type from being mistaken for one another. |
 | `networks/` | List/CIDR detail, create/update/delete, excluded-range mutations, lookup by IP, reserved/used/unused counts and lists, first/random unused address, host and PTR projections, and communities. |
 | Forward/reverse zones | List/detail, forward-zone create/update/delete, nameserver replacement, forward-delegation create/list/comment/delete, hostname/delegation lookup, delegation detail by name, and generated BIND-style zone files. |
-| Network and host policy | Network-policy list/create/detail/delete when no legacy attributes are requested; host-policy atom/role CRUD, rename, atom/host membership, labels, and reverse membership projections. |
+| Network and host policy | Network-policy and network-policy-attribute list/create/detail/update/delete, boolean policy-attribute membership with atomic replace semantics, protected attributes, community-template patterns, plus host-policy atom/role CRUD, rename, atom/host membership, labels, and reverse membership projections. |
 | `history/` | Collection rendered from Rust history records. Old integer history item identity is unavailable. |
 
 ## Direct v1 read adapters
@@ -115,16 +115,14 @@ status/body adapters. The genuinely unavailable information is narrower:
   mutations;
 - `permissions/netgroupregex/...` (authorization is delegated to Treetop in
   mreg-rust and the Django permission model is not stored);
-- `networkpolicyattributes/...` (mreg-rust policies do not expose the legacy
-  attribute model);
 - Django-only user flags, login history, token last-used metadata, and exact
   Python library inventory;
 - LDAP health and Prometheus metrics as noted above.
 
 All other 501s should be treated as adapters still to implement, not as claims
 that the system lacks the underlying data or operation. The pinned CLI suite now
-reaches explicit 501s only for legacy permission management and network-policy
-attributes. Label information also encounters 501 while asking for permissions
+reaches explicit 501s only for legacy permission management. Label information
+also encounters 501 while asking for permissions
 attached to a label; the label and host-policy portions of that response are
 implemented.
 
@@ -143,10 +141,13 @@ compatibility job.
 
 Run the same path locally with `scripts/run-mreg-cli-compat.sh`. The script
 handles Linux host networking and Docker Desktop on macOS. The final recorded
-run on 2026-07-11 completed all 401 commands with 284 exact command matches, 24
-explicit 501 gaps, 56 commands unverified after the first unsupported
-network-policy-attribute mutation, and 37 unexpected recording differences.
-Many of the latter commands complete with the same user-visible result but still
+run on 2026-07-11 completed all 401 commands with 302 exact command matches, 13
+explicit 501 gaps, no commands left unverified, and 86 unexpected recording
+differences. Implementing policy attributes lets the suite execute the entire
+previously blocked policy/community tail, so the larger visible difference count
+contains newly verified downstream network-policy assignment, per-network
+maximum-community, and community behavior rather than regressions. Many commands
+complete with the same user-visible result but still
 expose a response-field, ordering, or state-projection mismatch in their recorded
 HTTP exchange; they remain red because the goal is equality, not merely command
 success. Six are the known history-rendering mismatches described above.

@@ -27,14 +27,19 @@ use crate::{
         label::{CreateLabel, UpdateLabel},
         nameserver::CreateNameServer,
         network::{CreateExcludedRange, CreateNetwork, UpdateNetwork},
-        network_policy::CreateNetworkPolicy,
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyDetails, SetNetworkPolicyAttributeValue,
+            UpdateNetworkPolicy, UpdateNetworkPolicyAttribute,
+        },
         pagination::PageRequest,
         ptr_override::CreatePtrOverride,
         resource_records::{CreateRecordInstance, RecordInstance, RecordOwnerKind},
         types::{
             BacnetIdentifier, CidrValue, DnsName, EmailAddressValue, HostGroupName, HostPolicyName,
-            Hostname, IpAddressValue, LabelName, MacAddressValue, RecordTypeName, ReservedCount,
-            SerialNumber, SoaSeconds, Ttl, UpdateField, VlanId, ZoneName,
+            Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ReservedCount, SerialNumber, SoaSeconds, Ttl,
+            UpdateField, VlanId, ZoneName,
         },
         zone::{CreateForwardZone, UpdateForwardZone},
     },
@@ -62,6 +67,11 @@ struct LegacyPageQuery {
     frozen: Option<u8>,
     reserved: Option<u32>,
     host: Option<u32>,
+    attributes: Option<u32>,
+    #[serde(rename = "attributes__name")]
+    attributes_name: Option<String>,
+    #[serde(rename = "attributes__description")]
+    attributes_description: Option<String>,
     ipaddress: Option<String>,
     #[serde(rename = "ipaddresses__ipaddress")]
     host_ipaddress: Option<String>,
@@ -218,7 +228,21 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/networkpolicies/{id}")
             .route(web::get().to(network_policy_detail))
+            .route(web::patch().to(update_network_policy))
+            .route(web::put().to(update_network_policy))
             .route(web::delete().to(delete_network_policy)),
+    )
+    .service(
+        web::resource("/networkpolicyattributes/")
+            .route(web::get().to(network_policy_attributes))
+            .route(web::post().to(create_network_policy_attribute)),
+    )
+    .service(
+        web::resource("/networkpolicyattributes/{id}")
+            .route(web::get().to(network_policy_attribute_detail))
+            .route(web::patch().to(update_network_policy_attribute))
+            .route(web::put().to(update_network_policy_attribute))
+            .route(web::delete().to(delete_network_policy_attribute)),
     )
     .service(
         web::resource("/hostpolicy/atoms/")
@@ -2422,8 +2446,30 @@ async fn reverse_zone_detail(
     )))
 }
 
-fn policy_json(value: &crate::domain::network_policy::NetworkPolicy) -> Value {
-    json!({"id": legacy_id(value.id()), "name": value.name().as_str(), "description": value.description(), "attributes": [], "community_template_pattern": value.community_template_pattern(), "created_at": value.created_at(), "updated_at": value.updated_at()})
+fn policy_json(value: &NetworkPolicyDetails) -> Value {
+    let policy = value.policy();
+    json!({
+        "id": legacy_id(policy.id()),
+        "name": policy.name().as_str(),
+        "description": policy.description(),
+        "attributes": value.attributes().iter().map(|attribute| json!({
+            "name": attribute.name().as_str(), "value": attribute.value()
+        })).collect::<Vec<_>>(),
+        "community_template_pattern": policy.community_template_pattern(),
+        "created_at": policy.created_at(),
+        "updated_at": policy.updated_at()
+    })
+}
+
+async fn policy_details(
+    state: &AppState,
+    policy: NetworkPolicy,
+) -> Result<NetworkPolicyDetails, AppError> {
+    state
+        .services
+        .network_policies()
+        .get_details(policy.name())
+        .await
 }
 async fn network_policies(
     req: HttpRequest,
@@ -2438,36 +2484,87 @@ async fn network_policies(
         "*",
     )
     .await?;
-    let values = state
+    let mut policies = state
         .services
         .network_policies()
         .list(&PageRequest::all(), &NetworkPolicyFilter::default())
         .await?
-        .items
-        .iter()
-        .filter(|policy| {
-            query.id.is_none_or(|id| legacy_id(policy.id()) == id)
-                && query
-                    .name
-                    .as_deref()
-                    .is_none_or(|name| policy.name().as_str().eq_ignore_ascii_case(name))
-                && query.name_regex.as_deref().is_none_or(|pattern| {
-                    let needle = pattern
-                        .trim_matches(|character| matches!(character, '.' | '*' | '^' | '$'));
-                    policy.name().as_str().contains(needle)
+        .items;
+    policies.sort_by_key(NetworkPolicy::created_at);
+    let attribute_definitions = if query.attributes_description.is_some() {
+        state
+            .services
+            .network_policies()
+            .list_attributes(&PageRequest::all())
+            .await?
+            .items
+    } else {
+        Vec::new()
+    };
+    let mut values = Vec::new();
+    for policy in policies.into_iter().filter(|policy| {
+        query.id.is_none_or(|id| legacy_id(policy.id()) == id)
+            && query
+                .name
+                .as_deref()
+                .is_none_or(|name| policy.name().as_str().eq_ignore_ascii_case(name))
+            && query.name_regex.as_deref().is_none_or(|pattern| {
+                let needle =
+                    pattern.trim_matches(|character| matches!(character, '.' | '*' | '^' | '$'));
+                policy.name().as_str().contains(needle)
+            })
+    }) {
+        let details = policy_details(&state, policy).await?;
+        let attribute_match = query.attributes.is_none_or(|id| {
+            details
+                .attributes()
+                .iter()
+                .any(|value| legacy_id(value.attribute_id()) == id)
+        }) && query.attributes_name.as_deref().is_none_or(|name| {
+            details
+                .attributes()
+                .iter()
+                .any(|value| value.name().as_str().eq_ignore_ascii_case(name))
+        }) && query.attributes_description.as_deref().is_none_or(
+            |description| {
+                details.attributes().iter().any(|value| {
+                    attribute_definitions.iter().any(|attribute| {
+                        attribute.id() == value.attribute_id()
+                            && attribute.description() == description
+                    })
                 })
-        })
-        .map(policy_json)
-        .collect();
+            },
+        );
+        if attribute_match {
+            values.push(policy_json(&details));
+        }
+    }
     Ok(HttpResponse::Ok().json(paginate(values, query.into_inner())))
+}
+
+#[derive(Deserialize)]
+struct LegacyPolicyAttributeValue {
+    name: String,
+    #[serde(default)]
+    value: bool,
+}
+
+impl LegacyPolicyAttributeValue {
+    fn into_domain(self) -> Result<SetNetworkPolicyAttributeValue, AppError> {
+        Ok(SetNetworkPolicyAttributeValue::new(
+            NetworkPolicyAttributeName::new(self.name)?,
+            self.value,
+        ))
+    }
 }
 
 #[derive(Deserialize)]
 struct LegacyCreateNetworkPolicy {
     name: String,
+    #[serde(default)]
     description: String,
     #[serde(default)]
-    attributes: Vec<Value>,
+    attributes: Vec<LegacyPolicyAttributeValue>,
     community_template_pattern: Option<String>,
 }
 
@@ -2477,12 +2574,7 @@ async fn create_network_policy(
     payload: web::Json<LegacyCreateNetworkPolicy>,
 ) -> Result<HttpResponse, AppError> {
     let payload = payload.into_inner();
-    if !payload.attributes.is_empty() {
-        return Ok(HttpResponse::NotImplemented().json(json!({
-            "detail": "mreg-rust does not store legacy network-policy attributes",
-        })));
-    }
-    let name = crate::domain::types::NetworkPolicyName::new(payload.name)?;
+    let name = NetworkPolicyName::new(payload.name)?;
     authorize(
         &req,
         &state,
@@ -2494,13 +2586,31 @@ async fn create_network_policy(
     let policy = state
         .services
         .network_policies()
-        .create(CreateNetworkPolicy::new(
-            name,
-            payload.description,
-            payload.community_template_pattern,
-        )?)
+        .create(
+            CreateNetworkPolicy::new(
+                name,
+                payload.description,
+                payload.community_template_pattern,
+            )?
+            .with_attributes(
+                payload
+                    .attributes
+                    .into_iter()
+                    .map(LegacyPolicyAttributeValue::into_domain)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        )
         .await?;
-    Ok(HttpResponse::Created().json(policy_json(&policy)))
+    let details = policy_details(&state, policy).await?;
+    Ok(HttpResponse::Created()
+        .append_header((
+            "Location",
+            format!(
+                "/api/v1/networkpolicies/{}",
+                legacy_id(details.policy().id())
+            ),
+        ))
+        .json(policy_json(&details)))
 }
 
 async fn network_policy_from_legacy_id(
@@ -2532,7 +2642,56 @@ async fn network_policy_detail(
         policy.name().as_str(),
     )
     .await?;
-    Ok(HttpResponse::Ok().json(policy_json(&policy)))
+    let details = policy_details(&state, policy).await?;
+    Ok(HttpResponse::Ok().json(policy_json(&details)))
+}
+
+#[derive(Default, Deserialize)]
+struct LegacyUpdateNetworkPolicy {
+    name: Option<String>,
+    description: Option<String>,
+    #[serde(default)]
+    community_template_pattern: UpdateField<String>,
+    attributes: Option<Vec<LegacyPolicyAttributeValue>>,
+}
+
+async fn update_network_policy(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    id: web::Path<u32>,
+    payload: web::Json<LegacyUpdateNetworkPolicy>,
+) -> Result<HttpResponse, AppError> {
+    let old = network_policy_from_legacy_id(&state, id.into_inner()).await?;
+    authorize(
+        &req,
+        &state,
+        actions::network_policy::UPDATE,
+        actions::resource_kinds::NETWORK_POLICY,
+        old.name().as_str(),
+    )
+    .await?;
+    let payload = payload.into_inner();
+    let command = UpdateNetworkPolicy {
+        name: payload.name.map(NetworkPolicyName::new).transpose()?,
+        description: payload.description,
+        community_template_pattern: payload.community_template_pattern,
+        attributes: payload
+            .attributes
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(LegacyPolicyAttributeValue::into_domain)
+                    .collect()
+            })
+            .transpose()?,
+    };
+    let updated = state
+        .services
+        .network_policies()
+        .update(old.name(), command)
+        .await?;
+    let details = policy_details(&state, updated).await?;
+    Ok(HttpResponse::Ok().json(policy_json(&details)))
 }
 
 async fn delete_network_policy(
@@ -2553,6 +2712,212 @@ async fn delete_network_policy(
         .services
         .network_policies()
         .delete(policy.name())
+        .await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+fn policy_attribute_json(value: &NetworkPolicyAttribute) -> Value {
+    json!({
+        "id": legacy_id(value.id()), "name": value.name().as_str(),
+        "description": value.description(), "created_at": value.created_at(),
+        "updated_at": value.updated_at()
+    })
+}
+
+async fn network_policy_attributes(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    query: web::Query<LegacyPageQuery>,
+) -> Result<HttpResponse, AppError> {
+    authorize(
+        &req,
+        &state,
+        actions::network_policy::LIST,
+        actions::resource_kinds::NETWORK_POLICY,
+        "*",
+    )
+    .await?;
+    let values = state
+        .services
+        .network_policies()
+        .list_attributes(&PageRequest::all())
+        .await?
+        .items
+        .into_iter()
+        .filter(|attribute| {
+            query.id.is_none_or(|id| legacy_id(attribute.id()) == id)
+                && query
+                    .name
+                    .as_deref()
+                    .is_none_or(|name| attribute.name().as_str().eq_ignore_ascii_case(name))
+                && query.name_regex.as_deref().is_none_or(|pattern| {
+                    attribute
+                        .name()
+                        .as_str()
+                        .contains(pattern.trim_matches(|c| matches!(c, '.' | '*' | '^' | '$')))
+                })
+                && query.description_regex.as_deref().is_none_or(|pattern| {
+                    attribute
+                        .description()
+                        .contains(pattern.trim_matches(|c| matches!(c, '.' | '*' | '^' | '$')))
+                })
+        })
+        .map(|attribute| policy_attribute_json(&attribute))
+        .collect();
+    Ok(HttpResponse::Ok().json(paginate(values, query.into_inner())))
+}
+
+#[derive(Deserialize)]
+struct LegacyCreateNetworkPolicyAttribute {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+async fn create_network_policy_attribute(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    payload: web::Json<LegacyCreateNetworkPolicyAttribute>,
+) -> Result<HttpResponse, AppError> {
+    let payload = payload.into_inner();
+    let name = NetworkPolicyAttributeName::new(payload.name)?;
+    authorize(
+        &req,
+        &state,
+        actions::network_policy::CREATE,
+        actions::resource_kinds::NETWORK_POLICY,
+        name.as_str(),
+    )
+    .await?;
+    let attribute = state
+        .services
+        .network_policies()
+        .create_attribute(CreateNetworkPolicyAttribute::new(name, payload.description))
+        .await?;
+    Ok(HttpResponse::Created()
+        .append_header((
+            "Location",
+            format!(
+                "/api/v1/networkpolicyattributes/{}",
+                legacy_id(attribute.id())
+            ),
+        ))
+        .json(policy_attribute_json(&attribute)))
+}
+
+async fn network_policy_attribute_from_legacy_id(
+    state: &AppState,
+    id: u32,
+) -> Result<NetworkPolicyAttribute, AppError> {
+    state
+        .services
+        .network_policies()
+        .list_attributes(&PageRequest::all())
+        .await?
+        .items
+        .into_iter()
+        .find(|attribute| legacy_id(attribute.id()) == id)
+        .ok_or_else(|| AppError::not_found("network policy attribute was not found"))
+}
+
+async fn network_policy_attribute_detail(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    id: web::Path<u32>,
+) -> Result<HttpResponse, AppError> {
+    let attribute = network_policy_attribute_from_legacy_id(&state, id.into_inner()).await?;
+    authorize(
+        &req,
+        &state,
+        actions::network_policy::GET,
+        actions::resource_kinds::NETWORK_POLICY,
+        attribute.name().as_str(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(policy_attribute_json(&attribute)))
+}
+
+#[derive(Deserialize)]
+struct LegacyUpdateNetworkPolicyAttribute {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+fn is_protected_policy_attribute(name: &str) -> bool {
+    name == "isolated"
+        || std::env::var("MREG_PROTECTED_POLICY_ATTRIBUTES")
+            .ok()
+            .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == name))
+}
+
+async fn update_network_policy_attribute(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    id: web::Path<u32>,
+    payload: web::Json<LegacyUpdateNetworkPolicyAttribute>,
+) -> Result<HttpResponse, AppError> {
+    let old = network_policy_attribute_from_legacy_id(&state, id.into_inner()).await?;
+    let payload = payload.into_inner();
+    if is_protected_policy_attribute(old.name().as_str())
+        && payload
+            .name
+            .as_deref()
+            .is_some_and(|name| !old.name().as_str().eq_ignore_ascii_case(name))
+    {
+        return Err(AppError::forbidden(format!(
+            "Cannot rename protected attribute '{}'.",
+            old.name()
+        )));
+    }
+    authorize(
+        &req,
+        &state,
+        actions::network_policy::UPDATE,
+        actions::resource_kinds::NETWORK_POLICY,
+        old.name().as_str(),
+    )
+    .await?;
+    let updated = state
+        .services
+        .network_policies()
+        .update_attribute(
+            old.name(),
+            UpdateNetworkPolicyAttribute {
+                name: payload
+                    .name
+                    .map(NetworkPolicyAttributeName::new)
+                    .transpose()?,
+                description: payload.description,
+            },
+        )
+        .await?;
+    Ok(HttpResponse::Ok().json(policy_attribute_json(&updated)))
+}
+
+async fn delete_network_policy_attribute(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    id: web::Path<u32>,
+) -> Result<HttpResponse, AppError> {
+    let attribute = network_policy_attribute_from_legacy_id(&state, id.into_inner()).await?;
+    if is_protected_policy_attribute(attribute.name().as_str()) {
+        return Err(AppError::forbidden(format!(
+            "Cannot delete the attribute '{}', it is protected.",
+            attribute.name()
+        )));
+    }
+    authorize(
+        &req,
+        &state,
+        actions::network_policy::DELETE,
+        actions::resource_kinds::NETWORK_POLICY,
+        attribute.name().as_str(),
+    )
+    .await?;
+    state
+        .services
+        .network_policies()
+        .delete_attribute(attribute.name())
         .await?;
     Ok(HttpResponse::NoContent().finish())
 }

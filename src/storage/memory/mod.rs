@@ -50,13 +50,14 @@ use crate::{
         label::Label,
         nameserver::NameServer,
         network::{ExcludedRange, Network},
-        network_policy::NetworkPolicy,
+        network_policy::{NetworkPolicy, NetworkPolicyAttribute, NetworkPolicyAttributeValue},
         pagination::{Page, PageRequest, SortDirection},
         ptr_override::PtrOverride,
         resource_records::{
             RecordInstance, RecordRrset, RecordTypeDefinition, built_in_record_types,
         },
         tasks::TaskEnvelope,
+        types::NetworkPolicyAttributeName,
         zone::{ForwardZone, ForwardZoneDelegation, ReverseZone, ReverseZoneDelegation},
     },
     errors::AppError,
@@ -176,6 +177,8 @@ pub(super) struct MemoryState {
     pub(super) bacnet_ids: BTreeMap<u32, BacnetIdAssignment>,
     pub(super) ptr_overrides: BTreeMap<String, PtrOverride>,
     pub(super) network_policies: BTreeMap<String, NetworkPolicy>,
+    pub(super) network_policy_attributes: BTreeMap<String, NetworkPolicyAttribute>,
+    pub(super) network_policy_attribute_values: BTreeMap<Uuid, Vec<NetworkPolicyAttributeValue>>,
     pub(super) communities: BTreeMap<Uuid, Community>,
     pub(super) attachment_community_assignments: BTreeMap<Uuid, AttachmentCommunityAssignment>,
     pub(super) host_community_assignments: BTreeMap<Uuid, HostCommunityAssignment>,
@@ -218,6 +221,17 @@ impl MemoryStorage {
                     .insert(definition.name().as_str().to_string(), definition);
             }
         }
+
+        let isolated = NetworkPolicyAttribute::restore(
+            Uuid::new_v4(),
+            NetworkPolicyAttributeName::new("isolated").expect("built-in attribute name is valid"),
+            "The network uses client isolation.",
+            now,
+            now,
+        );
+        state
+            .network_policy_attributes
+            .insert("isolated".to_string(), isolated);
 
         // Seed built-in export templates
         if let Ok(builtins) = crate::domain::builtin_export_templates::built_in_export_templates() {

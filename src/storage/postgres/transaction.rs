@@ -34,7 +34,11 @@ use crate::{
         label::{CreateLabel, Label, UpdateLabel},
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyAttributeValue, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         resource_records::{
@@ -43,8 +47,8 @@ use crate::{
         },
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyName, RecordTypeName,
-            ZoneName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -763,8 +767,29 @@ impl<'c> TxNetworkPolicyStore for PgTxStorage<'c> {
     ) -> Result<NetworkPolicy, AppError> {
         super::network_policies::get_by_name(&mut self.conn.borrow_mut(), name.as_str())
     }
+    fn update_network_policy(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+        super::network_policies::update(&mut self.conn.borrow_mut(), name.as_str(), command)
+    }
     fn delete_network_policy(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         super::network_policies::delete(&mut self.conn.borrow_mut(), name.as_str())
+    }
+    fn list_network_policy_attribute_values(&self, policy: &NetworkPolicyName) -> Result<Vec<NetworkPolicyAttributeValue>, AppError> {
+        super::network_policies::list_attribute_values(&mut self.conn.borrow_mut(), policy.as_str())
+    }
+    fn list_network_policy_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        super::network_policies::list_attributes(&mut self.conn.borrow_mut(), page)
+    }
+    fn create_network_policy_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::create_attribute(&mut self.conn.borrow_mut(), command)
+    }
+    fn get_network_policy_attribute_by_name(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::get_attribute(&mut self.conn.borrow_mut(), name.as_str())
+    }
+    fn update_network_policy_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::update_attribute(&mut self.conn.borrow_mut(), name.as_str(), command)
+    }
+    fn delete_network_policy_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+        super::network_policies::delete_attribute(&mut self.conn.borrow_mut(), name.as_str())
     }
 }
 

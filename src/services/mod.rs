@@ -54,7 +54,11 @@ use crate::{
         label::{CreateLabel, Label, UpdateLabel},
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyDetails, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         resource_records::{
@@ -64,8 +68,8 @@ use crate::{
         tasks::{CreateTask, TaskEnvelope},
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyName, RecordTypeName,
-            ZoneName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -837,8 +841,29 @@ impl NetworkPolicyService<'_> {
     pub async fn get(&self, name: &NetworkPolicyName) -> Result<NetworkPolicy, AppError> {
         network_policies::get_network_policy(self.storage.network_policies(), name).await
     }
+    pub async fn get_details(&self, name: &NetworkPolicyName) -> Result<NetworkPolicyDetails, AppError> {
+        network_policies::get_network_policy_details(self.storage.network_policies(), name).await
+    }
+    pub async fn update(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+        network_policies::update_network_policy(self.storage, name, command, self.events).await
+    }
     pub async fn delete(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         network_policies::delete_network_policy(self.storage, name, self.events).await
+    }
+    pub async fn list_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        network_policies::list_network_policy_attributes(self.storage.network_policies(), page).await
+    }
+    pub async fn create_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::create_network_policy_attribute(self.storage, command, self.events).await
+    }
+    pub async fn get_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::get_network_policy_attribute(self.storage.network_policies(), name).await
+    }
+    pub async fn update_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::update_network_policy_attribute(self.storage, name, command, self.events).await
+    }
+    pub async fn delete_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+        network_policies::delete_network_policy_attribute(self.storage, name, self.events).await
     }
 }
 

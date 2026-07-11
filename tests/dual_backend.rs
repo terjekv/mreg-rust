@@ -1640,6 +1640,17 @@ async fn host_group_create_and_delete_scenario(ctx: &TestCtx) {
 
 async fn network_policy_update_and_delete_scenario(ctx: &TestCtx) {
     let name = ctx.name("netpol");
+    let renamed = ctx.name("netpol-renamed");
+    let attribute = ctx.name("netpol-attribute");
+
+    let (status, body) = ctx
+        .post_json(
+            "/policy/network/attributes",
+            json!({"name": attribute, "description": "boolean policy attribute"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["name"], attribute);
 
     // POST a network policy.
     let (status, body) = ctx
@@ -1648,12 +1659,17 @@ async fn network_policy_update_and_delete_scenario(ctx: &TestCtx) {
             json!({
                 "name": name,
                 "description": "initial description",
+                "attributes": [{"name": attribute, "value": false}],
             }),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["name"], name);
     assert_eq!(body["description"], "initial description");
+    assert_eq!(
+        body["attributes"],
+        json!([{"name": attribute, "value": false}])
+    );
 
     // Verify GET returns the policy.
     let body = ctx
@@ -1661,18 +1677,37 @@ async fn network_policy_update_and_delete_scenario(ctx: &TestCtx) {
         .await;
     assert_eq!(body["name"], name);
     assert_eq!(body["description"], "initial description");
+    assert_eq!(
+        body["attributes"],
+        json!([{"name": attribute, "value": false}])
+    );
+
+    let (status, body) = ctx
+        .patch_json(
+            &format!("/policy/network/policies/{name}"),
+            json!({"name": renamed, "description": "updated", "attributes": []}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], renamed);
+    assert_eq!(body["attributes"], json!([]));
 
     // DELETE the policy.
     let status = ctx
-        .delete(&format!("/policy/network/policies/{name}"))
+        .delete(&format!("/policy/network/policies/{renamed}"))
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     // Verify GET now returns 404.
     let status = ctx
-        .get_status(&format!("/policy/network/policies/{name}"))
+        .get_status(&format!("/policy/network/policies/{renamed}"))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let status = ctx
+        .delete(&format!("/policy/network/attributes/{attribute}"))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 async fn community_create_and_delete_scenario(ctx: &TestCtx) {

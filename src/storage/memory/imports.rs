@@ -25,23 +25,26 @@ use crate::{
         label::CreateLabel,
         nameserver::CreateNameServer,
         network::{CreateExcludedRange, CreateNetwork},
-        network_policy::CreateNetworkPolicy,
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicyAttributeValue,
+        },
         pagination::{Page, PageRequest},
         ptr_override::CreatePtrOverride,
         resource_records::CreateRecordInstance,
         tasks::{CreateTask, TaskEnvelope, TaskStatus},
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, EmailAddressValue,
-            HostGroupName, Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyName,
-            OwnerGroupName, ReservedCount, SerialNumber, SoaSeconds, Ttl, ZoneName,
+            HostGroupName, Hostname, IpAddressValue, LabelName, MacAddressValue,
+            NetworkPolicyAttributeName, NetworkPolicyName, OwnerGroupName, ReservedCount,
+            SerialNumber, SoaSeconds, Ttl, ZoneName,
         },
         zone::{CreateForwardZone, CreateReverseZone},
     },
     errors::AppError,
     storage::ImportStore,
     storage::import_helpers::{
-        resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec, resolve_u32,
-        resolve_u64, resolve_uuid, stringify_ref_value,
+        resolve_bool, resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec,
+        resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
     },
 };
 
@@ -57,7 +60,9 @@ use super::host_groups::create_host_group_in_state;
 use super::hosts::assign_ip_in_state;
 use super::labels::create_label_in_state;
 use super::nameservers::create_nameserver_in_state;
-use super::network_policies::create_network_policy_in_state;
+use super::network_policies::{
+    create_network_policy_attribute_in_state, create_network_policy_in_state,
+};
 use super::networks::{add_excluded_range_in_state, create_network_in_state};
 use super::ptr_overrides::create_ptr_override_in_state;
 use super::tasks::create_task_in_state;
@@ -139,6 +144,12 @@ fn apply_import_item(
         ImportKind::BacnetId => import_bacnet_id(state, attributes, refs)?,
         ImportKind::PtrOverride => import_ptr_override(state, attributes, refs)?,
         ImportKind::NetworkPolicy => import_network_policy(state, attributes, refs)?,
+        ImportKind::NetworkPolicyAttribute => {
+            import_network_policy_attribute(state, attributes, refs)?
+        }
+        ImportKind::NetworkPolicyAttributeValue => {
+            import_network_policy_attribute_value(state, attributes, refs)?
+        }
         ImportKind::Community => import_community(state, attributes, refs)?,
         ImportKind::ForwardZone => import_forward_zone(state, attributes, refs)?,
         ImportKind::ReverseZone => import_reverse_zone(state, attributes, refs)?,
@@ -316,6 +327,64 @@ fn import_network_policy(
         )?,
     )?;
     Ok(Value::String(policy.name().as_str().to_string()))
+}
+
+fn import_network_policy_attribute(
+    state: &mut MemoryState,
+    attributes: &Value,
+    refs: &BTreeMap<String, String>,
+) -> Result<Value, AppError> {
+    let name = NetworkPolicyAttributeName::new(resolve_string(attributes, "name", refs)?)?;
+    let attribute = create_network_policy_attribute_in_state(
+        state,
+        CreateNetworkPolicyAttribute::new(name, resolve_string(attributes, "description", refs)?),
+    )?;
+    Ok(Value::String(attribute.name().as_str().to_string()))
+}
+
+fn import_network_policy_attribute_value(
+    state: &mut MemoryState,
+    attributes: &Value,
+    refs: &BTreeMap<String, String>,
+) -> Result<Value, AppError> {
+    let policy_name = NetworkPolicyName::new(resolve_string(attributes, "policy_name", refs)?)?;
+    let attribute_name =
+        NetworkPolicyAttributeName::new(resolve_string(attributes, "attribute_name", refs)?)?;
+    let value = resolve_bool(attributes, "value")?
+        .ok_or_else(|| AppError::validation("missing required import attribute 'value'"))?;
+    let policy = state
+        .network_policies
+        .get(policy_name.as_str())
+        .ok_or_else(|| {
+            AppError::not_found(format!("network policy '{}' was not found", policy_name))
+        })?;
+    let attribute = state
+        .network_policy_attributes
+        .get(attribute_name.as_str())
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "network policy attribute '{}' was not found",
+                attribute_name
+            ))
+        })?;
+    let values = state
+        .network_policy_attribute_values
+        .entry(policy.id())
+        .or_default();
+    if values
+        .iter()
+        .any(|existing| existing.attribute_id() == attribute.id())
+    {
+        return Err(AppError::conflict(
+            "network policy attribute value already exists",
+        ));
+    }
+    values.push(NetworkPolicyAttributeValue::restore(
+        attribute.id(),
+        attribute.name().clone(),
+        value,
+    ));
+    Ok(Value::String(format!("{policy_name}:{attribute_name}")))
 }
 
 fn import_community(

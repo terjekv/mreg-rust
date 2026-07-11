@@ -192,6 +192,7 @@ pub mod network_policy {
     pub const LIST: &str = "network_policy.list";
     pub const GET: &str = "network_policy.get";
     pub const CREATE: &str = "network_policy.create";
+    pub const UPDATE: &str = "network_policy.update";
     pub const DELETE: &str = "network_policy.delete";
 }
 

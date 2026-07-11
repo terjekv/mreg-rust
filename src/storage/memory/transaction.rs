@@ -33,7 +33,11 @@ use crate::{
         label::{CreateLabel, Label, UpdateLabel},
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyAttributeValue, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         resource_records::{
@@ -42,8 +46,8 @@ use crate::{
         },
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyName, RecordTypeName,
-            ZoneName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -125,8 +129,12 @@ use super::{
         list_nameservers_in_state, update_nameserver_in_state,
     },
     network_policies::{
-        create_network_policy_in_state, delete_network_policy_in_state,
-        get_network_policy_by_name_in_state, list_network_policies_in_state,
+        create_network_policy_attribute_in_state, create_network_policy_in_state,
+        delete_network_policy_attribute_in_state, delete_network_policy_in_state,
+        get_network_policy_attribute_by_name_in_state, get_network_policy_by_name_in_state,
+        list_network_policies_in_state, list_network_policy_attribute_values_in_state,
+        list_network_policy_attributes_in_state, update_network_policy_attribute_in_state,
+        update_network_policy_in_state,
     },
     networks::{
         add_excluded_range_in_state, count_unused_addresses_in_state, create_network_in_state,
@@ -765,8 +773,29 @@ impl<'tx> TxNetworkPolicyStore for MemTxStorage<'tx> {
     ) -> Result<NetworkPolicy, AppError> {
         get_network_policy_by_name_in_state(&self.state.borrow(), name)
     }
+    fn update_network_policy(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+        update_network_policy_in_state(&mut self.state.borrow_mut(), name, command)
+    }
     fn delete_network_policy(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         delete_network_policy_in_state(&mut self.state.borrow_mut(), name)
+    }
+    fn list_network_policy_attribute_values(&self, policy: &NetworkPolicyName) -> Result<Vec<NetworkPolicyAttributeValue>, AppError> {
+        list_network_policy_attribute_values_in_state(&self.state.borrow(), policy)
+    }
+    fn list_network_policy_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        list_network_policy_attributes_in_state(&self.state.borrow(), page)
+    }
+    fn create_network_policy_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        create_network_policy_attribute_in_state(&mut self.state.borrow_mut(), command)
+    }
+    fn get_network_policy_attribute_by_name(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+        get_network_policy_attribute_by_name_in_state(&self.state.borrow(), name)
+    }
+    fn update_network_policy_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        update_network_policy_attribute_in_state(&mut self.state.borrow_mut(), name, command)
+    }
+    fn delete_network_policy_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+        delete_network_policy_attribute_in_state(&mut self.state.borrow_mut(), name)
     }
 }
 

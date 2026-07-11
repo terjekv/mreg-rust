@@ -366,8 +366,11 @@ impl PostgresStorage {
         let value = resolve_bool(attributes, "value")?
             .ok_or_else(|| AppError::validation("missing required import attribute 'value'"))?;
         let updated = sql_query(
-            "INSERT INTO network_policy_attribute_values (policy_id, attribute_id, value)
-             SELECT p.id, a.id, $3
+            "INSERT INTO network_policy_attribute_values (policy_id, attribute_id, value, position)
+             SELECT p.id, a.id, $3,
+                    COALESCE((SELECT MAX(v.position) + 1
+                              FROM network_policy_attribute_values v
+                              WHERE v.policy_id = p.id), 0)
              FROM network_policies p, network_policy_attributes a
              WHERE p.name = $1 AND a.name = $2",
         )

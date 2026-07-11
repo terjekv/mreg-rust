@@ -64,6 +64,81 @@ fn redact(mut value: Value) -> Value {
 }
 
 #[actix_web::test]
+async fn legacy_network_policy_attributes_match_django_membership_semantics() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/networkpolicyattributes/")
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({"name": "Public", "description": "Public access"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let attribute: Value = test::read_body_json(response).await;
+    assert_eq!(attribute["name"], "public");
+    let attribute_id = attribute["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/networkpolicies/")
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({
+                "name": "Campus",
+                "description": "",
+                "attributes": [{"name": "public", "value": false}]
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy: Value = test::read_body_json(response).await;
+    assert_eq!(policy["name"], "campus");
+    assert_eq!(policy["description"], "");
+    assert_eq!(
+        policy["attributes"],
+        json!([{"name": "public", "value": false}])
+    );
+    let policy_id = policy["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/v1/networkpolicies/{policy_id}"))
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({"attributes": []}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let policy: Value = test::read_body_json(response).await;
+    assert_eq!(policy["attributes"], json!([]));
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::delete()
+            .uri(&format!("/api/v1/networkpolicyattributes/{attribute_id}"))
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[actix_web::test]
 async fn host_contact_contract_shape_is_stable() {
     let app = test::init_service(
         App::new()
