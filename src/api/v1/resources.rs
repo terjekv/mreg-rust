@@ -10,6 +10,7 @@ use crate::{
     AppState,
     authz::actions,
     domain::{
+        community::{CreateCommunity, UpdateCommunity},
         filters::{
             BacnetIdFilter, CommunityFilter, HostFilter, HostGroupFilter, NetworkFilter,
             NetworkPolicyFilter, PtrOverrideFilter, RecordFilter,
@@ -18,7 +19,6 @@ use crate::{
             AllocationPolicy, AssignIpAddress, CreateHost, IpAssignmentSpec, UpdateHost,
             UpdateIpAddress,
         },
-        community::{CreateCommunity, UpdateCommunity},
         host_community_assignment::CreateHostCommunityAssignment,
         host_contact::CreateHostContact,
         host_group::CreateHostGroup,
@@ -40,9 +40,8 @@ use crate::{
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
             HostPolicyName, Hostname, IpAddressValue, LabelName, MacAddressValue,
-            NetworkPolicyAttributeName,
-            NetworkPolicyName, RecordTypeName, ReservedCount, SerialNumber, SoaSeconds, Ttl,
-            UpdateField, VlanId, ZoneName,
+            NetworkPolicyAttributeName, NetworkPolicyName, RecordTypeName, ReservedCount,
+            SerialNumber, SoaSeconds, Ttl, UpdateField, VlanId, ZoneName,
         },
         zone::{CreateForwardZone, UpdateForwardZone},
     },
@@ -207,11 +206,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(web::post().to(add_network_community_host)),
     )
     .service(
-        web::resource(
-            "/networks/{network:.*}/communities/{community_id}/hosts/{host_id}",
-        )
-        .route(web::get().to(network_community_host_detail))
-        .route(web::delete().to(delete_network_community_host)),
+        web::resource("/networks/{network:.*}/communities/{community_id}/hosts/{host_id}")
+            .route(web::get().to(network_community_host_detail))
+            .route(web::delete().to(delete_network_community_host)),
     )
     .service(
         web::resource("/networks/{network:.*}/communities/")
@@ -543,41 +540,15 @@ async fn update_ip_address(
             Some(_) => None,
             None => assignment.mac_address().cloned(),
         };
-        state
-            .services
-            .hosts()
-            .unassign_ip_address(assignment.address())
-            .await?;
         let replacement =
             AssignIpAddress::new(host.name().clone(), Some(new_address), None, mac_address)?
                 .with_reserved_addresses(true)
                 .with_assignment_id(assignment.id());
-        if let Err(error) = state.services.hosts().assign_ip_address(replacement).await {
-            let original_host = state
-                .services
-                .hosts()
-                .list(&PageRequest::all(), &HostFilter::default())
-                .await?
-                .items
-                .into_iter()
-                .find(|host| host.id() == assignment.host_id())
-                .ok_or_else(|| AppError::not_found("original host was not found"))?;
-            state
-                .services
-                .hosts()
-                .assign_ip_address(
-                    AssignIpAddress::new(
-                        original_host.name().clone(),
-                        Some(*assignment.address()),
-                        None,
-                        assignment.mac_address().cloned(),
-                    )?
-                    .with_reserved_addresses(true)
-                    .with_assignment_id(assignment.id()),
-                )
-                .await?;
-            return Err(error);
-        }
+        state
+            .services
+            .hosts()
+            .move_ip_address(assignment.address(), replacement)
+            .await?;
         return Ok(HttpResponse::NoContent().finish());
     }
     authorize(
@@ -872,17 +843,7 @@ async fn create_host(
             )?)
             .await?;
     }
-    for email in payload.contacts {
-        state
-            .services
-            .host_contacts()
-            .create(CreateHostContact::new(
-                EmailAddressValue::new(email)?,
-                None,
-                vec![name.clone()],
-            ))
-            .await?;
-    }
+    set_host_contacts(&state, &name, payload.contacts).await?;
     Ok(HttpResponse::Created()
         .append_header(("Location", format!("/api/v1/hosts/{}", name.as_str())))
         .finish())
@@ -929,6 +890,19 @@ async fn delete_host(
 }
 
 async fn remove_host_contacts(state: &AppState, host: &Hostname) -> Result<(), AppError> {
+    set_host_contacts(state, host, Vec::new()).await
+}
+
+async fn set_host_contacts(
+    state: &AppState,
+    host: &Hostname,
+    emails: Vec<String>,
+) -> Result<(), AppError> {
+    let mut wanted = emails
+        .into_iter()
+        .map(EmailAddressValue::new)
+        .collect::<Result<Vec<_>, _>>()?;
+    wanted.dedup_by(|left, right| left == right);
     let contacts = state
         .services
         .host_contacts()
@@ -938,13 +912,10 @@ async fn remove_host_contacts(state: &AppState, host: &Hostname) -> Result<(), A
         )
         .await?
         .items;
-    for contact in contacts {
-        if contact.hosts().iter().any(|candidate| candidate == host) {
-            state
-                .services
-                .host_contacts()
-                .delete(contact.email())
-                .await?;
+    for contact in &contacts {
+        let has_host = contact.hosts().iter().any(|candidate| candidate == host);
+        let should_have_host = wanted.iter().any(|email| email == contact.email());
+        if has_host && !should_have_host {
             let remaining = contact
                 .hosts()
                 .iter()
@@ -955,13 +926,42 @@ async fn remove_host_contacts(state: &AppState, host: &Hostname) -> Result<(), A
                 state
                     .services
                     .host_contacts()
-                    .create(CreateHostContact::new(
+                    .replace(CreateHostContact::new(
                         contact.email().clone(),
                         contact.display_name().map(str::to_string),
                         remaining,
                     ))
                     .await?;
+            } else {
+                state
+                    .services
+                    .host_contacts()
+                    .delete(contact.email())
+                    .await?;
             }
+        }
+    }
+    for email in wanted {
+        if let Some(contact) = contacts.iter().find(|contact| contact.email() == &email) {
+            if !contact.hosts().iter().any(|candidate| candidate == host) {
+                let mut hosts = contact.hosts().to_vec();
+                hosts.push(host.clone());
+                state
+                    .services
+                    .host_contacts()
+                    .replace(CreateHostContact::new(
+                        email,
+                        contact.display_name().map(str::to_string),
+                        hosts,
+                    ))
+                    .await?;
+            }
+        } else {
+            state
+                .services
+                .host_contacts()
+                .create(CreateHostContact::new(email, None, vec![host.clone()]))
+                .await?;
         }
     }
     Ok(())
@@ -1047,18 +1047,7 @@ async fn update_host(
         .await?;
     }
     if let Some(contacts) = payload.contacts {
-        remove_host_contacts(&state, &current_name).await?;
-        for email in contacts {
-            state
-                .services
-                .host_contacts()
-                .create(CreateHostContact::new(
-                    EmailAddressValue::new(email)?,
-                    None,
-                    vec![current_name.clone()],
-                ))
-                .await?;
-        }
+        set_host_contacts(&state, &current_name, contacts).await?;
     }
     state
         .services
@@ -1075,11 +1064,6 @@ async fn update_host(
         .await?;
     if let Some(new_name) = new_name {
         for contact in contacts_to_migrate {
-            state
-                .services
-                .host_contacts()
-                .delete(contact.email())
-                .await?;
             let hosts = contact
                 .hosts()
                 .iter()
@@ -1094,7 +1078,7 @@ async fn update_host(
             state
                 .services
                 .host_contacts()
-                .create(CreateHostContact::new(
+                .replace(CreateHostContact::new(
                     contact.email().clone(),
                     contact.display_name().map(str::to_string),
                     hosts,
@@ -1244,7 +1228,10 @@ async fn update_network(
         UpdateField::Unchanged => UpdateField::Unchanged,
         UpdateField::Clear => UpdateField::Clear,
         UpdateField::Set(id) => UpdateField::Set(
-            network_policy_from_legacy_id(&state, id).await?.name().clone(),
+            network_policy_from_legacy_id(&state, id)
+                .await?
+                .name()
+                .clone(),
         ),
     };
     state
@@ -1840,15 +1827,7 @@ fn record_json(value: &RecordInstance, host_id: Option<u32>) -> Value {
         "SSHFP" => {
             object.insert("algorithm".into(), data["algorithm"].clone());
             object.insert("hash_type".into(), data["fp_type"].clone());
-            let fingerprint = data["fingerprint"].as_str().unwrap_or_default();
-            let fingerprint = fingerprint
-                .strip_prefix("f1c0")
-                .and_then(|encoded| {
-                    let length = usize::from_str_radix(encoded.get(..4)?, 16).ok()?;
-                    encoded.get(4..4 + length)
-                })
-                .unwrap_or(fingerprint);
-            object.insert("fingerprint".into(), json!(fingerprint));
+            object.insert("fingerprint".into(), data["fingerprint"].clone());
             object.insert("ttl".into(), json!(value.ttl().map(|ttl| ttl.as_u32())));
         }
         "SRV" => {
@@ -2057,13 +2036,11 @@ async fn hosts(
         if query.id.is_some_and(|id| legacy_id(host.id()) != id) {
             continue;
         }
-        values.push(
-            host_json(
-                host,
-                &related,
-                host_community_values(&state, host.id()).await?,
-            )
-        );
+        values.push(host_json(
+            host,
+            &related,
+            host_community_values(&state, host.id()).await?,
+        ));
     }
     let wildcard_names = related
         .records
@@ -2420,10 +2397,7 @@ async fn ptr_override_detail(
     )
     .await?;
     let host = state.services.hosts().get(value.host_name()).await?;
-    Ok(HttpResponse::Ok().json(ptr_override_json(
-        &value,
-        Some(legacy_id(host.id())),
-    )))
+    Ok(HttpResponse::Ok().json(ptr_override_json(&value, Some(legacy_id(host.id())))))
 }
 
 async fn update_ptr_override(
@@ -2442,11 +2416,10 @@ async fn update_ptr_override(
         &old.address().as_str(),
     )
     .await?;
-    state.services.ptr_overrides().delete(old.address()).await?;
     state
         .services
         .ptr_overrides()
-        .create(CreatePtrOverride::new(
+        .replace(CreatePtrOverride::new(
             host.name().clone(),
             *old.address(),
             old.target_name().cloned(),
@@ -3580,8 +3553,10 @@ async fn history(
         let mut data = event.data().clone();
         let mut model_id = event.resource_id().map(legacy_id).unwrap_or(0);
 
-        if matches!(event.resource_kind(), "host_group" | "host_policy_atom" | "host_policy_role")
-            && matches!(event.action(), "create" | "delete")
+        if matches!(
+            event.resource_kind(),
+            "host_group" | "host_policy_atom" | "host_policy_role"
+        ) && matches!(event.action(), "create" | "delete")
         {
             let name = serde_json::to_string(&event.data()["name"]).unwrap_or_default();
             let description =
@@ -3592,11 +3567,8 @@ async fn history(
                 format!("{{\"description\": {description}, \"name\": {name}}}")
             });
         }
-        if event.resource_kind() == "host_group"
-            && matches!(event.action(), "add" | "remove")
-        {
+        if event.resource_kind() == "host_group" && matches!(event.action(), "add" | "remove") {
             let relation = event.data()["relation"].as_str().unwrap_or_default();
-            let member = event.data()["name"].as_str().unwrap_or_default();
             model = match relation {
                 "hosts" => "Host",
                 "owners" => "Group",
@@ -3604,10 +3576,6 @@ async fn history(
                 _ => "HostGroup",
             }
             .to_string();
-            model_id = host_ids
-                .get(member)
-                .copied()
-                .unwrap_or(model_id);
         }
         if event.resource_kind() == "host_policy_role" {
             let relation = match event.action() {
@@ -3640,21 +3608,16 @@ async fn history(
             resource = "host";
             if event.resource_kind() == "ip_address" {
                 let host_id = event.data()["host_id"].as_str();
-                if let Some((host_name, id)) = host_ids
-                    .iter()
-                    .find(|(_, id)| {
-                        host_id
-                            .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
-                            .is_some_and(|raw| legacy_id(raw) == **id)
-                    })
-                {
+                if let Some((host_name, id)) = host_ids.iter().find(|(_, id)| {
+                    host_id
+                        .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+                        .is_some_and(|raw| legacy_id(raw) == **id)
+                }) {
                     name = host_name.clone();
                     model_id = *id;
                 }
                 model = "Ipaddress".to_string();
-                data = Value::String(
-                    json!({"ipaddress": event.data()["address"]}).to_string(),
-                );
+                data = Value::String(json!({"ipaddress": event.data()["address"]}).to_string());
             } else if event.data()["type_name"] == "TXT" {
                 model = "Txt".to_string();
                 data = json!({"txt": "v=spf1 -all"});
@@ -3739,15 +3702,17 @@ async fn history(
         }
     }
     if query.resource.as_deref() == Some("host") {
-        values.sort_by_key(|value| match (
-            value["model"].as_str().unwrap_or_default(),
-            value["action"].as_str().unwrap_or_default(),
-        ) {
-            ("Txt", "create") => 0,
-            ("Host", "create") => 1,
-            ("Ipaddress", "create") => 2,
-            ("Host", "update") => 3,
-            _ => 4,
+        values.sort_by_key(|value| {
+            match (
+                value["model"].as_str().unwrap_or_default(),
+                value["action"].as_str().unwrap_or_default(),
+            ) {
+                ("Txt", "create") => 0,
+                ("Host", "create") => 1,
+                ("Ipaddress", "create") => 2,
+                ("Host", "update") => 3,
+                _ => 4,
+            }
         });
     }
     Ok(HttpResponse::Ok().json(paginate(values, query.into_inner())))
@@ -4003,10 +3968,10 @@ async fn create_legacy_record(
             json!({"preference": required_u32(payload.priority.as_ref(), "priority")?, "exchange": payload.mx.as_deref().unwrap_or_default()})
         }
         "NAPTR" => {
-            json!({"order": required_u32(payload.order.as_ref(), "order")?, "preference": required_u32(payload.preference.as_ref(), "preference")?, "flags": payload.flag.as_deref().unwrap_or_default(), "services": format!("\u{1f}mreg-v1:{}", payload.service.as_deref().unwrap_or_default()), "regexp": payload.regex.as_deref().unwrap_or_default(), "replacement": payload.replacement.as_deref().unwrap_or_default()})
+            json!({"order": required_u32(payload.order.as_ref(), "order")?, "preference": required_u32(payload.preference.as_ref(), "preference")?, "flags": payload.flag.as_deref().unwrap_or_default(), "services": payload.service.as_deref().unwrap_or_default(), "regexp": payload.regex.as_deref().unwrap_or_default(), "replacement": payload.replacement.as_deref().unwrap_or_default()})
         }
         "SSHFP" => {
-            json!({"algorithm": required_u32(payload.algorithm.as_ref(), "algorithm")?, "fp_type": required_u32(payload.hash_type.as_ref(), "hash_type")?, "fingerprint": format!("\u{1f}mreg-v1:{}", payload.fingerprint.as_deref().unwrap_or_default())})
+            json!({"algorithm": required_u32(payload.algorithm.as_ref(), "algorithm")?, "fp_type": required_u32(payload.hash_type.as_ref(), "hash_type")?, "fingerprint": payload.fingerprint.as_deref().unwrap_or_default()})
         }
         "SRV" => {
             json!({"priority": required_u32(payload.priority.as_ref(), "priority")?, "weight": required_u32(payload.weight.as_ref(), "weight")?, "port": required_u32(payload.port.as_ref(), "port")?, "target": host.name().as_str()})
@@ -4034,6 +3999,11 @@ async fn create_legacy_record(
             None,
             data,
         )?
+    };
+    let command = if matches!(kind, "NAPTR" | "SSHFP") {
+        command.with_legacy_compatibility()
+    } else {
+        command
     };
     let record = state.services.records().create_record(command).await?;
     Ok(HttpResponse::Created().json(record_json(&record, Some(legacy_id(host.id())))))
@@ -4269,13 +4239,14 @@ async fn community_from_legacy_id(
         .await?
         .items
         .into_iter()
-        .find(|community| {
-            community.network_cidr() == network && legacy_id(community.id()) == id
-        })
+        .find(|community| community.network_cidr() == network && legacy_id(community.id()) == id)
         .ok_or_else(|| AppError::not_found("community was not found"))
 }
 
-async fn host_community_values(state: &AppState, host_id: uuid::Uuid) -> Result<Vec<Value>, AppError> {
+async fn host_community_values(
+    state: &AppState,
+    host_id: uuid::Uuid,
+) -> Result<Vec<Value>, AppError> {
     let mappings = state
         .services
         .host_community_assignments()
@@ -4283,8 +4254,15 @@ async fn host_community_values(state: &AppState, host_id: uuid::Uuid) -> Result<
         .await?
         .items;
     let mut values = Vec::new();
-    for mapping in mappings.iter().filter(|mapping| mapping.host_id() == host_id) {
-        let community = state.services.communities().get(mapping.community_id()).await?;
+    for mapping in mappings
+        .iter()
+        .filter(|mapping| mapping.host_id() == host_id)
+    {
+        let community = state
+            .services
+            .communities()
+            .get(mapping.community_id())
+            .await?;
         values.push(json!({
             "ipaddress": legacy_id(mapping.ip_address_id()),
             "community": community_json(state, &community).await?,
@@ -4558,7 +4536,9 @@ async fn add_network_community_host(
             .find(|host| host.id() == assignment.host_id())
             .ok_or_else(|| AppError::not_found("host was not found"))?
     } else {
-        return Err(AppError::validation("Either 'id' or 'ipaddress' is required"));
+        return Err(AppError::validation(
+            "Either 'id' or 'ipaddress' is required",
+        ));
     };
     let address = if let Some(address) = payload.ipaddress {
         IpAddressValue::new(address)?
@@ -4570,7 +4550,11 @@ async fn add_network_community_host(
             .await?
             .items
             .into_iter()
-            .filter(|assignment| network.as_inner().contains(&assignment.address().as_inner()))
+            .filter(|assignment| {
+                network
+                    .as_inner()
+                    .contains(&assignment.address().as_inner())
+            })
             .collect::<Vec<_>>();
         if addresses.len() != 1 {
             return Err(AppError::not_acceptable(
@@ -4590,12 +4574,15 @@ async fn add_network_community_host(
     if let Err(error) = state
         .services
         .host_community_assignments()
-        .create(CreateHostCommunityAssignment::new(
-            host.name().clone(),
-            address,
-            community.policy_name().clone(),
-            community.name().clone(),
-        ))
+        .move_legacy(
+            CreateHostCommunityAssignment::new(
+                host.name().clone(),
+                address,
+                community.policy_name().clone(),
+                community.name().clone(),
+            ),
+            legacy_env_flag("MREG_REQUIRE_MAC_FOR_BINDING_IP_TO_COMMUNITY"),
+        )
         .await
     {
         if let AppError::NotAcceptable(detail) = error {

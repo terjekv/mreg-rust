@@ -94,6 +94,7 @@ pub struct RecordResponse {
     ttl: Option<u32>,
     raw_rdata: Option<String>,
     rendered: Option<String>,
+    legacy_compatibility: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -124,6 +125,7 @@ impl RecordResponse {
             ttl: record.ttl().map(|ttl| ttl.as_u32()),
             raw_rdata,
             rendered: record.rendered().map(str::to_string),
+            legacy_compatibility: record.legacy_compatibility(),
             created_at: record.created_at(),
             updated_at: record.updated_at(),
         }

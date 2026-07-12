@@ -296,6 +296,7 @@ struct LegacyGroupRelationChange {
     relation: &'static str,
     member: String,
     history_name: String,
+    history_id: uuid::Uuid,
 }
 
 async fn replace_host_group(
@@ -320,6 +321,7 @@ async fn replace_host_group(
                 relation: change.relation,
                 member: change.member,
                 history_name: change.history_name,
+                history_id: change.history_id,
             },
         )
         .await?;
@@ -347,6 +349,7 @@ async fn host_group_host_add(
             relation: "hosts",
             member,
             history_name: group.name().as_str().to_string(),
+            history_id: group.id(),
         },
     )
     .await?;
@@ -378,6 +381,7 @@ async fn host_group_host_remove(
             relation: "hosts",
             member: member.as_str().to_string(),
             history_name: group.name().as_str().to_string(),
+            history_id: group.id(),
         },
     )
     .await?;
@@ -405,6 +409,7 @@ async fn host_group_group_add(
             relation: "groups",
             member: child.name().as_str().to_string(),
             history_name: parent.name().as_str().to_string(),
+            history_id: parent.id(),
         },
     )
     .await?;
@@ -436,6 +441,7 @@ async fn host_group_group_remove(
             relation: "groups",
             member: child.name().as_str().to_string(),
             history_name: parent.name().as_str().to_string(),
+            history_id: parent.id(),
         },
     )
     .await?;
@@ -463,6 +469,7 @@ async fn host_group_owner_add(
             relation: "owners",
             member,
             history_name: group.name().as_str().to_string(),
+            history_id: group.id(),
         },
     )
     .await?;
@@ -494,6 +501,7 @@ async fn host_group_owner_remove(
             relation: "owners",
             member: member.as_str().to_string(),
             history_name: group.name().as_str().to_string(),
+            history_id: group.id(),
         },
     )
     .await?;
@@ -1273,17 +1281,10 @@ async fn update_forward_delegation(
     state
         .services
         .zones()
-        .delete_forward_delegation(old.id())
-        .await?;
-    state
-        .services
-        .zones()
-        .create_forward_delegation(CreateForwardZoneDelegation::new(
-            zone,
-            old.name().clone(),
-            comment,
-            nameservers,
-        ))
+        .replace_forward_delegation(
+            old.id(),
+            CreateForwardZoneDelegation::new(zone, old.name().clone(), comment, nameservers),
+        )
         .await?;
     Ok(HttpResponse::NoContent().finish())
 }

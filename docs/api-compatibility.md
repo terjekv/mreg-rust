@@ -54,14 +54,14 @@ and serialize legacy DRF-style responses. No entry in this table is a redirect.
 |---|---|---|
 | `bacnet/ids/` | List and BACnet-ID detail. |
 | `hosts/` | List, hostname detail, create/update/rename/delete, contacts, policy roles, PTR overrides, groups, and DNS records. Host renames preserve contact relationships. Legacy wildcard hosts are projected over unanchored DNS owners and do not create V2 inventory hosts. |
-| `hostgroups/` | List/detail, create/delete, and nested group, host, and owner reads and mutations. Legacy IDs are stable synthetic values. |
-| `ipaddresses/` | Collection/detail, assignment, address/MAC update, host move, and removal. Legacy IDs derive from the stable assignment UUID and remain stable across address/host changes. |
+| `hostgroups/` | List/detail, create/delete, and nested group, host, and owner reads and mutations. Relation changes update the existing group in place, preserving its V2 UUID and inbound parent relationships. Legacy IDs are stable synthetic values. |
+| `ipaddresses/` | Collection/detail, assignment, address/MAC update, host move, and removal. Moves are atomic, preserve the assignment UUID and same-network community memberships, and reject cross-network moves that would invalidate a membership. |
 | `labels/` | Collection/detail/name lookup, create, rename/update, and delete. |
 | `nameservers/` | List/detail keyed by name. |
-| `ptroverrides/` | Collection, create/change/delete, host projection, and network-level projections. |
-| DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. Exact collection filters prevent records of the same type from being mistaken for one another. |
+| `ptroverrides/` | Collection, create/change/delete, host projection, and network-level projections. Changes preserve the V2 UUID. |
+| DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. Noncanonical legacy NAPTR/SSHFP input is retained honestly, marked `legacy_compatibility` in V2, and is not rendered as canonical DNS RDATA. Exact collection filters prevent records of the same type from being mistaken for one another. |
 | `networks/` | List/CIDR detail, create/update/delete, excluded-range mutations, lookup by IP, reserved/used/unused counts and lists, first/random unused address, host and PTR projections, policy assignment/filtering, per-network community limits, and community/member CRUD. |
-| Forward/reverse zones | List/detail, forward-zone create/update/delete, nameserver replacement, forward-delegation create/list/comment/delete, hostname/delegation lookup, delegation detail by name, and generated BIND-style zone files. |
+| Forward/reverse zones | List/detail, forward-zone create/update/delete, nameserver replacement, forward-delegation create/list/comment/delete, hostname/delegation lookup, delegation detail by name, and generated BIND-style zone files. Delegation changes preserve the V2 UUID. |
 | Network and host policy | Network-policy and network-policy-attribute list/create/detail/update/delete, boolean policy-attribute membership with atomic replace semantics, protected attributes, community-template patterns, plus host-policy atom/role CRUD, rename, atom/host membership, labels, and reverse membership projections. |
 | `history/` | Collection rendered from Rust audit records with legacy host, group, and host-policy relation projections. Old integer history item identity is synthesized. |
 
@@ -92,6 +92,12 @@ the original forced network/broadcast semantics), host groups, forward-zone
 delegations, labels, host policy, PTR overrides, and the legacy DNS record types.
 These call the Rust service layer directly and then emit the original status and
 response shape; they do not round-trip through v2.
+
+Compatibility mutations do not change native create semantics or use
+name-based cleanup in shared storage. In particular, V2 community-assignment
+creation remains non-destructive and returns conflicts for duplicates, and
+deleting an inventory host removes only records anchored to that host. An
+independent unanchored record with the same DNS owner name survives.
 
 Collection adapters use original DRF page-number envelopes (`count`, `next`,
 `previous`, `results`) rather than v2 cursor pagination. Original `Token`

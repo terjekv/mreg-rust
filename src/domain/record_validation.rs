@@ -121,6 +121,7 @@ fn check_null_mx(
     }
     let normalized = match content {
         ValidatedRecordContent::Structured(value) => value,
+        ValidatedRecordContent::LegacyStructured(value) => value,
         ValidatedRecordContent::RawRdata(_) => {
             return Ok(());
         }
@@ -161,6 +162,7 @@ fn check_alias_targets(
     if let Some(profile) = record_type.schema().rfc_profile()? {
         let normalized = match content {
             ValidatedRecordContent::Structured(value) => value,
+            ValidatedRecordContent::LegacyStructured(value) => value,
             ValidatedRecordContent::RawRdata(_) => return Ok(()),
         };
         for field in profile.target_fields_must_not_be_aliases() {
@@ -330,34 +332,6 @@ pub(crate) fn preprocess_builtin_payload(
     type_name: &RecordTypeName,
     payload: &Value,
 ) -> Result<Value, AppError> {
-    if type_name.as_str() == "SSHFP" {
-        let object = payload
-            .as_object()
-            .ok_or_else(|| AppError::validation("record payload must be a JSON object"))?;
-        let mut normalized = object.clone();
-        if let Some(raw) = normalized
-            .get("fingerprint")
-            .and_then(Value::as_str)
-            .and_then(|value| value.strip_prefix("\u{1f}mreg-v1:"))
-        {
-            let expected_len = match normalized.get("fp_type").and_then(Value::as_u64) {
-                Some(1) => 40,
-                Some(2) => 64,
-                _ => 0,
-            };
-            let prefix = format!("f1c0{:04x}{raw}", raw.len());
-            if expected_len == 0 || prefix.len() > expected_len {
-                return Err(AppError::validation(
-                    "legacy SSHFP fingerprint is too long for its hash type",
-                ));
-            }
-            normalized.insert(
-                "fingerprint".to_string(),
-                Value::String(format!("{prefix:0<expected_len$}")),
-            );
-        }
-        return Ok(Value::Object(normalized));
-    }
     if type_name.as_str() != "NAPTR" {
         return Ok(payload.clone());
     }
@@ -471,14 +445,13 @@ pub(crate) fn validate_naptr_payload(normalized: &Value) -> Result<Value, AppErr
             .ok_or_else(|| AppError::validation("NAPTR flags are required"))?
             .to_string(),
     )?;
-    let services_value = normalized
-        .get("services")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::validation("NAPTR services are required"))?;
-    let (legacy_compat, services_value) = services_value
-        .strip_prefix("\u{1f}mreg-v1:")
-        .map_or((false, services_value), |value| (true, value));
-    let services = DnsCharacterString::new(services_value.to_string())?;
+    let services = DnsCharacterString::new(
+        normalized
+            .get("services")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::validation("NAPTR services are required"))?
+            .to_string(),
+    )?;
     let regexp = DnsCharacterString::new(
         normalized
             .get("regexp")
@@ -495,7 +468,7 @@ pub(crate) fn validate_naptr_payload(normalized: &Value) -> Result<Value, AppErr
 
     let has_regexp = !regexp.as_str().is_empty();
     let has_replacement = !replacement.is_root();
-    if !legacy_compat && has_regexp == has_replacement {
+    if has_regexp == has_replacement {
         return Err(AppError::validation(
             "NAPTR records must use exactly one of a non-empty regexp or a non-root replacement",
         ));
@@ -845,6 +818,9 @@ pub(crate) fn record_payloads_match(
 ) -> bool {
     match incoming {
         ValidatedRecordContent::Structured(value) => {
+            existing.raw_rdata().is_none() && existing.data() == value
+        }
+        ValidatedRecordContent::LegacyStructured(value) => {
             existing.raw_rdata().is_none() && existing.data() == value
         }
         ValidatedRecordContent::RawRdata(raw) => existing

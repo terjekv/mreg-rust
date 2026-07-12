@@ -69,11 +69,12 @@ pub struct CreateCommunityRequest {
 
 impl CreateCommunityRequest {
     fn into_command(self) -> Result<crate::domain::community::CreateCommunity, AppError> {
+        let description = required_description(self.description, "community description")?;
         crate::domain::community::CreateCommunity::new(
             NetworkPolicyName::new(self.policy_name)?,
             crate::domain::types::CidrValue::new(self.network)?,
             CommunityName::new(self.name)?,
-            self.description,
+            description,
         )
     }
 }
@@ -82,6 +83,14 @@ impl CreateCommunityRequest {
 pub struct UpdateCommunityRequest {
     name: Option<String>,
     description: Option<String>,
+}
+
+fn required_description(value: String, label: &str) -> Result<String, AppError> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(AppError::validation(format!("{label} cannot be empty")));
+    }
+    Ok(value)
 }
 
 #[derive(Serialize, ToSchema)]
@@ -260,7 +269,10 @@ pub(crate) async fn update_community(
             community_id,
             UpdateCommunity {
                 name: request.name.map(CommunityName::new).transpose()?,
-                description: request.description,
+                description: request
+                    .description
+                    .map(|value| required_description(value, "community description"))
+                    .transpose()?,
             },
         )
         .await?;

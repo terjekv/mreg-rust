@@ -457,9 +457,10 @@ pub(super) fn get_host_auth_context_in_state(
     state: &MemoryState,
     name: &Hostname,
 ) -> Result<HostAuthContext, AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
 
     let mut addresses = Vec::new();
     let mut seen_networks = std::collections::BTreeSet::new();
@@ -495,9 +496,10 @@ pub(super) fn update_host_in_state(
     name: &Hostname,
     command: UpdateHost,
 ) -> Result<Host, AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
     let now = Utc::now();
     let new_name = command.name.unwrap_or_else(|| host.name().clone());
     let ttl = command.ttl.resolve(host.ttl());
@@ -589,24 +591,11 @@ pub(super) fn delete_host_in_state(
     state: &mut MemoryState,
     name: &Hostname,
 ) -> Result<(), AppError> {
-    let host = state.hosts.remove(name.as_str()).ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host = state
+        .hosts
+        .remove(name.as_str())
+        .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name.as_str())))?;
     delete_records_by_owner_in_state(state, host.id());
-    let mut removed_rrsets = std::collections::HashSet::new();
-    state.records.retain(|record| {
-        if record.owner_name().eq_ignore_ascii_case(host.name().as_str()) {
-            removed_rrsets.insert(record.rrset_id());
-            false
-        } else {
-            true
-        }
-    });
-    for rrset_id in removed_rrsets {
-        if !state.records.iter().any(|record| record.rrset_id() == rrset_id) {
-            state.rrsets.remove(&rrset_id);
-        }
-    }
     if let Some(zone_name) = host.zone()
         && let Some(zone) = state.forward_zones.get(zone_name.as_str())
     {
@@ -626,8 +615,7 @@ pub(super) fn delete_host_in_state(
         .ptr_overrides
         .retain(|_, ptr| ptr.host_name() != host.name());
     state.host_community_assignments.retain(|_, assignment| {
-        assignment.host_id() != host.id()
-            && !ip_address_ids.contains(&assignment.ip_address_id())
+        assignment.host_id() != host.id() && !ip_address_ids.contains(&assignment.ip_address_id())
     });
     Ok(())
 }
@@ -646,9 +634,10 @@ pub(super) fn list_ip_addresses_for_host_in_state(
     host: &Hostname,
     page: &PageRequest,
 ) -> Result<Page<IpAddressAssignment>, AppError> {
-    let host = state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", host.as_str()))
-    })?;
+    let host =
+        state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", host.as_str()))
+        })?;
     let mut items: Vec<IpAddressAssignment> = state
         .ip_addresses
         .values()
@@ -789,7 +778,11 @@ pub(super) fn unassign_ip_address_in_state(
         .map(|h| h.name().as_str().to_string());
 
     if let Some(host_name) = host_name {
-        let type_name = if assignment.family() == 4 { "A" } else { "AAAA" };
+        let type_name = if assignment.family() == 4 {
+            "A"
+        } else {
+            "AAAA"
+        };
         let addr_str = assignment.address().as_str();
         let mut kept = Vec::new();
         let mut removed = Vec::new();
@@ -820,6 +813,67 @@ pub(super) fn unassign_ip_address_in_state(
     delete_records_by_name_and_type_in_state(state, &ptr_name, "PTR");
 
     Ok(assignment)
+}
+
+pub(super) fn move_ip_address_in_state(
+    state: &mut MemoryState,
+    old_address: &IpAddressValue,
+    command: AssignIpAddress,
+) -> Result<IpAddressAssignment, AppError> {
+    let old = get_ip_address_in_state(state, old_address)?;
+    if command.assignment_id() != Some(old.id()) {
+        return Err(AppError::validation(
+            "IP address move must preserve the assignment identity",
+        ));
+    }
+    let new_address = command
+        .address()
+        .copied()
+        .ok_or_else(|| AppError::validation("IP address move requires an explicit address"))?;
+    let new_network = most_specific_network_for_address(state, &new_address)?;
+    let related = state
+        .host_community_assignments
+        .values()
+        .filter(|item| item.ip_address_id() == old.id())
+        .cloned()
+        .collect::<Vec<_>>();
+    for item in &related {
+        let community = state
+            .communities
+            .get(&item.community_id())
+            .ok_or_else(|| AppError::not_found("community assignment target was not found"))?;
+        if community.network_cidr() != new_network.cidr() {
+            return Err(AppError::conflict(
+                "cannot move an IP address to another network while it has community assignments",
+            ));
+        }
+    }
+    unassign_ip_address_in_state(state, old_address)?;
+    let updated = assign_ip_address_in_state(state, command)?;
+    let host_name = state
+        .hosts
+        .values()
+        .find(|host| host.id() == updated.host_id())
+        .map(|host| host.name().clone())
+        .ok_or_else(|| AppError::not_found("host for moved IP address was not found"))?;
+    for old_mapping in related {
+        state.host_community_assignments.insert(
+            old_mapping.id(),
+            crate::domain::host_community_assignment::HostCommunityAssignment::restore(
+                old_mapping.id(),
+                updated.host_id(),
+                host_name.clone(),
+                updated.id(),
+                *updated.address(),
+                old_mapping.community_id(),
+                old_mapping.community_name().clone(),
+                old_mapping.policy_name().clone(),
+                old_mapping.created_at(),
+                Utc::now(),
+            ),
+        );
+    }
+    Ok(updated)
 }
 
 #[async_trait]

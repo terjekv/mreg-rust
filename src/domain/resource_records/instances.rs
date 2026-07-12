@@ -123,6 +123,7 @@ pub struct RecordInstance {
     data: Value,
     raw_rdata: Option<RawRdataValue>,
     rendered: Option<String>,
+    legacy_compatibility: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -145,6 +146,11 @@ impl RecordInstance {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Self {
+        let legacy_compatibility = match type_name.as_str() {
+            "NAPTR" => crate::domain::record_validation::validate_naptr_payload(&data).is_err(),
+            "SSHFP" => crate::domain::record_validation::validate_sshfp_payload(&data).is_err(),
+            _ => false,
+        };
         Self {
             id,
             rrset_id,
@@ -158,6 +164,7 @@ impl RecordInstance {
             data,
             raw_rdata,
             rendered,
+            legacy_compatibility,
             created_at,
             updated_at,
         }
@@ -211,6 +218,12 @@ impl RecordInstance {
         self.rendered.as_deref()
     }
 
+    /// True when the stored structured payload is a faithfully retained V1
+    /// value that does not satisfy the canonical V2 DNS invariant.
+    pub fn legacy_compatibility(&self) -> bool {
+        self.legacy_compatibility
+    }
+
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
@@ -230,6 +243,7 @@ pub struct CreateRecordInstance {
     ttl: Option<Ttl>,
     data: Option<Value>,
     raw_rdata: Option<RawRdataValue>,
+    legacy_compatibility: bool,
 }
 
 impl CreateRecordInstance {
@@ -249,6 +263,7 @@ impl CreateRecordInstance {
             ttl,
             data: Some(data),
             raw_rdata: None,
+            legacy_compatibility: false,
         })
     }
 
@@ -267,6 +282,7 @@ impl CreateRecordInstance {
             ttl,
             data: Some(data),
             raw_rdata: None,
+            legacy_compatibility: false,
         })
     }
 
@@ -287,6 +303,7 @@ impl CreateRecordInstance {
             ttl,
             data: Some(data),
             raw_rdata: None,
+            legacy_compatibility: false,
         })
     }
 
@@ -307,6 +324,7 @@ impl CreateRecordInstance {
             ttl,
             data: None,
             raw_rdata: Some(raw_rdata),
+            legacy_compatibility: false,
         })
     }
 
@@ -328,6 +346,7 @@ impl CreateRecordInstance {
             ttl,
             data,
             raw_rdata,
+            legacy_compatibility: false,
         })
     }
 
@@ -357,6 +376,15 @@ impl CreateRecordInstance {
 
     pub fn raw_rdata(&self) -> Option<&RawRdataValue> {
         self.raw_rdata.as_ref()
+    }
+
+    pub(crate) fn with_legacy_compatibility(mut self) -> Self {
+        self.legacy_compatibility = true;
+        self
+    }
+
+    pub fn legacy_compatibility(&self) -> bool {
+        self.legacy_compatibility
     }
 }
 

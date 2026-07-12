@@ -100,6 +100,40 @@ pub(in crate::storage::postgres) fn create(
     ))
 }
 
+pub(in crate::storage::postgres) fn replace(
+    connection: &mut PgConnection,
+    command: CreatePtrOverride,
+) -> Result<PtrOverride, AppError> {
+    let host_id = PostgresStorage::resolve_host_id(connection, command.host_name())?;
+    let row = sql_query(
+        "UPDATE ptr_overrides
+         SET host_id = $1, target_name = $2, updated_at = now()
+         WHERE address = $3::inet
+         RETURNING id, $4::text AS host_name, host(address) AS address,
+                   target_name::text AS target_name, created_at, updated_at",
+    )
+    .bind::<SqlUuid, _>(host_id)
+    .bind::<Nullable<Text>, _>(command.target_name().map(|name| name.as_str().to_string()))
+    .bind::<Text, _>(command.address().as_str())
+    .bind::<Text, _>(command.host_name().as_str())
+    .get_result::<PtrOverrideRow>(connection)
+    .optional()?
+    .ok_or_else(|| {
+        AppError::not_found(format!(
+            "ptr override for '{}' was not found",
+            command.address().as_str()
+        ))
+    })?;
+    Ok(PtrOverride::restore(
+        row.id,
+        Hostname::new(row.host_name)?,
+        IpAddressValue::new(row.address)?,
+        row.target_name.map(DnsName::new).transpose()?,
+        row.created_at,
+        row.updated_at,
+    ))
+}
+
 pub(super) fn get_by_address(
     connection: &mut PgConnection,
     addr: &str,
@@ -161,6 +195,15 @@ impl PtrOverrideStore for PostgresStorage {
     ) -> Result<PtrOverride, AppError> {
         self.database
             .run(move |connection| create(connection, command))
+            .await
+    }
+
+    async fn replace_ptr_override(
+        &self,
+        command: CreatePtrOverride,
+    ) -> Result<PtrOverride, AppError> {
+        self.database
+            .run(move |connection| replace(connection, command))
             .await
     }
 

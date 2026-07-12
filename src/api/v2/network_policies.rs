@@ -79,9 +79,10 @@ pub struct CreateNetworkPolicyRequest {
 
 impl CreateNetworkPolicyRequest {
     fn into_command(self) -> Result<crate::domain::network_policy::CreateNetworkPolicy, AppError> {
+        let description = required_description(self.description, "network policy description")?;
         Ok(crate::domain::network_policy::CreateNetworkPolicy::new(
             NetworkPolicyName::new(self.name)?,
-            self.description,
+            description,
             self.community_template_pattern,
         )?
         .with_attributes(
@@ -161,7 +162,10 @@ impl UpdateNetworkPolicyRequest {
     fn into_domain(self) -> Result<UpdateNetworkPolicy, AppError> {
         Ok(UpdateNetworkPolicy {
             name: self.name.map(NetworkPolicyName::new).transpose()?,
-            description: self.description,
+            description: self
+                .description
+                .map(|value| required_description(value, "network policy description"))
+                .transpose()?,
             community_template_pattern: self.community_template_pattern,
             attributes: self
                 .attributes
@@ -174,6 +178,14 @@ impl UpdateNetworkPolicyRequest {
                 .transpose()?,
         })
     }
+}
+
+fn required_description(value: String, label: &str) -> Result<String, AppError> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(AppError::validation(format!("{label} cannot be empty")));
+    }
+    Ok(value)
 }
 
 #[derive(Deserialize, ToSchema)]

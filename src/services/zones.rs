@@ -263,6 +263,36 @@ pub async fn create_forward_delegation(
     skip(storage, events),
     fields(resource_kind = "forward_zone_delegation")
 )]
+pub async fn replace_forward_delegation(
+    storage: &DynStorage,
+    delegation_id: Uuid,
+    command: CreateForwardZoneDelegation,
+    events: &EventSinkClient,
+) -> Result<ForwardZoneDelegation, AppError> {
+    let (delegation, history) = storage
+        .transaction(move |tx| {
+            let delegation = tx
+                .zones()
+                .replace_forward_zone_delegation(delegation_id, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "forward_zone_delegation",
+                Some(delegation.id()),
+                delegation.name().as_str(),
+                actions::UPDATE,
+                json!({"name": delegation.name().as_str()}),
+            ))?;
+            Ok((delegation, event))
+        })
+        .await?;
+    events.emit(&DomainEvent::from(&history)).await;
+    Ok(delegation)
+}
+
+#[tracing::instrument(
+    skip(storage, events),
+    fields(resource_kind = "forward_zone_delegation")
+)]
 pub async fn delete_forward_delegation(
     storage: &DynStorage,
     delegation_id: Uuid,

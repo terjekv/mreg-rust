@@ -22,6 +22,10 @@ pub trait PtrOverrideStore: Send + Sync {
         &self,
         command: CreatePtrOverride,
     ) -> Result<PtrOverride, AppError>;
+    async fn replace_ptr_override(
+        &self,
+        command: CreatePtrOverride,
+    ) -> Result<PtrOverride, AppError>;
     async fn get_ptr_override_by_address(
         &self,
         address: &IpAddressValue,

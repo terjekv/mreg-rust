@@ -357,6 +357,13 @@ impl ZoneService<'_> {
     ) -> Result<ForwardZoneDelegation, AppError> {
         zones::create_forward_delegation(self.storage, command, self.events).await
     }
+    pub async fn replace_forward_delegation(
+        &self,
+        delegation_id: Uuid,
+        command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError> {
+        zones::replace_forward_delegation(self.storage, delegation_id, command, self.events).await
+    }
     pub async fn delete_forward_delegation(&self, delegation_id: Uuid) -> Result<(), AppError> {
         zones::delete_forward_delegation(self.storage, delegation_id, self.events).await
     }
@@ -499,6 +506,13 @@ impl HostService<'_> {
         command: UpdateIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
         hosts::update_ip_address(self.storage, address, command, self.events).await
+    }
+    pub async fn move_ip_address(
+        &self,
+        address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        hosts::move_ip_address(self.storage, address, command, self.events).await
     }
     pub async fn unassign_ip_address(&self, address: &IpAddressValue) -> Result<(), AppError> {
         hosts::unassign_ip_address(self.storage, address, self.events).await
@@ -739,6 +753,9 @@ impl HostContactService<'_> {
     pub async fn create(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
         host_contacts::create_host_contact(self.storage, command, self.events).await
     }
+    pub async fn replace(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
+        host_contacts::replace_host_contact(self.storage, command, self.events).await
+    }
     pub async fn get(&self, email: &EmailAddressValue) -> Result<HostContact, AppError> {
         host_contacts::get_host_contact(self.storage.host_contacts(), email).await
     }
@@ -828,6 +845,9 @@ impl PtrOverrideService<'_> {
     }
     pub async fn create(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
         ptr_overrides::create_ptr_override(self.storage, command, self.events).await
+    }
+    pub async fn replace(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
+        ptr_overrides::replace_ptr_override(self.storage, command, self.events).await
     }
     pub async fn get(&self, address: &IpAddressValue) -> Result<PtrOverride, AppError> {
         ptr_overrides::get_ptr_override(self.storage.ptr_overrides(), address).await
@@ -936,6 +956,19 @@ impl HostCommunityAssignmentService<'_> {
             self.storage.host_community_assignments(),
             page,
             filter,
+        )
+        .await
+    }
+    pub async fn move_legacy(
+        &self,
+        command: CreateHostCommunityAssignment,
+        require_mac_address: bool,
+    ) -> Result<HostCommunityAssignment, AppError> {
+        host_community_assignments::move_host_community_assignment(
+            self.storage,
+            command,
+            require_mac_address,
+            self.events,
         )
         .await
     }

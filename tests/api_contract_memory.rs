@@ -388,6 +388,21 @@ async fn policy_mapping_contract_shape_is_stable() {
 
     let response = test::call_service(
         &app,
+        test::TestRequest::post()
+            .uri("/policy/network/host-community-assignments")
+            .set_json(json!({
+                "host_name": "app.example.org",
+                "address": "10.0.0.25",
+                "policy_name": "campus-core",
+                "community_name": "prod-network"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let response = test::call_service(
+        &app,
         test::TestRequest::get()
             .uri("/policy/network/host-community-assignments?host=app.example.org")
             .to_request(),
@@ -1203,6 +1218,239 @@ async fn legacy_wildcard_host_is_a_v2_dns_owner_facade() {
     .await;
     let records: Value = test::read_body_json(response).await;
     assert_eq!(records["total"], 0);
+}
+
+#[actix_web::test]
+async fn deleting_host_preserves_unanchored_v2_record_with_same_owner_name() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v2/inventory/hosts")
+            .set_json(json!({"name":"shared.example.org","comment":"inventory host"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v2/dns/records")
+            .set_json(json!({
+                "type_name":"TXT",
+                "owner_name":"shared.example.org",
+                "data":{"value":"independent"}
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let record: Value = test::read_body_json(response).await;
+    let record_id = record["id"].as_str().expect("record id");
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::delete()
+            .uri("/api/v2/inventory/hosts/shared.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/v2/dns/records/{record_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let record: Value = test::read_body_json(response).await;
+    assert_eq!(record["data"]["value"], json!(["independent"]));
+    assert!(record["owner_kind"].is_null());
+}
+
+#[actix_web::test]
+async fn legacy_sshfp_is_honest_in_v2_without_opening_validation_escape_hatch() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::default()
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+    };
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/hosts/")
+            .set_json(json!({"name":"sshfp.example.org","comment":"sshfp"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v1/hosts/sshfp.example.org")
+            .to_request(),
+    )
+    .await;
+    let host: Value = test::read_body_json(response).await;
+    let host_id = host["id"].as_u64().expect("legacy host id");
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/sshfps/")
+            .set_json(json!({
+                "host":host_id,"algorithm":1,"hash_type":1,"fingerprint":"legacy-value"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/dns/records?owner_name=sshfp.example.org&type_name=SSHFP")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let records: Value = test::read_body_json(response).await;
+    assert_eq!(records["items"][0]["data"]["fingerprint"], "legacy-value");
+    let record_id = records["items"][0]["id"].as_str().expect("record id");
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri(&format!("/api/v2/dns/records/{record_id}"))
+            .to_request(),
+    )
+    .await;
+    let record: Value = test::read_body_json(response).await;
+    assert_eq!(record["legacy_compatibility"], true);
+    assert!(record["rendered"].is_null());
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v2/dns/records")
+            .set_json(json!({
+                "type_name":"SSHFP",
+                "owner_kind":"host",
+                "owner_name":"sshfp.example.org",
+                "data":{"algorithm":1,"fp_type":1,"fingerprint":"\u{1f}mreg-v1:bad"}
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+async fn legacy_host_group_relation_mutation_preserves_v2_identity_and_inbound_relations() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    for (uri, body) in [
+        (
+            "/api/v2/inventory/hosts",
+            json!({"name":"group-member.example.org","comment":"member"}),
+        ),
+        (
+            "/api/v2/inventory/host-groups",
+            json!({"name":"parent","description":"parent","hosts":[]}),
+        ),
+        (
+            "/api/v2/inventory/host-groups",
+            json!({"name":"child","description":"child","parent_groups":["parent"]}),
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(uri)
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/parent")
+            .to_request(),
+    )
+    .await;
+    let parent: Value = test::read_body_json(response).await;
+    let parent_id = parent["id"].clone();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/child")
+            .to_request(),
+    )
+    .await;
+    let child: Value = test::read_body_json(response).await;
+    let child_id = child["id"].clone();
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/hostgroups/parent/hosts/")
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({"name":"group-member.example.org"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/parent")
+            .to_request(),
+    )
+    .await;
+    let parent: Value = test::read_body_json(response).await;
+    assert_eq!(parent["id"], parent_id);
+    assert_eq!(parent["hosts"], json!(["group-member.example.org"]));
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/child")
+            .to_request(),
+    )
+    .await;
+    let child: Value = test::read_body_json(response).await;
+    assert_eq!(child["id"], child_id);
+    assert_eq!(child["parent_groups"], json!(["parent"]));
 }
 
 #[actix_web::test]

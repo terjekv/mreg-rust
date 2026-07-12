@@ -18,6 +18,7 @@ pub struct HostGroupRelationMutation {
     pub relation: &'static str,
     pub member: String,
     pub history_name: String,
+    pub history_id: uuid::Uuid,
 }
 
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "host_group"))]
@@ -102,12 +103,11 @@ pub async fn replace_host_group_relation(
     let old = old.clone();
     let (group, history) = storage
         .transaction(move |tx| {
-            tx.host_groups().delete_host_group(old.name())?;
-            let group = tx.host_groups().create_host_group(command)?;
+            let group = tx.host_groups().replace_host_group(old.name(), command)?;
             let event = tx.audit().record_event(CreateHistoryEvent::new(
                 actor::current(),
                 "host_group",
-                Some(group.id()),
+                Some(mutation.history_id),
                 mutation.history_name,
                 mutation.action,
                 json!({"relation": mutation.relation, "name": mutation.member}),

@@ -180,6 +180,7 @@ impl PostgresStorage {
 
         let (data, raw_rdata) = match content {
             ValidatedRecordContent::Structured(value) => (value.clone(), None),
+            ValidatedRecordContent::LegacyStructured(value) => (value.clone(), None),
             ValidatedRecordContent::RawRdata(raw) => (Value::Null, Some(raw.wire_bytes().to_vec())),
         };
 
@@ -416,11 +417,19 @@ impl PostgresStorage {
                 command.anchor_name(),
                 command.owner_name(),
             )?;
-            let validated = record_type.validate_record_input(
-                command.owner_name(),
-                command.data(),
-                command.raw_rdata(),
-            )?;
+            let validated = if command.legacy_compatibility() {
+                record_type.validate_legacy_record_input(
+                    command.owner_name(),
+                    command.data(),
+                    command.raw_rdata(),
+                )?
+            } else {
+                record_type.validate_record_input(
+                    command.owner_name(),
+                    command.data(),
+                    command.raw_rdata(),
+                )?
+            };
             let same_owner_records =
                 Self::query_existing_owner_records(connection, command.owner_name())?;
             let existing_rrset = Self::query_rrset_by_type_and_owner(
@@ -438,6 +447,12 @@ impl PostgresStorage {
                     connection,
                     &alias_target_names(normalized, record_type.name()),
                 )?,
+                ValidatedRecordContent::LegacyStructured(normalized) => {
+                    Self::query_alias_owner_names(
+                        connection,
+                        &alias_target_names(normalized, record_type.name()),
+                    )?
+                }
                 ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
             };
             let alias_owner_names = alias_lookup
@@ -535,6 +550,12 @@ impl PostgresStorage {
                                     &alias_target_names(normalized, record_type.name()),
                                 )?
                             }
+                            ValidatedRecordContent::LegacyStructured(normalized) => {
+                                Self::query_alias_owner_names(
+                                    connection,
+                                    &alias_target_names(normalized, record_type.name()),
+                                )?
+                            }
                             ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
                         };
                         let alias_owner_names = alias_lookup
@@ -562,6 +583,7 @@ impl PostgresStorage {
 
                         match validated {
                             ValidatedRecordContent::Structured(data) => (data, None::<Vec<u8>>, rendered),
+                            ValidatedRecordContent::LegacyStructured(data) => (data, None::<Vec<u8>>, None),
                             ValidatedRecordContent::RawRdata(raw) => (Value::Null, Some(raw.wire_bytes().to_vec()), None),
                         }
                     } else {

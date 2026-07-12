@@ -885,6 +885,10 @@ impl PostgresStorage {
                 connection,
                 &alias_target_names(normalized, record_type.name()),
             )?,
+            ValidatedRecordContent::LegacyStructured(normalized) => Self::query_alias_owner_names(
+                connection,
+                &alias_target_names(normalized, record_type.name()),
+            )?,
             ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
         };
         let alias_owner_names = alias_lookup

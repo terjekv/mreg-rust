@@ -37,7 +37,33 @@ pub async fn create_host_community_assignment(
 ) -> Result<HostCommunityAssignment, AppError> {
     let (item, history) = storage
         .transaction(move |tx| {
-            if env_flag("MREG_REQUIRE_MAC_FOR_BINDING_IP_TO_COMMUNITY") {
+            let item = tx
+                .host_community_assignments()
+                .create_host_community_assignment(command)?;
+            let event = create_history(tx, &item)?;
+            Ok((item, event))
+        })
+        .await?;
+
+    events.emit(&DomainEvent::from(&history)).await;
+
+    Ok(item)
+}
+
+/// Apply Django-mreg's legacy "move this address to a community" semantics.
+///
+/// Native creation remains non-destructive and returns a conflict for a
+/// duplicate. This operation is deliberately explicit so V1 compatibility
+/// rules cannot alter V2 behavior.
+pub async fn move_host_community_assignment(
+    storage: &DynStorage,
+    command: CreateHostCommunityAssignment,
+    require_mac_address: bool,
+    events: &EventSinkClient,
+) -> Result<HostCommunityAssignment, AppError> {
+    let (item, history) = storage
+        .transaction(move |tx| {
+            if require_mac_address {
                 let address = tx
                     .hosts()
                     .list_ip_addresses_for_host(command.host_name(), &PageRequest::all())?
@@ -72,14 +98,7 @@ pub async fn create_host_community_assignment(
             let item = tx
                 .host_community_assignments()
                 .create_host_community_assignment(command)?;
-            let event = tx.audit().record_event(CreateHistoryEvent::new(
-                actor::current(),
-                "host_community_assignment",
-                Some(item.id()),
-                item.host_name().as_str(),
-                actions::CREATE,
-                json!({"host_name": item.host_name().as_str(), "address": item.address().as_str(), "community_name": item.community_name().as_str(), "policy_name": item.policy_name().as_str()}),
-            ))?;
+            let event = create_history(tx, &item)?;
             Ok((item, event))
         })
         .await?;
@@ -89,13 +108,18 @@ pub async fn create_host_community_assignment(
     Ok(item)
 }
 
-fn env_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+fn create_history(
+    tx: &dyn crate::storage::tx::TxStorage,
+    item: &HostCommunityAssignment,
+) -> Result<crate::audit::HistoryEvent, AppError> {
+    tx.audit().record_event(CreateHistoryEvent::new(
+        actor::current(),
+        "host_community_assignment",
+        Some(item.id()),
+        item.host_name().as_str(),
+        actions::CREATE,
+        json!({"host_name": item.host_name().as_str(), "address": item.address().as_str(), "community_name": item.community_name().as_str(), "policy_name": item.policy_name().as_str()}),
+    ))
 }
 
 #[tracing::instrument(

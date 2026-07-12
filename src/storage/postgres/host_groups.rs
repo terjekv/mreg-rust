@@ -344,6 +344,68 @@ pub(in crate::storage::postgres) fn create(
     })
 }
 
+pub(in crate::storage::postgres) fn replace(
+    connection: &mut PgConnection,
+    name: &HostGroupName,
+    command: CreateHostGroup,
+) -> Result<HostGroup, AppError> {
+    if command.name() != name {
+        return Err(AppError::validation(
+            "host group replacement cannot rename the group",
+        ));
+    }
+    connection.transaction::<HostGroup, AppError, _>(|connection| {
+        let row = sql_query(
+            "UPDATE host_groups
+             SET description = $1, updated_at = now()
+             WHERE name = $2
+             RETURNING id, name::text AS name, description, created_at, updated_at",
+        )
+        .bind::<Text, _>(command.description())
+        .bind::<Text, _>(name.as_str())
+        .get_result::<HostGroupRow>(connection)
+        .optional()?
+        .ok_or_else(|| AppError::not_found(format!("host group '{}' was not found", name)))?;
+
+        sql_query("DELETE FROM host_group_hosts WHERE host_group_id = $1")
+            .bind::<SqlUuid, _>(row.id)
+            .execute(connection)?;
+        sql_query("DELETE FROM host_group_parents WHERE host_group_id = $1")
+            .bind::<SqlUuid, _>(row.id)
+            .execute(connection)?;
+        sql_query("DELETE FROM host_group_owner_groups WHERE host_group_id = $1")
+            .bind::<SqlUuid, _>(row.id)
+            .execute(connection)?;
+
+        let host_ids = PostgresStorage::resolve_host_ids(connection, command.hosts())?;
+        for host_name in command.hosts() {
+            sql_query("INSERT INTO host_group_hosts (host_group_id, host_id) VALUES ($1, $2)")
+                .bind::<SqlUuid, _>(row.id)
+                .bind::<SqlUuid, _>(host_ids[host_name])
+                .execute(connection)?;
+        }
+        let parent_ids =
+            PostgresStorage::resolve_host_group_ids(connection, command.parent_groups())?;
+        for parent_name in command.parent_groups() {
+            sql_query(
+                "INSERT INTO host_group_parents (host_group_id, parent_group_id) VALUES ($1, $2)",
+            )
+            .bind::<SqlUuid, _>(row.id)
+            .bind::<SqlUuid, _>(parent_ids[parent_name])
+            .execute(connection)?;
+        }
+        for owner_name in command.owner_groups() {
+            sql_query(
+                "INSERT INTO host_group_owner_groups (host_group_id, owner_group) VALUES ($1, $2)",
+            )
+            .bind::<SqlUuid, _>(row.id)
+            .bind::<Text, _>(owner_name.as_str())
+            .execute(connection)?;
+        }
+        build_host_group(connection, row)
+    })
+}
+
 pub(super) fn get_by_name(
     connection: &mut PgConnection,
     name: &str,

@@ -48,6 +48,31 @@ pub(super) fn create_ptr_override_in_state(
     Ok(override_record)
 }
 
+pub(super) fn replace_ptr_override_in_state(
+    state: &mut MemoryState,
+    command: CreatePtrOverride,
+) -> Result<PtrOverride, AppError> {
+    if !state.hosts.contains_key(command.host_name().as_str()) {
+        return Err(AppError::not_found(format!(
+            "host '{}' was not found",
+            command.host_name().as_str()
+        )));
+    }
+    let old = get_ptr_override_by_address_in_state(state, command.address())?;
+    let item = PtrOverride::restore(
+        old.id(),
+        command.host_name().clone(),
+        *command.address(),
+        command.target_name().cloned(),
+        old.created_at(),
+        Utc::now(),
+    );
+    state
+        .ptr_overrides
+        .insert(command.address().as_str(), item.clone());
+    Ok(item)
+}
+
 pub(super) fn list_ptr_overrides_in_state(
     state: &MemoryState,
     page: &PageRequest,
@@ -114,6 +139,14 @@ impl PtrOverrideStore for MemoryStorage {
     ) -> Result<PtrOverride, AppError> {
         let mut state = self.state.write().await;
         create_ptr_override_in_state(&mut state, command)
+    }
+
+    async fn replace_ptr_override(
+        &self,
+        command: CreatePtrOverride,
+    ) -> Result<PtrOverride, AppError> {
+        let mut state = self.state.write().await;
+        replace_ptr_override_in_state(&mut state, command)
     }
 
     async fn get_ptr_override_by_address(

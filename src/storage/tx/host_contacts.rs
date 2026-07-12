@@ -16,10 +16,9 @@ pub trait TxHostContactStore {
         filter: &HostContactFilter,
     ) -> Result<Page<HostContact>, AppError>;
     fn create_host_contact(&self, command: CreateHostContact) -> Result<HostContact, AppError>;
-    fn get_host_contact_by_email(
-        &self,
-        email: &EmailAddressValue,
-    ) -> Result<HostContact, AppError>;
+    fn replace_host_contact(&self, command: CreateHostContact) -> Result<HostContact, AppError>;
+    fn get_host_contact_by_email(&self, email: &EmailAddressValue)
+    -> Result<HostContact, AppError>;
     fn list_host_contacts_for_hosts(
         &self,
         hosts: &[Hostname],

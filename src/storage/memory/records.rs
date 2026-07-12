@@ -46,11 +46,19 @@ pub(super) fn create_record_in_state(
         command.anchor_name(),
         command.owner_name(),
     )?;
-    let validated = record_type.validate_record_input(
-        command.owner_name(),
-        command.data(),
-        command.raw_rdata(),
-    )?;
+    let validated = if command.legacy_compatibility() {
+        record_type.validate_legacy_record_input(
+            command.owner_name(),
+            command.data(),
+            command.raw_rdata(),
+        )?
+    } else {
+        record_type.validate_record_input(
+            command.owner_name(),
+            command.data(),
+            command.raw_rdata(),
+        )?
+    };
     let same_owner_records = state
         .records
         .iter()
@@ -88,6 +96,9 @@ pub(super) fn create_record_in_state(
         .collect::<Vec<_>>();
     let alias_owner_names = match &validated {
         ValidatedRecordContent::Structured(normalized) => {
+            alias_target_names(normalized, record_type.name())
+        }
+        ValidatedRecordContent::LegacyStructured(normalized) => {
             alias_target_names(normalized, record_type.name())
         }
         ValidatedRecordContent::RawRdata(_) => Vec::new(),
@@ -150,6 +161,7 @@ pub(super) fn create_record_in_state(
     };
     let (data, raw_rdata) = match validated {
         ValidatedRecordContent::Structured(data) => (data, None),
+        ValidatedRecordContent::LegacyStructured(data) => (data, None),
         ValidatedRecordContent::RawRdata(raw_rdata) => (Value::Null, Some(raw_rdata)),
     };
     let record = RecordInstance::restore(
@@ -470,11 +482,8 @@ pub(super) fn update_record_in_state(
 
     if data_changed {
         let owner_name = DnsName::new(existing.owner_name())?;
-        let validated = record_type.validate_record_input(
-            &owner_name,
-            command.data(),
-            command.raw_rdata(),
-        )?;
+        let validated =
+            record_type.validate_record_input(&owner_name, command.data(), command.raw_rdata())?;
 
         let same_owner_records = state
             .records
@@ -506,6 +515,9 @@ pub(super) fn update_record_in_state(
 
         let alias_owner_names = match &validated {
             ValidatedRecordContent::Structured(normalized) => {
+                alias_target_names(normalized, record_type.name())
+            }
+            ValidatedRecordContent::LegacyStructured(normalized) => {
                 alias_target_names(normalized, record_type.name())
             }
             ValidatedRecordContent::RawRdata(_) => Vec::new(),
@@ -546,6 +558,10 @@ pub(super) fn update_record_in_state(
 
         match validated {
             ValidatedRecordContent::Structured(data) => {
+                new_data = data;
+                new_raw_rdata = None;
+            }
+            ValidatedRecordContent::LegacyStructured(data) => {
                 new_data = data;
                 new_raw_rdata = None;
             }
