@@ -105,15 +105,15 @@ async fn token_auth(
             "token": "mreg-rust-header-trust"
         })));
     }
-    let username = if body.username.contains(':') {
-        body.username.clone()
-    } else {
-        format!("local:{}", body.username)
-    };
+    let (identity_scope, username) = body
+        .username
+        .split_once(':')
+        .unwrap_or(("local", body.username.as_str()));
     let session = state
         .authn
         .login(authn::LoginRequest {
-            username,
+            identity_scope: authn::IdentityScopeName::new(identity_scope)?,
+            username: username.to_string(),
             password: body.password.clone(),
             service_name: body.service_name.clone(),
             otp_code: body.otp_code.clone(),
