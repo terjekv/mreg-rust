@@ -99,3 +99,9 @@ Environment variables (see `.env.example`). Key ones: `MREG_DATABASE_URL`, `MREG
 ## Documentation
 
 Detailed guides in `docs/` covering architecture, API differences from Django mreg, storage layer, type-driven design, pagination/filtering, DNS record standards, host policy, export templating, and more.
+
+## Pull Requests And Merges
+
+- Treat the changelog review as required for every pull request. Before merge, add relevant user-facing additions, changes, fixes, and security notes to the [Unreleased] section of CHANGELOG.md. If a pull request has no changelog-worthy impact, state that explicitly in its description; do not add empty or internal-only changelog entries.
+- Call out every breaking change explicitly in both the pull request description and its [Unreleased] changelog entry, including the upgrade or migration action users must take.
+- When squash-merging a pull request, use its detailed PR description as the squash commit body. Preserve the substantive summary, rationale, behavior notes, and issue references, but remove verification-only sections such as test commands, checklists, and ## Verification before merging.
