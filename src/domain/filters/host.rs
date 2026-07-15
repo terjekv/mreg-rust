@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, HashMap};
 use super::apply::{apply_datetime_filter, apply_optional_string_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
 use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
-use crate::domain::host::{Host, IpAddressAssignment};
+use crate::domain::{
+    host::{Host, IpAddressAssignment},
+    types::IpAddressValue,
+};
 use crate::errors::AppError;
 
 // ─── HostFilter ─────────────────────────────────────────────────────
@@ -28,7 +31,7 @@ impl HostFilter {
     pub fn matches(
         &self,
         host: &Host,
-        ip_addresses: &BTreeMap<String, IpAddressAssignment>,
+        ip_addresses: &BTreeMap<IpAddressValue, IpAddressAssignment>,
     ) -> bool {
         for cond in &self.name {
             if !apply_string_filter(host.name().as_str(), cond) {

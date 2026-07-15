@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, net::IpAddr};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -104,11 +104,10 @@ pub(super) fn assign_ip_in_state(
         (network, address)
     };
 
-    let key = address.as_str();
-    if state.ip_addresses.contains_key(&key) {
+    if state.ip_addresses.contains_key(&address) {
         return Err(AppError::conflict(format!(
             "IP address '{}' is already allocated",
-            key
+            address.as_str()
         )));
     }
 
@@ -129,7 +128,7 @@ pub(super) fn assign_ip_in_state(
         now,
         now,
     )?;
-    state.ip_addresses.insert(key, assignment.clone());
+    state.ip_addresses.insert(address, assignment.clone());
 
     // Auto-create DHCP identifiers from MAC address
     if let Some(mac) = attachment.mac_address() {
@@ -225,7 +224,7 @@ fn ensure_address_is_usable(
             "IP address falls inside an excluded range",
         ));
     }
-    if state.ip_addresses.contains_key(&address.as_str()) {
+    if state.ip_addresses.contains_key(address) {
         return Err(AppError::conflict(format!(
             "IP address '{}' is already allocated",
             address.as_str()
@@ -239,12 +238,33 @@ fn allocate_address_in_network(
     network: &Network,
 ) -> Result<IpAddressValue, AppError> {
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+    let excluded = state
+        .excluded_ranges
+        .get(&network.cidr().as_str())
+        .into_iter()
+        .flat_map(|ranges| ranges.iter())
+        .map(|range| {
+            (
+                ip_to_u128(range.start_ip().as_inner()),
+                ip_to_u128(range.end_ip().as_inner()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let is_excluded = |candidate: u128| {
+        excluded
+            .iter()
+            .any(|(start, end)| candidate >= *start && candidate <= *end)
+    };
     match network.cidr().as_inner() {
         ipnet::IpNet::V4(_) => {
             for candidate in first..=last {
-                let address =
-                    IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())?;
-                if ensure_address_is_usable(state, network, &address, false).is_ok() {
+                let address = IpAddressValue::from_addr(IpAddr::V4(std::net::Ipv4Addr::from(
+                    candidate as u32,
+                )));
+                if is_excluded(candidate) {
+                    continue;
+                }
+                if !state.ip_addresses.contains_key(&address) {
                     return Ok(address);
                 }
             }
@@ -254,8 +274,12 @@ fn allocate_address_in_network(
         }
         ipnet::IpNet::V6(_) => {
             for candidate in first..=last {
-                let address = IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
-                if ensure_address_is_usable(state, network, &address, false).is_ok() {
+                let address =
+                    IpAddressValue::from_addr(IpAddr::V6(std::net::Ipv6Addr::from(candidate)));
+                if is_excluded(candidate) {
+                    continue;
+                }
+                if !state.ip_addresses.contains_key(&address) {
                     return Ok(address);
                 }
             }
@@ -678,12 +702,11 @@ pub(super) fn get_ip_address_in_state(
     state: &MemoryState,
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
     state
         .ip_addresses
-        .get(&key)
+        .get(address)
         .cloned()
-        .ok_or_else(|| AppError::not_found(format!("IP address {key}")))
+        .ok_or_else(|| AppError::not_found(format!("IP address {}", address.as_str())))
 }
 
 pub(super) fn assign_ip_address_in_state(
@@ -742,9 +765,11 @@ pub(super) fn update_ip_address_in_state(
     address: &IpAddressValue,
     command: UpdateIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
-    let existing = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
-        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    let existing = state.ip_addresses.get(address).cloned().ok_or_else(|| {
+        AppError::not_found(format!(
+            "IP address assignment '{}' was not found",
+            address.as_str()
+        ))
     })?;
     let now = Utc::now();
     let mac = command.mac_address.resolve(existing.mac_address().cloned());
@@ -758,7 +783,7 @@ pub(super) fn update_ip_address_in_state(
         existing.created_at(),
         now,
     )?;
-    state.ip_addresses.insert(key.clone(), updated.clone());
+    state.ip_addresses.insert(*address, updated.clone());
     Ok(updated)
 }
 
@@ -766,9 +791,11 @@ pub(super) fn unassign_ip_address_in_state(
     state: &mut MemoryState,
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
-    let assignment = state.ip_addresses.remove(&key).ok_or_else(|| {
-        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    let assignment = state.ip_addresses.remove(address).ok_or_else(|| {
+        AppError::not_found(format!(
+            "IP address assignment '{}' was not found",
+            address.as_str()
+        ))
     })?;
 
     let host_name = state
