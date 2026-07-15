@@ -1,12 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use super::apply::{apply_datetime_filter, apply_optional_string_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
 use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
-use crate::domain::{
-    host::{Host, IpAddressAssignment},
-    types::IpAddressValue,
-};
+use crate::domain::host::Host;
 use crate::errors::AppError;
 
 // ─── HostFilter ─────────────────────────────────────────────────────
@@ -28,11 +25,7 @@ pub struct HostFilter {
 }
 
 impl HostFilter {
-    pub fn matches(
-        &self,
-        host: &Host,
-        ip_addresses: &BTreeMap<IpAddressValue, IpAddressAssignment>,
-    ) -> bool {
+    pub fn matches(&self, host: &Host, ip_addresses: &[String]) -> bool {
         for cond in &self.name {
             if !apply_string_filter(host.name().as_str(), cond) {
                 return false;
@@ -59,12 +52,10 @@ impl HostFilter {
             }
         }
         for cond in &self.address {
-            let host_ips: Vec<String> = ip_addresses
-                .values()
-                .filter(|a| a.host_id() == host.id())
-                .map(|a| a.address().as_str().to_string())
-                .collect();
-            if !host_ips.iter().any(|ip| apply_string_filter(ip, cond)) {
+            if !ip_addresses
+                .iter()
+                .any(|address| apply_string_filter(address, cond))
+            {
                 return false;
             }
         }

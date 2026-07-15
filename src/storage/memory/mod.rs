@@ -22,7 +22,7 @@ mod transaction;
 mod zones;
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -103,6 +103,17 @@ pub(super) fn paginate_by_cursor<T: HasId>(
         total,
         next_cursor,
     })
+}
+
+pub(super) fn host_address_filter_index(state: &MemoryState) -> HashMap<Uuid, Vec<String>> {
+    let mut index: HashMap<Uuid, Vec<String>> = HashMap::new();
+    for assignment in state.ip_addresses.values() {
+        index
+            .entry(assignment.host_id())
+            .or_default()
+            .push(assignment.address().as_str());
+    }
+    index
 }
 
 /// Simple pagination for types without a UUID id (e.g. BacnetIdAssignment).

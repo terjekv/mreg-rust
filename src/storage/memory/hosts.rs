@@ -335,10 +335,22 @@ pub(super) fn list_hosts_in_state(
     page: &PageRequest,
     filter: &HostFilter,
 ) -> Result<Page<Host>, AppError> {
+    let addresses_by_host = if filter.address.is_empty() {
+        None
+    } else {
+        Some(super::host_address_filter_index(state))
+    };
     let items: Vec<Host> = state
         .hosts
         .values()
-        .filter(|host| filter.matches(host, &state.ip_addresses))
+        .filter(|host| {
+            let addresses = addresses_by_host
+                .as_ref()
+                .and_then(|index| index.get(&host.id()))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            filter.matches(host, addresses)
+        })
         .cloned()
         .collect();
     sort_and_paginate(
