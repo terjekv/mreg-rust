@@ -126,15 +126,18 @@ pub(super) fn assign_ip_in_state(
     )?;
     state.ip_addresses.insert(key, assignment.clone());
 
-    // Auto-create DHCP identifiers from MAC address
-    if let Some(mac) = attachment.mac_address() {
+    // Auto-create Ethernet DHCP identifiers from EUI-48 addresses only.
+    if let Some(mac) = attachment
+        .mac_address()
+        .and_then(|address| address.as_eui48())
+    {
         if assignment.family() == 4 && command.auto_v4_client_id() {
             let has_v4 = state
                 .attachment_dhcp_identifiers
                 .values()
                 .any(|id| id.attachment_id() == attachment.id() && id.family().as_u8() == 4);
             if !has_v4 {
-                let client_id_value = format!("01:{}", mac.as_str());
+                let client_id_value = format!("01:{mac}");
                 create_attachment_dhcp_identifier_in_state(
                     state,
                     CreateAttachmentDhcpIdentifier::new(
@@ -153,7 +156,7 @@ pub(super) fn assign_ip_in_state(
                 .values()
                 .any(|id| id.attachment_id() == attachment.id() && id.family().as_u8() == 6);
             if !has_v6 {
-                let duid_ll_value = format!("00:03:00:01:{}", mac.as_str());
+                let duid_ll_value = format!("00:03:00:01:{mac}");
                 create_attachment_dhcp_identifier_in_state(
                     state,
                     CreateAttachmentDhcpIdentifier::new(

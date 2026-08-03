@@ -7,6 +7,11 @@ a host and a network. An attachment represents a host's presence on a network,
 optionally keyed by a MAC address. DHCP identifiers, IPv6 prefix reservations,
 and community assignments are children of attachments.
 
+MAC addresses may be either 6-byte EUI-48 or 8-byte EUI-64 values. API and
+export attachment objects expose `mac_address_kind` as `"eui48"` or `"eui64"`
+when a MAC address is present. Ethernet-specific DHCP behavior only applies to
+EUI-48 addresses; EUI-64 attachments require explicit DHCP identifiers.
+
 The DHCP configuration is then rendered into ISC dhcpd or Kea configuration files
 via the export templating system (see [export-templating.md](export-templating.md)).
 
@@ -120,14 +125,17 @@ auto-created when an IP is assigned with a MAC address. You can enable automatic
 creation via two environment variables:
 
 - `MREG_DHCP_AUTO_V4_CLIENT_ID=true` — When an IPv4 IP is assigned and the
-  attachment has a MAC address, automatically create a `client_id` DHCP
+  attachment has an EUI-48 MAC address, automatically create a `client_id` DHCP
   identifier with value `01:<mac>` and priority 1000 (if one doesn't already
   exist for that attachment).
 
 - `MREG_DHCP_AUTO_V6_DUID_LL=true` — When an IPv6 IP is assigned and the
-  attachment has a MAC address, automatically create a `duid_ll` DHCP
+  attachment has an EUI-48 MAC address, automatically create a `duid_ll` DHCP
   identifier with value `00:03:00:01:<mac>` and priority 1000 (if one doesn't
   already exist for that attachment).
+
+These generated values hard-code hardware type 1 (Ethernet), so they are never
+created from EUI-64 addresses.
 
 The high priority number (1000) ensures that explicitly created identifiers
 (default priority 100) always take precedence over auto-created ones. The
@@ -138,17 +146,19 @@ Both flags default to `false` to preserve backward compatibility.
 
 **Without auto-creation:** When you assign an IP with a MAC address, the MAC
 is stored on the attachment but no `client_id` identifier is created. For
-IPv4, this is fine — the DHCP export renderer falls back to the attachment's
-MAC address when no explicit `client_id` exists. For IPv6, there is no
-fallback — you must explicitly create a DUID identifier or the attachment
-will be excluded from DHCPv6 exports.
+IPv4, an EUI-48 address can be used directly — the DHCP export renderer falls
+back to it when no explicit `client_id` exists. EUI-64 is not a valid
+`hardware ethernet` fallback, so those attachments require an explicit
+`client_id`. For IPv6, there is no MAC-address fallback — you must explicitly
+create a DUID identifier or the attachment will be excluded from DHCPv6
+exports.
 
 Summary of what you need for each protocol:
 
 | Protocol | Minimum for DHCP export | Recommended |
 |----------|------------------------|-------------|
-| DHCPv4 | MAC address on attachment (auto-used as fallback) | Explicit `client_id` identifier, or enable `MREG_DHCP_AUTO_V4_CLIENT_ID` |
-| DHCPv6 | Explicit DUID identifier (required, no fallback) | Enable `MREG_DHCP_AUTO_V6_DUID_LL`, or create DUID manually |
+| DHCPv4 | EUI-48 address on attachment, or explicit `client_id` for EUI-64 | Explicit `client_id` identifier, or enable `MREG_DHCP_AUTO_V4_CLIENT_ID` for EUI-48 |
+| DHCPv6 | Explicit DUID identifier (required, no fallback) | Enable `MREG_DHCP_AUTO_V6_DUID_LL` for EUI-48, or create DUID manually |
 
 A typical setup for a dual-stack host (with auto-creation enabled):
 
@@ -243,6 +253,7 @@ Response:
   "network_id": "uuid",
   "network_cidr": "10.0.1.0/24",
   "mac_address": "aa:bb:cc:dd:ee:ff",
+  "mac_address_kind": "eui48",
   "comment": "Primary NIC",
   "ip_addresses": [...],
   "dhcp_identifiers": [...],
@@ -256,7 +267,8 @@ When rendering DHCP exports, the system resolves a **matcher** for each
 attachment:
 
 - **IPv4**: Uses the highest-priority `client_id` DHCP identifier if one exists,
-  otherwise falls back to the attachment's MAC address.
+  otherwise falls back to an EUI-48 attachment MAC address. An EUI-64
+  attachment requires an explicit `client_id`.
 - **IPv6**: Uses the highest-priority DUID identifier. No fallback — if no DHCPv6
   identifier is set, the attachment is excluded from DHCPv6 exports and a warning
   is emitted.

@@ -5,24 +5,61 @@ use std::{
 };
 
 use ipnet::IpNet;
-use macaddr::MacAddr6;
+use macaddr::{MacAddr, MacAddr6, MacAddr8};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::errors::AppError;
 
-/// Validated MAC address (6-byte EUI-48).
+/// Length of a validated MAC address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MacAddressKind {
+    Eui48,
+    Eui64,
+}
+
+impl MacAddressKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Eui48 => "eui48",
+            Self::Eui64 => "eui64",
+        }
+    }
+}
+
+/// Validated 6-byte EUI-48 or 8-byte EUI-64 MAC address.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MacAddressValue(MacAddr6);
+pub struct MacAddressValue(MacAddr);
 
 impl MacAddressValue {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let parsed = MacAddr6::from_str(value.as_ref().trim())
+        let parsed = MacAddr::from_str(value.as_ref().trim())
             .map_err(|error| AppError::validation(format!("invalid MAC address: {error}")))?;
         Ok(Self(parsed))
     }
 
-    pub fn as_inner(&self) -> MacAddr6 {
+    pub fn as_inner(&self) -> MacAddr {
         self.0
+    }
+
+    pub fn kind(&self) -> MacAddressKind {
+        match self.0 {
+            MacAddr::V6(_) => MacAddressKind::Eui48,
+            MacAddr::V8(_) => MacAddressKind::Eui64,
+        }
+    }
+
+    pub fn as_eui48(&self) -> Option<MacAddr6> {
+        match self.0 {
+            MacAddr::V6(address) => Some(address),
+            MacAddr::V8(_) => None,
+        }
+    }
+
+    pub fn as_eui64(&self) -> Option<MacAddr8> {
+        match self.0 {
+            MacAddr::V6(_) => None,
+            MacAddr::V8(address) => Some(address),
+        }
     }
 
     pub fn as_str(&self) -> String {

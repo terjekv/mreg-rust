@@ -20,7 +20,7 @@ The `src/domain/types.rs` module currently provides opaque wrappers for:
 - `LabelName`
 - `RecordTypeName`
 - `EmailAddressValue`
-- `MacAddressValue`
+- `MacAddressValue` (distinguishes EUI-48 from EUI-64 and exposes typed accessors for each)
 - `Ipv4AddrValue`
 - `Ipv6AddrValue`
 - `IpAddressValue`

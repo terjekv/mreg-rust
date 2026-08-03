@@ -28,7 +28,10 @@ use super::authz::{
 };
 use super::{
     attachment_community_assignments::AttachmentCommunityAssignmentResponse,
-    attachments::{AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse},
+    attachments::{
+        AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse,
+        MacAddressKindResponse,
+    },
 };
 
 crate::page_response!(HostPageResponse, HostResponse, "Paginated list of hosts.");
@@ -223,6 +226,7 @@ pub struct HostAttachmentInventoryResponse {
     network_id: Uuid,
     network: String,
     mac_address: Option<String>,
+    mac_address_kind: Option<MacAddressKindResponse>,
     comment: Option<String>,
     ip_addresses: Vec<IpAddressResponse>,
     dhcp_identifiers: Vec<AttachmentDhcpIdentifierResponse>,
@@ -237,6 +241,10 @@ impl HostAttachmentInventoryResponse {
             network_id: view.attachment.network_id(),
             network: view.attachment.network_cidr().as_str(),
             mac_address: view.attachment.mac_address().map(|value| value.as_str()),
+            mac_address_kind: view
+                .attachment
+                .mac_address()
+                .map(|value| value.kind().into()),
             comment: view.attachment.comment().map(str::to_string),
             ip_addresses: view
                 .ip_addresses
@@ -332,6 +340,7 @@ pub struct IpAddressResponse {
     family: u8,
     network_id: Uuid,
     mac_address: Option<String>,
+    mac_address_kind: Option<MacAddressKindResponse>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -345,6 +354,9 @@ impl IpAddressResponse {
             family: assignment.family(),
             network_id: assignment.network_id(),
             mac_address: assignment.mac_address().map(|value| value.as_str()),
+            mac_address_kind: assignment
+                .mac_address()
+                .map(|value| value.kind().into()),
             created_at: assignment.created_at(),
             updated_at: assignment.updated_at(),
         }

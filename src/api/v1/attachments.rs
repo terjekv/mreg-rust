@@ -14,7 +14,10 @@ use crate::{
             DhcpIdentifierKind, HostAttachment, UpdateHostAttachment,
         },
         host::AssignIpAddress,
-        types::{CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressValue, UpdateField},
+        types::{
+            CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressKind, MacAddressValue,
+            UpdateField,
+        },
     },
     errors::AppError,
 };
@@ -28,6 +31,22 @@ crate::page_response!(
     "Paginated list of host attachments."
 );
 
+#[derive(Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MacAddressKindResponse {
+    Eui48,
+    Eui64,
+}
+
+impl From<MacAddressKind> for MacAddressKindResponse {
+    fn from(value: MacAddressKind) -> Self {
+        match value {
+            MacAddressKind::Eui48 => Self::Eui48,
+            MacAddressKind::Eui64 => Self::Eui64,
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct HostAttachmentResponse {
     pub id: Uuid,
@@ -36,6 +55,7 @@ pub struct HostAttachmentResponse {
     pub network_id: Uuid,
     pub network: String,
     pub mac_address: Option<String>,
+    pub mac_address_kind: Option<MacAddressKindResponse>,
     pub comment: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -50,6 +70,9 @@ impl HostAttachmentResponse {
             network_id: value.network_id(),
             network: value.network_cidr().as_str(),
             mac_address: value.mac_address().map(|v| v.as_str()),
+            mac_address_kind: value
+                .mac_address()
+                .map(|value| value.kind().into()),
             comment: value.comment().map(str::to_string),
             created_at: value.created_at(),
             updated_at: value.updated_at(),

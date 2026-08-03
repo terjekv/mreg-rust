@@ -201,6 +201,7 @@ Legacy `host_name` plus `network`/`mac_address` input is still accepted, but new
 migration tooling should emit explicit `host_attachment` items first and then
 reference them from `ip_address`, `attachment_dhcp_identifier`,
 `attachment_prefix_reservation`, and `attachment_community_assignment`.
+The `mac_address` field accepts both EUI-48 and EUI-64 values.
 
 ## Validation and Failure Semantics
 

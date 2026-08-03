@@ -560,9 +560,12 @@ impl PostgresStorage {
                                 })
                             })
                             .or_else(|| {
-                                attachment.mac_address().map(|mac| {
-                                    json!({"kind": "mac_address", "value": mac.as_str()})
-                                })
+                                attachment
+                                    .mac_address()
+                                    .and_then(|mac| mac.as_eui48())
+                                    .map(|mac| {
+                                        json!({"kind": "mac_address", "value": mac.to_string()})
+                                    })
                             });
                         let ipv6_matcher = identifiers
                             .iter()
@@ -577,6 +580,22 @@ impl PostgresStorage {
                             .iter()
                             .filter(|assignment| assignment.family() == 6)
                             .count();
+                        let ipv4_count = attachment_ips
+                            .iter()
+                            .filter(|assignment| assignment.family() == 4)
+                            .count();
+                        if ipv4_count > 0
+                            && ipv4_matcher.is_none()
+                            && attachment
+                                .mac_address()
+                                .is_some_and(|mac| mac.as_eui64().is_some())
+                        {
+                            warnings.push(format!(
+                                "attachment '{}' on '{}' has an EUI-64 address that cannot be used as an Ethernet DHCPv4 matcher; configure a client_id identifier",
+                                attachment.host_name().as_str(),
+                                attachment.network_cidr().as_str()
+                            ));
+                        }
                         if (ipv6_count > 0 || !prefixes.is_empty()) && ipv6_matcher.is_none() {
                             warnings.push(format!(
                                 "attachment '{}' on '{}' has IPv6 reservations but no DHCPv6 identifier",
@@ -590,6 +609,9 @@ impl PostgresStorage {
                             "host_id": attachment.host_id().to_string(),
                             "host_name": attachment.host_name().as_str(),
                             "mac_address": attachment.mac_address().map(|value| value.as_str()),
+                            "mac_address_kind": attachment
+                                .mac_address()
+                                .map(|value| value.kind().as_str()),
                             "comment": attachment.comment(),
                             "dhcp_identifiers": identifiers.into_iter().map(|identifier| json!({
                                 "id": identifier.id().to_string(),
