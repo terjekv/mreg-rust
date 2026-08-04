@@ -23,3 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API infrastructure with OpenAPI/Swagger UI, cursor-based pagination, operator-based filtering, and multi-field sorting.
 - Observability through structured tracing with per-request spans and optional JSON log output.
 - Service-layer audit recording for all mutations.
+
+### Changed
+
+- **Breaking (Rust API):** `MacAddressValue::as_inner()` now returns `macaddr::MacAddr` instead of `macaddr::MacAddr6` so it can represent both EUI-48 and EUI-64 values. Callers that require a fixed width must migrate to `as_eui48()` or `as_eui64()` and handle `None`; callers that support both widths can match on `MacAddr::V6` and `MacAddr::V8`.

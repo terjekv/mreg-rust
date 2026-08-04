@@ -37,6 +37,10 @@ impl MacAddressValue {
         Ok(Self(parsed))
     }
 
+    /// Returns the underlying EUI-48 or EUI-64 address.
+    ///
+    /// Use [`Self::as_eui48`] or [`Self::as_eui64`] when the caller requires a
+    /// specific address width.
     pub fn as_inner(&self) -> MacAddr {
         self.0
     }
