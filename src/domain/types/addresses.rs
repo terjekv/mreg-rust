@@ -5,7 +5,7 @@ use std::{
 };
 
 use ipnet::IpNet;
-use macaddr::{MacAddr, MacAddr6, MacAddr8};
+use macaddr::{MacAddr, MacAddr6, MacAddr8, ParseError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::errors::AppError;
@@ -32,8 +32,18 @@ pub struct MacAddressValue(MacAddr);
 
 impl MacAddressValue {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let parsed = MacAddr::from_str(value.as_ref().trim())
-            .map_err(|error| AppError::validation(format!("invalid MAC address: {error}")))?;
+        let value = value.as_ref().trim();
+        let parsed = match MacAddr6::from_str(value) {
+            Ok(address) => MacAddr::V6(address),
+            Err(error @ ParseError::InvalidCharacter(..)) => {
+                return Err(AppError::validation(format!(
+                    "invalid MAC address: {error}"
+                )));
+            }
+            Err(ParseError::InvalidLength(_)) => MacAddr8::from_str(value)
+                .map(MacAddr::V8)
+                .map_err(|error| AppError::validation(format!("invalid MAC address: {error}")))?,
+        };
         Ok(Self(parsed))
     }
 
