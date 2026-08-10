@@ -14,8 +14,14 @@ use tokio::sync::Mutex;
 
 use common::TestCtx;
 use mreg_rust::domain::{
+    host::AssignIpAddress,
+    host_contact::CreateHostContact,
+    host_group::CreateHostGroup,
     pagination::PageRequest,
+    ptr_override::CreatePtrOverride,
     tasks::{CreateTask, TaskStatus},
+    types::{DnsName, EmailAddressValue, HostGroupName, Hostname, IpAddressValue, ZoneName},
+    zone::CreateForwardZoneDelegation,
 };
 
 fn task_queue_mutex() -> &'static Mutex<()> {
@@ -491,6 +497,52 @@ async fn delegation_creates_ns_scenario(ctx: &TestCtx) {
         ))
         .await;
     assert!(body["total"].as_u64().unwrap() >= 1);
+}
+
+async fn delegation_replace_preserves_identity_scenario(ctx: &TestCtx) {
+    let zone = ctx.zone("zone-deleg-replace");
+    let primary = ctx.nameserver("ns1", &zone);
+    let first_ns = ctx.nameserver("ns2", &zone);
+    let second_ns = ctx.nameserver("ns3", &zone);
+    let delegation = ctx.host_in_zone("deleg", &zone);
+    ctx.seed_zone(&zone, &primary).await;
+    for nameserver in [&first_ns, &second_ns] {
+        assert_eq!(
+            ctx.post("/dns/nameservers", json!({"name":nameserver}))
+                .await,
+            StatusCode::CREATED
+        );
+    }
+    let (status, created) = ctx
+        .post_json(
+            &format!("/dns/forward-zones/{zone}/delegations"),
+            json!({"name":delegation,"comment":"old","nameservers":[first_ns]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = uuid::Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    let command = CreateForwardZoneDelegation::new(
+        ZoneName::new(&zone).unwrap(),
+        DnsName::new(&delegation).unwrap(),
+        "new".to_string(),
+        vec![DnsName::new(&second_ns).unwrap()],
+    );
+    ctx.storage()
+        .transaction(move |tx| tx.zones().replace_forward_zone_delegation(id, command))
+        .await
+        .unwrap();
+    let listed = ctx
+        .get_json(&format!("/dns/forward-zones/{zone}/delegations"))
+        .await;
+    let item = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == delegation)
+        .unwrap();
+    assert_eq!(item["id"], created["id"]);
+    assert_eq!(item["comment"], "new");
+    assert_eq!(item["nameservers"], json!([second_ns]));
 }
 
 async fn zone_not_found_scenario(ctx: &TestCtx) {
@@ -1423,6 +1475,10 @@ dual_backend_test!(delegation_creates_ns, |ctx| {
     delegation_creates_ns_scenario(&ctx).await;
 });
 
+dual_backend_test!(delegation_replace_preserves_identity, |ctx| {
+    delegation_replace_preserves_identity_scenario(&ctx).await;
+});
+
 dual_backend_test!(zone_not_found, |ctx| {
     zone_not_found_scenario(&ctx).await;
 });
@@ -1638,8 +1694,217 @@ async fn host_group_create_and_delete_scenario(ctx: &TestCtx) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+async fn host_group_replace_preserves_identity_and_inbound_relations_scenario(ctx: &TestCtx) {
+    let parent = ctx.name("hgroup-parent");
+    let child = ctx.name("hgroup-child");
+    let host = ctx.host("hgroup-member");
+    assert_eq!(
+        ctx.post(
+            "/inventory/hosts",
+            json!({"name":host,"comment":"group member"}),
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    let (status, parent_body) = ctx
+        .post_json(
+            "/inventory/host-groups",
+            json!({"name":parent,"description":"parent"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let parent_id = parent_body["id"].clone();
+    let (status, child_body) = ctx
+        .post_json(
+            "/inventory/host-groups",
+            json!({"name":child,"description":"child","parent_groups":[parent]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let child_id = child_body["id"].clone();
+
+    let parent_name = HostGroupName::new(&parent).unwrap();
+    let parent_for_tx = parent_name.clone();
+    let command = CreateHostGroup::new(
+        parent_name.clone(),
+        "parent",
+        vec![Hostname::new(&host).unwrap()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    ctx.storage()
+        .transaction(move |tx| tx.host_groups().replace_host_group(&parent_for_tx, command))
+        .await
+        .unwrap();
+
+    let parent_body = ctx
+        .get_json(&format!("/inventory/host-groups/{parent}"))
+        .await;
+    assert_eq!(parent_body["id"], parent_id);
+    assert_eq!(parent_body["hosts"], json!([host]));
+    let child_body = ctx
+        .get_json(&format!("/inventory/host-groups/{child}"))
+        .await;
+    assert_eq!(child_body["id"], child_id);
+    assert_eq!(child_body["parent_groups"], json!([parent]));
+}
+
+async fn ip_move_preserves_community_assignment_scenario(ctx: &TestCtx) {
+    let policy = ctx.name("move-policy");
+    let community = ctx.name("move-community");
+    let host = ctx.host("move-host");
+    let cidr = ctx.cidr(43);
+    let old_address = ctx.ip_in_cidr(&cidr, 25);
+    let new_address = ctx.ip_in_cidr(&cidr, 26);
+    for (uri, body) in [
+        (
+            "/policy/network/policies",
+            json!({"name":policy,"description":"move policy"}),
+        ),
+        (
+            "/inventory/networks",
+            json!({"cidr":cidr,"description":"move network","policy_name":policy}),
+        ),
+        (
+            "/inventory/hosts",
+            json!({"name":host,"comment":"move host"}),
+        ),
+        (
+            "/policy/network/communities",
+            json!({
+                "policy_name":policy,"network":cidr,"name":community,
+                "description":"move community"
+            }),
+        ),
+    ] {
+        assert_eq!(ctx.post(uri, body).await, StatusCode::CREATED);
+    }
+    assert_eq!(
+        ctx.post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name":host,"address":old_address,
+                "mac_address":"02:00:00:00:00:43"
+            }),
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        ctx.post(
+            "/policy/network/host-community-assignments",
+            json!({
+                "host_name":host,"address":old_address,
+                "policy_name":policy,"community_name":community
+            }),
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    let storage = ctx.storage();
+    let assignment = storage
+        .hosts()
+        .get_ip_address(&IpAddressValue::new(&old_address).unwrap())
+        .await
+        .unwrap();
+    let command = AssignIpAddress::new(
+        Hostname::new(&host).unwrap(),
+        Some(IpAddressValue::new(&new_address).unwrap()),
+        None,
+        assignment.mac_address().cloned(),
+    )
+    .unwrap()
+    .with_reserved_addresses(true)
+    .with_assignment_id(assignment.id());
+    let old = IpAddressValue::new(&old_address).unwrap();
+    storage
+        .transaction(move |tx| tx.hosts().move_ip_address(&old, command))
+        .await
+        .unwrap();
+    let body = ctx
+        .get_json(&format!(
+            "/policy/network/host-community-assignments?host={host}"
+        ))
+        .await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["items"][0]["address"], new_address);
+    assert_eq!(body["items"][0]["community_name"], community);
+}
+
+async fn compatibility_replacements_preserve_contact_and_ptr_identity_scenario(ctx: &TestCtx) {
+    let first_host = ctx.host("replace-first");
+    let second_host = ctx.host("replace-second");
+    for host in [&first_host, &second_host] {
+        ctx.seed_host(host).await;
+    }
+    let email = format!("replace-{}@example.org", ctx.namespace());
+    let (status, contact) = ctx
+        .post_json(
+            "/inventory/host-contacts",
+            json!({"email":email,"display_name":"Ops","hosts":[first_host]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let contact_id = contact["id"].clone();
+    let email_value = EmailAddressValue::new(&email).unwrap();
+    let replace_contact = CreateHostContact::new(
+        email_value.clone(),
+        Some("Ops".to_string()),
+        vec![
+            Hostname::new(&first_host).unwrap(),
+            Hostname::new(&second_host).unwrap(),
+        ],
+    );
+    ctx.storage()
+        .transaction(move |tx| tx.host_contacts().replace_host_contact(replace_contact))
+        .await
+        .unwrap();
+    let contact = ctx
+        .get_json(&format!("/inventory/host-contacts/{email}"))
+        .await;
+    assert_eq!(contact["id"], contact_id);
+    assert_eq!(contact["hosts"], json!([first_host, second_host]));
+
+    let address = IpAddressValue::new(ctx.ip_in_cidr(&ctx.cidr(44), 44)).unwrap();
+    let (status, ptr) = ctx
+        .post_json(
+            "/dns/ptr-overrides",
+            json!({"host_name":first_host,"address":address.as_str()}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let ptr_id = ptr["id"].clone();
+    let replace_ptr = CreatePtrOverride::new(
+        Hostname::new(&second_host).unwrap(),
+        address,
+        Some(DnsName::new("ptr-target.example.org").unwrap()),
+    );
+    ctx.storage()
+        .transaction(move |tx| tx.ptr_overrides().replace_ptr_override(replace_ptr))
+        .await
+        .unwrap();
+    let ptr = ctx
+        .get_json(&format!("/dns/ptr-overrides/{}", address.as_str()))
+        .await;
+    assert_eq!(ptr["id"], ptr_id);
+    assert_eq!(ptr["host_name"], second_host);
+    assert_eq!(ptr["target_name"], "ptr-target.example.org");
+}
+
 async fn network_policy_update_and_delete_scenario(ctx: &TestCtx) {
     let name = ctx.name("netpol");
+    let renamed = ctx.name("netpol-renamed");
+    let attribute = ctx.name("netpol-attribute");
+
+    let (status, body) = ctx
+        .post_json(
+            "/policy/network/attributes",
+            json!({"name": attribute, "description": "boolean policy attribute"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["name"], attribute);
 
     // POST a network policy.
     let (status, body) = ctx
@@ -1648,12 +1913,17 @@ async fn network_policy_update_and_delete_scenario(ctx: &TestCtx) {
             json!({
                 "name": name,
                 "description": "initial description",
+                "attributes": [{"name": attribute, "value": false}],
             }),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["name"], name);
     assert_eq!(body["description"], "initial description");
+    assert_eq!(
+        body["attributes"],
+        json!([{"name": attribute, "value": false}])
+    );
 
     // Verify GET returns the policy.
     let body = ctx
@@ -1661,18 +1931,37 @@ async fn network_policy_update_and_delete_scenario(ctx: &TestCtx) {
         .await;
     assert_eq!(body["name"], name);
     assert_eq!(body["description"], "initial description");
+    assert_eq!(
+        body["attributes"],
+        json!([{"name": attribute, "value": false}])
+    );
+
+    let (status, body) = ctx
+        .patch_json(
+            &format!("/policy/network/policies/{name}"),
+            json!({"name": renamed, "description": "updated", "attributes": []}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], renamed);
+    assert_eq!(body["attributes"], json!([]));
 
     // DELETE the policy.
     let status = ctx
-        .delete(&format!("/policy/network/policies/{name}"))
+        .delete(&format!("/policy/network/policies/{renamed}"))
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     // Verify GET now returns 404.
     let status = ctx
-        .get_status(&format!("/policy/network/policies/{name}"))
+        .get_status(&format!("/policy/network/policies/{renamed}"))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let status = ctx
+        .delete(&format!("/policy/network/attributes/{attribute}"))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 async fn community_create_and_delete_scenario(ctx: &TestCtx) {
@@ -1692,6 +1981,15 @@ async fn community_create_and_delete_scenario(ctx: &TestCtx) {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = ctx
+        .patch_json(
+            &format!("/inventory/networks/{cidr}"),
+            json!({"policy_name": policy_name}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["policy_id"].is_string());
 
     // POST a community.
     let (status, body) = ctx
@@ -1862,6 +2160,24 @@ dual_backend_test!(host_contact_update_and_delete, |ctx| {
 dual_backend_test!(host_group_create_and_delete, |ctx| {
     host_group_create_and_delete_scenario(&ctx).await;
 });
+
+dual_backend_test!(
+    host_group_replace_preserves_identity_and_inbound_relations,
+    |ctx| {
+        host_group_replace_preserves_identity_and_inbound_relations_scenario(&ctx).await;
+    }
+);
+
+dual_backend_test!(ip_move_preserves_community_assignment, |ctx| {
+    ip_move_preserves_community_assignment_scenario(&ctx).await;
+});
+
+dual_backend_test!(
+    compatibility_replacements_preserve_contact_and_ptr_identity,
+    |ctx| {
+        compatibility_replacements_preserve_contact_and_ptr_identity_scenario(&ctx).await;
+    }
+);
 
 dual_backend_test!(network_policy_update_and_delete, |ctx| {
     network_policy_update_and_delete_scenario(&ctx).await;

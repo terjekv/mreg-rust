@@ -13,14 +13,45 @@ use crate::{
         },
         community::Community,
         filters::AttachmentCommunityAssignmentFilter,
+        host::Host,
+        network::Network,
         pagination::{Page, PageRequest},
-        types::{CidrValue, Hostname},
+        types::{CidrValue, Hostname, MacAddressValue},
     },
     errors::AppError,
     storage::{AttachmentCommunityAssignmentStore, AttachmentStore},
 };
 
-use super::{MemoryState, MemoryStorage, sort_and_paginate};
+use super::{HostAttachmentKey, MemoryState, MemoryStorage, sort_and_paginate};
+
+fn insert_new_attachment_in_state(
+    state: &mut MemoryState,
+    host: &Host,
+    network: &Network,
+    mac_address: Option<MacAddressValue>,
+    comment: Option<String>,
+) -> HostAttachment {
+    let attachment_key = HostAttachmentKey::new(host.id(), network.id(), mac_address.as_ref());
+    let now = Utc::now();
+    let attachment = HostAttachment::restore(
+        Uuid::new_v4(),
+        host.id(),
+        host.name().clone(),
+        network.id(),
+        network.cidr().clone(),
+        mac_address,
+        comment,
+        now,
+        now,
+    );
+    state
+        .host_attachments
+        .insert(attachment.id(), attachment.clone());
+    state
+        .host_attachment_keys
+        .insert(attachment_key, attachment.id());
+    attachment
+}
 
 fn matches_mac_address(
     state: &MemoryState,
@@ -115,37 +146,25 @@ pub(super) fn create_attachment_in_state(
             ))
         })?;
 
-    if state.host_attachments.values().any(|attachment| {
-        attachment.host_id() == host.id()
-            && attachment.network_id() == network.id()
-            && attachment.mac_address() == command.mac_address()
-    }) {
+    let attachment_key = HostAttachmentKey::new(host.id(), network.id(), command.mac_address());
+    if state.host_attachment_keys.contains_key(&attachment_key) {
         return Err(AppError::conflict("host attachment already exists"));
     }
 
-    let now = Utc::now();
-    let attachment = HostAttachment::restore(
-        Uuid::new_v4(),
-        host.id(),
-        host.name().clone(),
-        network.id(),
-        network.cidr().clone(),
+    Ok(insert_new_attachment_in_state(
+        state,
+        &host,
+        &network,
         command.mac_address().cloned(),
         command.comment().map(str::to_string),
-        now,
-        now,
-    );
-    state
-        .host_attachments
-        .insert(attachment.id(), attachment.clone());
-    Ok(attachment)
+    ))
 }
 
 pub(super) fn find_or_create_attachment_in_state(
     state: &mut MemoryState,
     host_name: &Hostname,
     network: &CidrValue,
-    mac_address: Option<crate::domain::types::MacAddressValue>,
+    mac_address: Option<MacAddressValue>,
 ) -> Result<HostAttachment, AppError> {
     let host = state
         .hosts
@@ -161,23 +180,22 @@ pub(super) fn find_or_create_attachment_in_state(
         .ok_or_else(|| {
             AppError::not_found(format!("network '{}' was not found", network.as_str()))
         })?;
-    if let Some(existing) = state.host_attachments.values().find(|attachment| {
-        attachment.host_id() == host.id()
-            && attachment.network_id() == network_obj.id()
-            && attachment.mac_address().cloned() == mac_address
-    }) {
-        return Ok(existing.clone());
+    let attachment_key = HostAttachmentKey::new(host.id(), network_obj.id(), mac_address.as_ref());
+    if let Some(attachment_id) = state.host_attachment_keys.get(&attachment_key) {
+        return state
+            .host_attachments
+            .get(attachment_id)
+            .cloned()
+            .ok_or_else(|| AppError::internal("host attachment index is inconsistent"));
     }
 
-    create_attachment_in_state(
+    Ok(insert_new_attachment_in_state(
         state,
-        CreateHostAttachment::new(
-            host.name().clone(),
-            network_obj.cidr().clone(),
-            mac_address,
-            None,
-        ),
-    )
+        &host,
+        &network_obj,
+        mac_address,
+        None,
+    ))
 }
 
 pub(super) fn create_attachment_dhcp_identifier_in_state(
@@ -402,6 +420,13 @@ pub(super) fn update_attachment_in_state(
         existing.created_at(),
         now,
     );
+    let existing_key = HostAttachmentKey::from_attachment(&existing);
+    let updated_key = HostAttachmentKey::from_attachment(&updated);
+    if existing_key != updated_key && state.host_attachment_keys.contains_key(&updated_key) {
+        return Err(AppError::conflict("host attachment already exists"));
+    }
+    state.host_attachment_keys.remove(&existing_key);
+    state.host_attachment_keys.insert(updated_key, updated.id());
     state.host_attachments.insert(updated.id(), updated.clone());
     Ok(updated)
 }
@@ -419,10 +444,13 @@ pub(super) fn delete_attachment_in_state(
             "host attachment still owns IP address reservations",
         ));
     }
-    state
+    let attachment = state
         .host_attachments
         .remove(&attachment_id)
         .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    state
+        .host_attachment_keys
+        .remove(&HostAttachmentKey::from_attachment(&attachment));
     state
         .attachment_dhcp_identifiers
         .retain(|_, identifier| identifier.attachment_id() != attachment_id);

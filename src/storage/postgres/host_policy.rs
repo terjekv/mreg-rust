@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use diesel::{
     ExpressionMethods, QueryDsl, QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Text, Timestamptz, Uuid as SqlUuid},
+    sql_types::{Nullable, Text, Timestamptz, Uuid as SqlUuid},
 };
 use uuid::Uuid;
 
@@ -148,35 +148,24 @@ impl PostgresStorage {
         command: UpdateHostPolicyAtom,
     ) -> Result<HostPolicyAtom, AppError> {
         let name = name.as_str().to_string();
-        if let Some(ref description) = command.description {
-            let row = sql_query(
-                "UPDATE host_policy_atoms SET description = $2, updated_at = now()
-                 WHERE name = $1
-                 RETURNING id, name, description, created_at, updated_at",
-            )
-            .bind::<Text, _>(&name)
-            .bind::<Text, _>(description)
-            .get_results::<AtomRow>(c)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                AppError::not_found(format!("host policy atom '{}' was not found", name))
-            })?;
-            row.into_domain()
-        } else {
-            let row = sql_query(
-                "SELECT id, name, description, created_at, updated_at
-                 FROM host_policy_atoms WHERE name = $1",
-            )
-            .bind::<Text, _>(&name)
-            .get_results::<AtomRow>(c)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                AppError::not_found(format!("host policy atom '{}' was not found", name))
-            })?;
-            row.into_domain()
-        }
+        let new_name = command.name.map(|value| value.as_str().to_string());
+        let row = sql_query(
+            "UPDATE host_policy_atoms
+             SET name = COALESCE($2, name), description = COALESCE($3, description), updated_at = now()
+             WHERE name = $1
+             RETURNING id, name, description, created_at, updated_at",
+        )
+        .bind::<Text, _>(&name)
+        .bind::<Nullable<Text>, _>(new_name)
+        .bind::<Nullable<Text>, _>(command.description)
+        .get_results::<AtomRow>(c)
+        .map_err(map_unique("host policy atom already exists"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            AppError::not_found(format!("host policy atom '{}' was not found", name))
+        })?;
+        row.into_domain()
     }
 
     pub(in crate::storage::postgres) fn delete_atom_in_conn(
@@ -293,33 +282,23 @@ impl PostgresStorage {
         command: UpdateHostPolicyRole,
     ) -> Result<HostPolicyRole, AppError> {
         let name = name.as_str().to_string();
-        let row = if let Some(ref description) = command.description {
-            sql_query(
-                "UPDATE host_policy_roles SET description = $2, updated_at = now()
-                 WHERE name = $1
-                 RETURNING id, name, description, created_at, updated_at",
-            )
-            .bind::<Text, _>(&name)
-            .bind::<Text, _>(description)
-            .get_results::<RoleRow>(c)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                AppError::not_found(format!("host policy role '{}' was not found", name))
-            })?
-        } else {
-            sql_query(
-                "SELECT id, name, description, created_at, updated_at
-                 FROM host_policy_roles WHERE name = $1",
-            )
-            .bind::<Text, _>(&name)
-            .get_results::<RoleRow>(c)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                AppError::not_found(format!("host policy role '{}' was not found", name))
-            })?
-        };
+        let new_name = command.name.map(|value| value.as_str().to_string());
+        let row = sql_query(
+            "UPDATE host_policy_roles
+             SET name = COALESCE($2, name), description = COALESCE($3, description), updated_at = now()
+             WHERE name = $1
+             RETURNING id, name, description, created_at, updated_at",
+        )
+        .bind::<Text, _>(&name)
+        .bind::<Nullable<Text>, _>(new_name)
+        .bind::<Nullable<Text>, _>(command.description)
+        .get_results::<RoleRow>(c)
+        .map_err(map_unique("host policy role already exists"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            AppError::not_found(format!("host policy role '{}' was not found", name))
+        })?;
         build_role_from_row(c, row)
     }
 

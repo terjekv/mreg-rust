@@ -20,8 +20,8 @@ use crate::{
 
 use super::{
     MemoryState, MemoryStorage, bump_zone_serial_in_state,
-    delete_records_by_name_and_type_in_state, paginate_by_cursor, records::create_record_in_state,
-    sort_and_paginate,
+    delete_records_by_name_and_type_in_state, delete_records_by_owner_in_state, paginate_by_cursor,
+    records::create_record_in_state, sort_and_paginate,
 };
 
 pub(super) fn create_forward_zone_record_in_state(
@@ -184,7 +184,9 @@ pub(super) fn update_forward_zone_in_state(
     let expire = command.expire.unwrap_or_else(|| zone.expire());
     let soa_ttl = command.soa_ttl.unwrap_or_else(|| zone.soa_ttl());
     let default_ttl = command.default_ttl.unwrap_or_else(|| zone.default_ttl());
-    let next_serial = zone.serial_no().next_rfc1912(now.date_naive())?;
+    let next_serial = command
+        .serial_no
+        .unwrap_or(zone.serial_no().next_rfc1912(now.date_naive())?);
     let updated = ForwardZone::restore(
         zone.id(),
         zone.name().clone(),
@@ -322,14 +324,61 @@ pub(super) fn delete_forward_zone_delegation_in_state(
 ) -> Result<(), AppError> {
     if let Some(delegation) = state.forward_zone_delegations.get(&delegation_id) {
         let zone_id = delegation.zone_id();
-        let del_name = delegation.name().as_str().to_string();
-        delete_records_by_name_and_type_in_state(state, &del_name, "NS");
+        delete_records_by_owner_in_state(state, delegation_id);
         bump_zone_serial_in_state(state, zone_id);
     }
     match state.forward_zone_delegations.remove(&delegation_id) {
         Some(_removed) => Ok(()),
         None => Err(AppError::not_found("forward zone delegation was not found")),
     }
+}
+
+pub(super) fn replace_forward_zone_delegation_in_state(
+    state: &mut MemoryState,
+    delegation_id: Uuid,
+    command: CreateForwardZoneDelegation,
+) -> Result<ForwardZoneDelegation, AppError> {
+    let old = state
+        .forward_zone_delegations
+        .get(&delegation_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("forward zone delegation was not found"))?;
+    let zone = state
+        .forward_zones
+        .get(command.zone_name().as_str())
+        .ok_or_else(|| AppError::not_found("forward zone was not found"))?;
+    if zone.id() != old.zone_id() || command.name() != old.name() {
+        return Err(AppError::validation(
+            "forward zone delegation replacement cannot move or rename the delegation",
+        ));
+    }
+    delete_records_by_owner_in_state(state, delegation_id);
+    let item = ForwardZoneDelegation::restore(
+        old.id(),
+        old.zone_id(),
+        old.name().clone(),
+        command.comment().to_string(),
+        command.nameservers().to_vec(),
+        old.created_at(),
+        Utc::now(),
+    )?;
+    state
+        .forward_zone_delegations
+        .insert(delegation_id, item.clone());
+    for ns in item.nameservers() {
+        create_record_in_state(
+            state,
+            CreateRecordInstance::new(
+                record_type_names::ns(),
+                RecordOwnerKind::ForwardZoneDelegation,
+                item.name().as_str(),
+                None,
+                json!({"nsdname": ns.as_str()}),
+            )?,
+        )?;
+    }
+    bump_zone_serial_in_state(state, item.zone_id());
+    Ok(item)
 }
 
 pub(super) fn list_reverse_zones_in_state(

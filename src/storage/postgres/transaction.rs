@@ -14,7 +14,7 @@ use crate::{
             UpdateHostAttachment,
         },
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::{
             AttachmentCommunityAssignmentFilter, BacnetIdFilter, CommunityFilter,
             HostCommunityAssignmentFilter, HostContactFilter, HostFilter, HostGroupFilter,
@@ -34,7 +34,11 @@ use crate::{
         label::{CreateLabel, Label, UpdateLabel},
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyAttributeValue, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         resource_records::{
@@ -43,8 +47,8 @@ use crate::{
         },
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyName, RecordTypeName,
-            ZoneName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -219,6 +223,14 @@ impl<'c> TxHostStore for PgTxStorage<'c> {
         PostgresStorage::assign_ip_address_in_conn(&mut self.conn.borrow_mut(), command)
     }
 
+    fn move_ip_address(
+        &self,
+        address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        PostgresStorage::move_ip_address_in_conn(&mut self.conn.borrow_mut(), address, command)
+    }
+
     fn update_ip_address(
         &self,
         address: &IpAddressValue,
@@ -299,6 +311,9 @@ impl<'c> TxHostContactStore for PgTxStorage<'c> {
     }
     fn create_host_contact(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
         pg_host_contacts::create(&mut self.conn.borrow_mut(), command)
+    }
+    fn replace_host_contact(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
+        pg_host_contacts::replace(&mut self.conn.borrow_mut(), command)
     }
     fn get_host_contact_by_email(
         &self,
@@ -387,6 +402,17 @@ impl<'c> TxZoneStore for PgTxStorage<'c> {
     ) -> Result<ForwardZoneDelegation, AppError> {
         PostgresStorage::create_forward_zone_delegation_impl(&mut self.conn.borrow_mut(), command)
     }
+    fn replace_forward_zone_delegation(
+        &self,
+        delegation_id: Uuid,
+        command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError> {
+        PostgresStorage::replace_forward_zone_delegation_impl(
+            &mut self.conn.borrow_mut(),
+            delegation_id,
+            command,
+        )
+    }
     fn delete_forward_zone_delegation(&self, delegation_id: Uuid) -> Result<(), AppError> {
         PostgresStorage::delete_forward_zone_delegation_impl(
             &mut self.conn.borrow_mut(),
@@ -468,6 +494,17 @@ impl<'c> TxNetworkStore for PgTxStorage<'c> {
             &mut self.conn.borrow_mut(),
             network,
             command,
+        )
+    }
+    fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: Uuid,
+    ) -> Result<(), AppError> {
+        PostgresStorage::delete_excluded_range_in_conn(
+            &mut self.conn.borrow_mut(),
+            network,
+            range_id,
         )
     }
     fn list_used_addresses(
@@ -662,6 +699,13 @@ impl<'c> TxHostGroupStore for PgTxStorage<'c> {
     fn create_host_group(&self, command: CreateHostGroup) -> Result<HostGroup, AppError> {
         super::host_groups::create(&mut self.conn.borrow_mut(), command)
     }
+    fn replace_host_group(
+        &self,
+        name: &HostGroupName,
+        command: CreateHostGroup,
+    ) -> Result<HostGroup, AppError> {
+        super::host_groups::replace(&mut self.conn.borrow_mut(), name, command)
+    }
     fn get_host_group_by_name(&self, name: &HostGroupName) -> Result<HostGroup, AppError> {
         super::host_groups::get_by_name(&mut self.conn.borrow_mut(), name.as_str())
     }
@@ -721,6 +765,12 @@ impl<'c> TxPtrOverrideStore for PgTxStorage<'c> {
     ) -> Result<PtrOverride, AppError> {
         super::ptr_overrides::create(&mut self.conn.borrow_mut(), command)
     }
+    fn replace_ptr_override(
+        &self,
+        command: CreatePtrOverride,
+    ) -> Result<PtrOverride, AppError> {
+        super::ptr_overrides::replace(&mut self.conn.borrow_mut(), command)
+    }
     fn get_ptr_override_by_address(
         &self,
         address: &IpAddressValue,
@@ -752,8 +802,29 @@ impl<'c> TxNetworkPolicyStore for PgTxStorage<'c> {
     ) -> Result<NetworkPolicy, AppError> {
         super::network_policies::get_by_name(&mut self.conn.borrow_mut(), name.as_str())
     }
+    fn update_network_policy(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+        super::network_policies::update(&mut self.conn.borrow_mut(), name.as_str(), command)
+    }
     fn delete_network_policy(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         super::network_policies::delete(&mut self.conn.borrow_mut(), name.as_str())
+    }
+    fn list_network_policy_attribute_values(&self, policy: &NetworkPolicyName) -> Result<Vec<NetworkPolicyAttributeValue>, AppError> {
+        super::network_policies::list_attribute_values(&mut self.conn.borrow_mut(), policy.as_str())
+    }
+    fn list_network_policy_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        super::network_policies::list_attributes(&mut self.conn.borrow_mut(), page)
+    }
+    fn create_network_policy_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::create_attribute(&mut self.conn.borrow_mut(), command)
+    }
+    fn get_network_policy_attribute_by_name(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::get_attribute(&mut self.conn.borrow_mut(), name.as_str())
+    }
+    fn update_network_policy_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::update_attribute(&mut self.conn.borrow_mut(), name.as_str(), command)
+    }
+    fn delete_network_policy_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+        super::network_policies::delete_attribute(&mut self.conn.borrow_mut(), name.as_str())
     }
 }
 
@@ -770,6 +841,13 @@ impl<'c> TxCommunityStore for PgTxStorage<'c> {
     }
     fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         super::communities::get_by_id(&mut self.conn.borrow_mut(), community_id)
+    }
+    fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        super::communities::update(&mut self.conn.borrow_mut(), community_id, command)
     }
     fn delete_community(&self, community_id: Uuid) -> Result<(), AppError> {
         super::communities::delete_by_id(&mut self.conn.borrow_mut(), community_id)

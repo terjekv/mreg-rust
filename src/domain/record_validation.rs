@@ -121,6 +121,7 @@ fn check_null_mx(
     }
     let normalized = match content {
         ValidatedRecordContent::Structured(value) => value,
+        ValidatedRecordContent::LegacyStructured(value) => value,
         ValidatedRecordContent::RawRdata(_) => {
             return Ok(());
         }
@@ -161,6 +162,7 @@ fn check_alias_targets(
     if let Some(profile) = record_type.schema().rfc_profile()? {
         let normalized = match content {
             ValidatedRecordContent::Structured(value) => value,
+            ValidatedRecordContent::LegacyStructured(value) => value,
             ValidatedRecordContent::RawRdata(_) => return Ok(()),
         };
         for field in profile.target_fields_must_not_be_aliases() {
@@ -351,8 +353,16 @@ pub(crate) fn validate_owner_name(
     owner_name: &str,
     profile: Option<&RecordRfcProfile>,
 ) -> Result<(), AppError> {
+    let dns_name = DnsName::new(owner_name)?;
+    for (index, label) in dns_name.as_str().split('.').enumerate() {
+        if label.contains('*') && !(index == 0 && label == "*") {
+            return Err(AppError::validation(
+                "DNS wildcard is only allowed as the complete first owner label",
+            ));
+        }
+    }
+
     let Some(profile) = profile else {
-        DnsName::new(owner_name)?;
         return Ok(());
     };
 
@@ -808,6 +818,9 @@ pub(crate) fn record_payloads_match(
 ) -> bool {
     match incoming {
         ValidatedRecordContent::Structured(value) => {
+            existing.raw_rdata().is_none() && existing.data() == value
+        }
+        ValidatedRecordContent::LegacyStructured(value) => {
             existing.raw_rdata().is_none() && existing.data() == value
         }
         ValidatedRecordContent::RawRdata(raw) => existing

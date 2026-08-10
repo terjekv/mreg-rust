@@ -95,25 +95,31 @@ impl PostgresStorage {
         command: UpdateLabel,
     ) -> Result<Label, AppError> {
         let name = name.as_str().to_string();
-        if let Some(ref description) = command.description {
+        let mut current_name = name.clone();
+        if let Some(new_name) = command.name {
+            current_name = new_name.as_str().to_string();
             update(labels::table.filter(labels::name.eq(&name)))
+                .set((
+                    labels::name.eq(&current_name),
+                    labels::updated_at.eq(diesel::dsl::now),
+                ))
+                .execute(connection)
+                .map_err(map_unique("label already exists"))?;
+        }
+        if let Some(description) = command.description {
+            update(labels::table.filter(labels::name.eq(&current_name)))
                 .set((
                     labels::description.eq(description),
                     labels::updated_at.eq(diesel::dsl::now),
                 ))
-                .returning(LabelRow::as_returning())
-                .get_result::<LabelRow>(connection)
-                .optional()?
-                .ok_or_else(|| AppError::not_found(format!("label '{}' was not found", name)))?
-                .into_domain()
-        } else {
-            labels::table
-                .filter(labels::name.eq(&name))
-                .first::<LabelRow>(connection)
-                .optional()?
-                .ok_or_else(|| AppError::not_found(format!("label '{}' was not found", name)))?
-                .into_domain()
+                .execute(connection)?;
         }
+        labels::table
+            .filter(labels::name.eq(&current_name))
+            .first::<LabelRow>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found(format!("label '{}' was not found", name)))?
+            .into_domain()
     }
 
     pub(super) fn delete_label_in_conn(

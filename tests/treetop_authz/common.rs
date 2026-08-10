@@ -142,7 +142,7 @@ impl TestCtx {
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
                 .wrap(mreg_rust::middleware::Authn)
-                .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+                .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
         )
         .await;
         test::call_service(&app, request).await.status()
@@ -153,7 +153,7 @@ impl TestCtx {
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
                 .wrap(mreg_rust::middleware::Authn)
-                .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+                .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
         )
         .await;
         let response = test::call_service(&app, request).await;

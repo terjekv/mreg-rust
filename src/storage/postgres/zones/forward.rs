@@ -201,7 +201,9 @@ impl PostgresStorage {
                 u64::try_from(old_serial)
                     .map_err(|_| AppError::internal("invalid serial number in database"))?,
             )?;
-            let next_serial = current_serial.next_rfc1912(Utc::now().date_naive())?;
+            let next_serial = command
+                .serial_no
+                .unwrap_or(current_serial.next_rfc1912(Utc::now().date_naive())?);
 
             // Update the zone row
             update(forward_zones::table.filter(forward_zones::id.eq(zone_id)))

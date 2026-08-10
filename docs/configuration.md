@@ -78,11 +78,11 @@ Authentication resolves the request principal before authorization runs.
 | Mode | Behavior |
 |------|----------|
 | `none` | Trust `X-Mreg-User` and `X-Mreg-Groups` headers directly. Intended for tests and local development only. |
-| `scoped` | `POST /api/v1/auth/login` authenticates against one configured auth scope and always returns an mreg-issued JWT access token. |
+| `scoped` | `POST /api/v2/auth/login` authenticates against one configured auth scope and always returns an mreg-issued JWT access token. |
 
 In `scoped` mode, protected endpoints require `Authorization: Bearer <token>`. `X-Mreg-User` and `X-Mreg-Groups` are ignored for identity resolution in that mode.
 
-`GET /api/v1/system/health` and `GET /api/v1/system/version` remain unauthenticated.
+`GET /api/v2/system/health` and `GET /api/v2/system/version` remain unauthenticated.
 
 ## Authentication Providers
 
@@ -170,7 +170,7 @@ The upstream JWT is used only during login. mreg-rust validates it, extracts ide
 
 ## Login API
 
-`POST /api/v1/auth/login` accepts:
+`POST /api/v2/auth/login` accepts:
 
 ```json
 {
@@ -184,7 +184,7 @@ The upstream JWT is used only during login. mreg-rust validates it, extracts ide
 
 `service_name` and `otp_code` are optional. Remote scopes may use them; local and LDAP scopes ignore them.
 
-`GET /api/v1/auth/providers` is unauthenticated and lists safe provider metadata
+`GET /api/v2/auth/providers` is unauthenticated and lists safe provider metadata
 from the same registry used to route login requests.
 
-`GET /api/v1/auth/me` returns the resolved principal and token expiry for the current request.
+`GET /api/v2/auth/me` returns the resolved principal and token expiry for the current request.

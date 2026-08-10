@@ -114,11 +114,17 @@ pub struct NetworkPolicyName(String);
 
 impl NetworkPolicyName {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        Ok(Self(normalize_identifier_name(
+        let name = normalize_identifier_name(
             value.as_ref(),
             "network policy name",
             true,
-        )?))
+        )?;
+        if name.len() > 100 {
+            return Err(AppError::validation(
+                "network policy name must be at most 100 characters",
+            ));
+        }
+        Ok(Self(name))
     }
 
     pub fn as_str(&self) -> &str {
@@ -148,6 +154,55 @@ impl<'de> Deserialize<'de> for NetworkPolicyName {
     {
         let raw = String::deserialize(deserializer)?;
         NetworkPolicyName::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Validated network-policy attribute name (lowercase, normalized).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NetworkPolicyAttributeName(String);
+
+impl NetworkPolicyAttributeName {
+    pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
+        let name = normalize_identifier_name(
+            value.as_ref(),
+            "network policy attribute name",
+            true,
+        )?;
+        if name.len() > 100 {
+            return Err(AppError::validation(
+                "network policy attribute name must be at most 100 characters",
+            ));
+        }
+        Ok(Self(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for NetworkPolicyAttributeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Serialize for NetworkPolicyAttributeName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkPolicyAttributeName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        NetworkPolicyAttributeName::new(raw).map_err(serde::de::Error::custom)
     }
 }
 

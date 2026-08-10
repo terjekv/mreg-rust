@@ -169,7 +169,7 @@ async fn call_auth_json(request: actix_http::Request, state: AppState) -> (Statu
         App::new()
             .app_data(web::Data::new(state))
             .wrap(middleware::Authn)
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
     let response = test::call_service(&app, request).await;
@@ -1618,6 +1618,7 @@ async fn postgres_host_detail_query_budget_stays_batched() -> Result<(), Box<dyn
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr_a, &policy).await;
     assert_eq!(
         ctx.post(
             "/policy/network/communities",
@@ -2204,6 +2205,8 @@ async fn postgres_community_and_assignment_filters_use_sql()
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr_a, &policy).await;
+    ctx.assign_network_policy(&cidr_b, &policy).await;
 
     let community_alpha = ctx.name("alpha-community");
     let community_beta = ctx.name("beta-community");
@@ -2385,6 +2388,7 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr, &policy).await;
     assert_eq!(
         ctx.post(
             "/policy/network/communities",
@@ -2501,6 +2505,7 @@ async fn postgres_network_delete_cascades_related_attachment_state()
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr, &policy).await;
     assert_eq!(
         ctx.post(
             "/policy/network/communities",

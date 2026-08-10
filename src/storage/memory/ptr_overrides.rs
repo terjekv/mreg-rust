@@ -19,31 +19,15 @@ pub(super) fn create_ptr_override_in_state(
     state: &mut MemoryState,
     command: CreatePtrOverride,
 ) -> Result<PtrOverride, AppError> {
-    let host = state
+    state
         .hosts
         .get(command.host_name().as_str())
-        .cloned()
         .ok_or_else(|| {
             AppError::not_found(format!(
                 "host '{}' was not found",
                 command.host_name().as_str()
             ))
         })?;
-    let assignment = state
-        .ip_addresses
-        .get(&command.address().as_str())
-        .cloned()
-        .ok_or_else(|| {
-            AppError::not_found(format!(
-                "ip address '{}' was not found",
-                command.address().as_str()
-            ))
-        })?;
-    if assignment.host_id() != host.id() {
-        return Err(AppError::validation(
-            "PTR override address must belong to the supplied host",
-        ));
-    }
     let key = command.address().as_str();
     if state.ptr_overrides.contains_key(&key) {
         return Err(AppError::conflict(format!(
@@ -62,6 +46,31 @@ pub(super) fn create_ptr_override_in_state(
     );
     state.ptr_overrides.insert(key, override_record.clone());
     Ok(override_record)
+}
+
+pub(super) fn replace_ptr_override_in_state(
+    state: &mut MemoryState,
+    command: CreatePtrOverride,
+) -> Result<PtrOverride, AppError> {
+    if !state.hosts.contains_key(command.host_name().as_str()) {
+        return Err(AppError::not_found(format!(
+            "host '{}' was not found",
+            command.host_name().as_str()
+        )));
+    }
+    let old = get_ptr_override_by_address_in_state(state, command.address())?;
+    let item = PtrOverride::restore(
+        old.id(),
+        command.host_name().clone(),
+        *command.address(),
+        command.target_name().cloned(),
+        old.created_at(),
+        Utc::now(),
+    );
+    state
+        .ptr_overrides
+        .insert(command.address().as_str(), item.clone());
+    Ok(item)
 }
 
 pub(super) fn list_ptr_overrides_in_state(
@@ -130,6 +139,14 @@ impl PtrOverrideStore for MemoryStorage {
     ) -> Result<PtrOverride, AppError> {
         let mut state = self.state.write().await;
         create_ptr_override_in_state(&mut state, command)
+    }
+
+    async fn replace_ptr_override(
+        &self,
+        command: CreatePtrOverride,
+    ) -> Result<PtrOverride, AppError> {
+        let mut state = self.state.write().await;
+        replace_ptr_override_in_state(&mut state, command)
     }
 
     async fn get_ptr_override_by_address(

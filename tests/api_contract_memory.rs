@@ -64,12 +64,193 @@ fn redact(mut value: Value) -> Value {
 }
 
 #[actix_web::test]
+async fn legacy_network_policy_attributes_match_django_membership_semantics() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/networkpolicyattributes/")
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({"name": "Public", "description": "Public access"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let attribute: Value = test::read_body_json(response).await;
+    assert_eq!(attribute["name"], "public");
+    let attribute_id = attribute["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/networkpolicies/")
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({
+                "name": "Campus",
+                "description": "",
+                "attributes": [{"name": "public", "value": false}]
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy: Value = test::read_body_json(response).await;
+    assert_eq!(policy["name"], "campus");
+    assert_eq!(policy["description"], "");
+    assert_eq!(
+        policy["attributes"],
+        json!([{"name": "public", "value": false}])
+    );
+    let policy_id = policy["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/v1/networkpolicies/{policy_id}"))
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({"attributes": []}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let policy: Value = test::read_body_json(response).await;
+    assert_eq!(policy["attributes"], json!([]));
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::delete()
+            .uri(&format!("/api/v1/networkpolicyattributes/{attribute_id}"))
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[actix_web::test]
+async fn legacy_network_policy_assignment_limit_and_community_crud_work() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::default()
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+    };
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/networkpolicies/")
+            .set_json(json!({"name": "secure", "description": "Secure"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy: Value = test::read_body_json(response).await;
+    let policy_id = policy["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/networks/")
+            .set_json(json!({"network": "192.0.2.0/24", "description": "Policy net"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::PATCH)
+            .uri("/api/v1/networks/192.0.2.0/24")
+            .set_json(json!({"policy": policy_id, "max_communities": 1}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri(&format!("/api/v1/networks/?policy={policy_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let networks: Value = test::read_body_json(response).await;
+    assert_eq!(networks["count"], 1);
+    assert_eq!(networks["results"][0]["policy"]["name"], "secure");
+    assert_eq!(networks["results"][0]["max_communities"], 1);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/networks/192.0.2.0/24/communities/")
+            .set_json(json!({"name": "Guests", "description": "Guest hosts"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let community: Value = test::read_body_json(response).await;
+    assert_eq!(community["name"], "guests");
+    let community_id = community["id"].as_u64().unwrap();
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::PATCH)
+            .uri(&format!(
+                "/api/v1/networks/192.0.2.0/24/communities/{community_id}"
+            ))
+            .set_json(json!({"name": "Visitors"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let community: Value = test::read_body_json(response).await;
+    assert_eq!(community["name"], "visitors");
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::DELETE)
+            .uri(&format!(
+                "/api/v1/networks/192.0.2.0/24/communities/{community_id}"
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[actix_web::test]
 async fn host_contact_contract_shape_is_stable() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
             .wrap(mreg_rust::middleware::Authn)
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -134,22 +315,27 @@ async fn policy_mapping_contract_shape_is_stable() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
     for (uri, body) in [
         (
+            "/policy/network/policies",
+            json!({"name":"campus-core","description":"Campus core policy"}),
+        ),
+        (
             "/inventory/networks",
-            json!({"cidr":"10.0.0.0/24","description":"LAN","reserved":3}),
+            json!({
+                "cidr":"10.0.0.0/24",
+                "description":"LAN",
+                "reserved":3,
+                "policy_name":"campus-core"
+            }),
         ),
         (
             "/inventory/hosts",
             json!({"name":"app.example.org","comment":"app host"}),
-        ),
-        (
-            "/policy/network/policies",
-            json!({"name":"campus-core","description":"Campus core policy"}),
         ),
         (
             "/policy/network/communities",
@@ -202,6 +388,21 @@ async fn policy_mapping_contract_shape_is_stable() {
 
     let response = test::call_service(
         &app,
+        test::TestRequest::post()
+            .uri("/policy/network/host-community-assignments")
+            .set_json(json!({
+                "host_name": "app.example.org",
+                "address": "10.0.0.25",
+                "policy_name": "campus-core",
+                "community_name": "prod-network"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let response = test::call_service(
+        &app,
         test::TestRequest::get()
             .uri("/policy/network/host-community-assignments?host=app.example.org")
             .to_request(),
@@ -238,7 +439,7 @@ async fn full_dns_lifecycle_with_auto_records() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -424,7 +625,7 @@ async fn delegation_anchored_record_validates_scope() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -487,7 +688,7 @@ async fn inventory_detail_responses_include_attachment_graph() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -618,7 +819,7 @@ async fn network_detail_reports_full_available_capacity() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -681,7 +882,7 @@ async fn rfc3597_raw_record_round_trip() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -746,7 +947,7 @@ async fn host_list_supports_sort_and_filter() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -879,9 +1080,20 @@ async fn wildcard_dns_records_work_as_unanchored_records() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
+
+    // Wildcards are DNS owners, never inventory hosts.
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/inventory/hosts")
+            .set_json(json!({"name": "*.example.org"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // Create a TXT record at *.example.org (no host entity needed)
     let response = test::call_service(
@@ -903,6 +1115,342 @@ async fn wildcard_dns_records_work_as_unanchored_records() {
         body["owner_kind"].is_null(),
         "wildcard should be unanchored"
     );
+
+    for invalid_owner in ["foo.*.example.org", "foo*.example.org"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/dns/records")
+                .set_json(json!({
+                    "type_name": "TXT",
+                    "owner_name": invalid_owner,
+                    "data": {"value": "invalid wildcard"}
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[actix_web::test]
+async fn legacy_wildcard_host_is_a_v2_dns_owner_facade() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::default()
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+    };
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/hosts/")
+            .set_json(json!({"name": "*.example.org"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v1/hosts/%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let legacy: Value = test::read_body_json(response).await;
+    assert_eq!(legacy["name"], "*.example.org");
+    assert_eq!(legacy["txts"][0]["txt"], "v=spf1 -all");
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/dns/records?owner_name=%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let records: Value = test::read_body_json(response).await;
+    assert_eq!(records["total"], 1);
+    assert_eq!(records["items"][0]["owner_name"], "*.example.org");
+    assert!(records["items"][0]["owner_kind"].is_null());
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/inventory/hosts?name=%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let hosts: Value = test::read_body_json(response).await;
+    assert_eq!(hosts["total"], 0);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::DELETE)
+            .uri("/api/v1/hosts/%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/dns/records?owner_name=%2A.example.org")
+            .to_request(),
+    )
+    .await;
+    let records: Value = test::read_body_json(response).await;
+    assert_eq!(records["total"], 0);
+}
+
+#[actix_web::test]
+async fn deleting_host_preserves_unanchored_v2_record_with_same_owner_name() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v2/inventory/hosts")
+            .set_json(json!({"name":"shared.example.org","comment":"inventory host"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v2/dns/records")
+            .set_json(json!({
+                "type_name":"TXT",
+                "owner_name":"shared.example.org",
+                "data":{"value":"independent"}
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let record: Value = test::read_body_json(response).await;
+    let record_id = record["id"].as_str().expect("record id");
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::delete()
+            .uri("/api/v2/inventory/hosts/shared.example.org")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/v2/dns/records/{record_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let record: Value = test::read_body_json(response).await;
+    assert_eq!(record["data"]["value"], json!(["independent"]));
+    assert!(record["owner_kind"].is_null());
+}
+
+#[actix_web::test]
+async fn legacy_sshfp_is_honest_in_v2_without_opening_validation_escape_hatch() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::default()
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+    };
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/hosts/")
+            .set_json(json!({"name":"sshfp.example.org","comment":"sshfp"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v1/hosts/sshfp.example.org")
+            .to_request(),
+    )
+    .await;
+    let host: Value = test::read_body_json(response).await;
+    let host_id = host["id"].as_u64().expect("legacy host id");
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v1/sshfps/")
+            .set_json(json!({
+                "host":host_id,"algorithm":1,"hash_type":1,"fingerprint":"legacy-value"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri("/api/v2/dns/records?owner_name=sshfp.example.org&type_name=SSHFP")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let records: Value = test::read_body_json(response).await;
+    assert_eq!(records["items"][0]["data"]["fingerprint"], "legacy-value");
+    let record_id = records["items"][0]["id"].as_str().expect("record id");
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::GET)
+            .uri(&format!("/api/v2/dns/records/{record_id}"))
+            .to_request(),
+    )
+    .await;
+    let record: Value = test::read_body_json(response).await;
+    assert_eq!(record["legacy_compatibility"], true);
+    assert!(record["rendered"].is_null());
+
+    let response = test::call_service(
+        &app,
+        request()
+            .method(actix_web::http::Method::POST)
+            .uri("/api/v2/dns/records")
+            .set_json(json!({
+                "type_name":"SSHFP",
+                "owner_kind":"host",
+                "owner_name":"sshfp.example.org",
+                "data":{"algorithm":1,"fp_type":1,"fingerprint":"\u{1f}mreg-v1:bad"}
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+async fn legacy_host_group_relation_mutation_preserves_v2_identity_and_inbound_relations() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .wrap(mreg_rust::middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    for (uri, body) in [
+        (
+            "/api/v2/inventory/hosts",
+            json!({"name":"group-member.example.org","comment":"member"}),
+        ),
+        (
+            "/api/v2/inventory/host-groups",
+            json!({"name":"parent","description":"parent","hosts":[]}),
+        ),
+        (
+            "/api/v2/inventory/host-groups",
+            json!({"name":"child","description":"child","parent_groups":["parent"]}),
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(uri)
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/parent")
+            .to_request(),
+    )
+    .await;
+    let parent: Value = test::read_body_json(response).await;
+    let parent_id = parent["id"].clone();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/child")
+            .to_request(),
+    )
+    .await;
+    let child: Value = test::read_body_json(response).await;
+    let child_id = child["id"].clone();
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/hostgroups/parent/hosts/")
+            .insert_header(("Authorization", "Token compatibility-test-token"))
+            .insert_header(("X-Mreg-User", "compat-test"))
+            .set_json(json!({"name":"group-member.example.org"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/parent")
+            .to_request(),
+    )
+    .await;
+    let parent: Value = test::read_body_json(response).await;
+    assert_eq!(parent["id"], parent_id);
+    assert_eq!(parent["hosts"], json!(["group-member.example.org"]));
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v2/inventory/host-groups/child")
+            .to_request(),
+    )
+    .await;
+    let child: Value = test::read_body_json(response).await;
+    assert_eq!(child["id"], child_id);
+    assert_eq!(child["parent_groups"], json!(["parent"]));
 }
 
 #[actix_web::test]
@@ -910,7 +1458,7 @@ async fn export_template_list_returns_builtin_templates() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -945,7 +1493,7 @@ async fn export_run_lifecycle_and_listing() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 
@@ -1037,7 +1585,7 @@ async fn import_batch_appears_in_listing() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
 

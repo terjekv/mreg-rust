@@ -30,7 +30,7 @@ pub(super) fn create_host_community_assignment_in_state(
         })?;
     let assignment = state
         .ip_addresses
-        .get(&command.address().as_str())
+        .get(command.address())
         .cloned()
         .ok_or_else(|| {
             AppError::not_found(format!(

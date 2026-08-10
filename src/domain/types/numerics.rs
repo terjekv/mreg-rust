@@ -285,6 +285,49 @@ impl<'de> Deserialize<'de> for ReservedCount {
     }
 }
 
+/// Per-network limit for the number of communities.
+/// Stored as u32 internally and constrained to PostgreSQL's signed integer range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CommunityLimit(u32);
+
+impl CommunityLimit {
+    pub fn new(value: u32) -> Result<Self, AppError> {
+        if value > i32::MAX as u32 {
+            return Err(AppError::validation(
+                "community limit exceeds maximum (must fit in i32)",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.0 as i32
+    }
+}
+
+impl Serialize for CommunityLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for CommunityLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = u32::deserialize(deserializer)?;
+        CommunityLimit::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
 /// DNS record type code (0-65535).
 /// Stored as u16 internally; accepts i32 on construction for PostgreSQL compatibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

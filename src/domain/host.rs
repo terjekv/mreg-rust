@@ -257,6 +257,7 @@ pub struct IpAssignmentSpec {
     mac_address: Option<MacAddressValue>,
     auto_v4_client_id: bool,
     auto_v6_duid_ll: bool,
+    allow_reserved_addresses: bool,
 }
 
 impl IpAssignmentSpec {
@@ -278,6 +279,7 @@ impl IpAssignmentSpec {
             mac_address,
             auto_v4_client_id: false,
             auto_v6_duid_ll: false,
+            allow_reserved_addresses: false,
         })
     }
 
@@ -287,9 +289,16 @@ impl IpAssignmentSpec {
         self
     }
 
+    pub fn with_reserved_addresses(mut self, allow: bool) -> Self {
+        self.allow_reserved_addresses = allow;
+        self
+    }
+
     pub fn into_assign_command(self, host_name: Hostname) -> Result<AssignIpAddress, AppError> {
         let cmd = AssignIpAddress::new(host_name, self.address, self.network, self.mac_address)?;
-        Ok(cmd.with_auto_dhcp(self.auto_v4_client_id, self.auto_v6_duid_ll))
+        Ok(cmd
+            .with_auto_dhcp(self.auto_v4_client_id, self.auto_v6_duid_ll)
+            .with_reserved_addresses(self.allow_reserved_addresses))
     }
 
     pub fn address(&self) -> Option<&IpAddressValue> {
@@ -315,17 +324,23 @@ impl IpAssignmentSpec {
     pub fn auto_v6_duid_ll(&self) -> bool {
         self.auto_v6_duid_ll
     }
+
+    pub fn allow_reserved_addresses(&self) -> bool {
+        self.allow_reserved_addresses
+    }
 }
 
 /// Command to assign an IP address to a host, either explicitly or by network auto-allocation.
 #[derive(Clone, Debug)]
 pub struct AssignIpAddress {
+    assignment_id: Option<Uuid>,
     host_name: Hostname,
     address: Option<IpAddressValue>,
     network: Option<crate::domain::types::CidrValue>,
     mac_address: Option<MacAddressValue>,
     auto_v4_client_id: bool,
     auto_v6_duid_ll: bool,
+    allow_reserved_addresses: bool,
 }
 
 impl AssignIpAddress {
@@ -342,12 +357,14 @@ impl AssignIpAddress {
         }
 
         Ok(Self {
+            assignment_id: None,
             host_name,
             address,
             network,
             mac_address,
             auto_v4_client_id: false,
             auto_v6_duid_ll: false,
+            allow_reserved_addresses: false,
         })
     }
 
@@ -355,6 +372,21 @@ impl AssignIpAddress {
         self.auto_v4_client_id = v4;
         self.auto_v6_duid_ll = v6;
         self
+    }
+
+    pub fn with_reserved_addresses(mut self, allow: bool) -> Self {
+        self.allow_reserved_addresses = allow;
+        self
+    }
+
+    /// Preserve an existing assignment identity while replacing its address or host.
+    pub fn with_assignment_id(mut self, id: Uuid) -> Self {
+        self.assignment_id = Some(id);
+        self
+    }
+
+    pub fn assignment_id(&self) -> Option<Uuid> {
+        self.assignment_id
     }
 
     pub fn host_name(&self) -> &Hostname {
@@ -379,6 +411,10 @@ impl AssignIpAddress {
 
     pub fn auto_v6_duid_ll(&self) -> bool {
         self.auto_v6_duid_ll
+    }
+
+    pub fn allow_reserved_addresses(&self) -> bool {
+        self.allow_reserved_addresses
     }
 }
 

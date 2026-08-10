@@ -74,19 +74,59 @@ pub(super) fn update_label_in_state(
         AppError::not_found(format!("label '{}' was not found", name.as_str()))
     })?;
     let now = Utc::now();
+    let new_name = command.name.unwrap_or_else(|| label.name().clone());
+    if new_name != *label.name() && state.labels.contains_key(new_name.as_str()) {
+        return Err(AppError::conflict(format!(
+            "label '{}' already exists",
+            new_name.as_str()
+        )));
+    }
     let description = command
         .description
         .unwrap_or_else(|| label.description().to_string());
     let updated = Label::restore(
         label.id(),
-        label.name().clone(),
+        new_name.clone(),
         description,
         label.created_at(),
         now,
     )?;
+    state.labels.remove(name.as_str());
     state
         .labels
-        .insert(name.as_str().to_string(), updated.clone());
+        .insert(new_name.as_str().to_string(), updated.clone());
+    if new_name != *name {
+        for role in state.host_policy_roles.values_mut() {
+            if !role
+                .labels()
+                .iter()
+                .any(|label_name| label_name == name.as_str())
+            {
+                continue;
+            }
+            let labels = role
+                .labels()
+                .iter()
+                .map(|label_name| {
+                    if label_name == name.as_str() {
+                        new_name.as_str().to_string()
+                    } else {
+                        label_name.clone()
+                    }
+                })
+                .collect();
+            *role = crate::domain::host_policy::HostPolicyRole::restore(
+                role.id(),
+                role.name().clone(),
+                role.description().to_string(),
+                role.atoms().to_vec(),
+                role.hosts().to_vec(),
+                labels,
+                role.created_at(),
+                now,
+            );
+        }
+    }
     Ok(updated)
 }
 

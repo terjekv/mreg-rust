@@ -32,7 +32,7 @@ use crate::{
             UpdateHostAttachment,
         },
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         exports::{CreateExportRun, CreateExportTemplate, ExportRun, ExportTemplate},
         filters::{
             BacnetIdFilter, CommunityFilter, HostCommunityAssignmentFilter, HostContactFilter,
@@ -54,7 +54,11 @@ use crate::{
         label::{CreateLabel, Label, UpdateLabel},
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyDetails, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         resource_records::{
@@ -64,8 +68,8 @@ use crate::{
         tasks::{CreateTask, TaskEnvelope},
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyName, RecordTypeName,
-            ZoneName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -353,6 +357,13 @@ impl ZoneService<'_> {
     ) -> Result<ForwardZoneDelegation, AppError> {
         zones::create_forward_delegation(self.storage, command, self.events).await
     }
+    pub async fn replace_forward_delegation(
+        &self,
+        delegation_id: Uuid,
+        command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError> {
+        zones::replace_forward_delegation(self.storage, delegation_id, command, self.events).await
+    }
     pub async fn delete_forward_delegation(&self, delegation_id: Uuid) -> Result<(), AppError> {
         zones::delete_forward_delegation(self.storage, delegation_id, self.events).await
     }
@@ -416,6 +427,13 @@ impl NetworkService<'_> {
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError> {
         networks::add_excluded_range(self.storage, cidr, command, self.events).await
+    }
+    pub async fn delete_excluded_range(
+        &self,
+        cidr: &CidrValue,
+        range: &ExcludedRange,
+    ) -> Result<(), AppError> {
+        networks::delete_excluded_range(self.storage, cidr, range, self.events).await
     }
     pub async fn list_used_addresses(
         &self,
@@ -488,6 +506,13 @@ impl HostService<'_> {
         command: UpdateIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
         hosts::update_ip_address(self.storage, address, command, self.events).await
+    }
+    pub async fn move_ip_address(
+        &self,
+        address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        hosts::move_ip_address(self.storage, address, command, self.events).await
     }
     pub async fn unassign_ip_address(&self, address: &IpAddressValue) -> Result<(), AppError> {
         hosts::unassign_ip_address(self.storage, address, self.events).await
@@ -728,6 +753,9 @@ impl HostContactService<'_> {
     pub async fn create(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
         host_contacts::create_host_contact(self.storage, command, self.events).await
     }
+    pub async fn replace(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
+        host_contacts::replace_host_contact(self.storage, command, self.events).await
+    }
     pub async fn get(&self, email: &EmailAddressValue) -> Result<HostContact, AppError> {
         host_contacts::get_host_contact(self.storage.host_contacts(), email).await
     }
@@ -757,6 +785,21 @@ impl HostGroupService<'_> {
     }
     pub async fn delete(&self, name: &HostGroupName) -> Result<(), AppError> {
         host_groups::delete_host_group(self.storage, name, self.events).await
+    }
+    pub async fn replace_relation(
+        &self,
+        old: &HostGroup,
+        command: CreateHostGroup,
+        mutation: host_groups::HostGroupRelationMutation,
+    ) -> Result<HostGroup, AppError> {
+        host_groups::replace_host_group_relation(
+            self.storage,
+            old,
+            command,
+            mutation,
+            self.events,
+        )
+        .await
     }
 }
 
@@ -803,6 +846,9 @@ impl PtrOverrideService<'_> {
     pub async fn create(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
         ptr_overrides::create_ptr_override(self.storage, command, self.events).await
     }
+    pub async fn replace(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
+        ptr_overrides::replace_ptr_override(self.storage, command, self.events).await
+    }
     pub async fn get(&self, address: &IpAddressValue) -> Result<PtrOverride, AppError> {
         ptr_overrides::get_ptr_override(self.storage.ptr_overrides(), address).await
     }
@@ -830,8 +876,29 @@ impl NetworkPolicyService<'_> {
     pub async fn get(&self, name: &NetworkPolicyName) -> Result<NetworkPolicy, AppError> {
         network_policies::get_network_policy(self.storage.network_policies(), name).await
     }
+    pub async fn get_details(&self, name: &NetworkPolicyName) -> Result<NetworkPolicyDetails, AppError> {
+        network_policies::get_network_policy_details(self.storage.network_policies(), name).await
+    }
+    pub async fn update(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+        network_policies::update_network_policy(self.storage, name, command, self.events).await
+    }
     pub async fn delete(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         network_policies::delete_network_policy(self.storage, name, self.events).await
+    }
+    pub async fn list_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        network_policies::list_network_policy_attributes(self.storage.network_policies(), page).await
+    }
+    pub async fn create_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::create_network_policy_attribute(self.storage, command, self.events).await
+    }
+    pub async fn get_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::get_network_policy_attribute(self.storage.network_policies(), name).await
+    }
+    pub async fn update_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::update_network_policy_attribute(self.storage, name, command, self.events).await
+    }
+    pub async fn delete_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+        network_policies::delete_network_policy_attribute(self.storage, name, self.events).await
     }
 }
 
@@ -853,6 +920,13 @@ impl CommunityService<'_> {
     }
     pub async fn get(&self, community_id: Uuid) -> Result<Community, AppError> {
         communities::get_community(self.storage.communities(), community_id).await
+    }
+    pub async fn update(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        communities::update_community(self.storage, community_id, command, self.events).await
     }
     pub async fn delete(&self, community_id: Uuid) -> Result<(), AppError> {
         communities::delete_community(self.storage, community_id, self.events).await
@@ -882,6 +956,19 @@ impl HostCommunityAssignmentService<'_> {
             self.storage.host_community_assignments(),
             page,
             filter,
+        )
+        .await
+    }
+    pub async fn move_legacy(
+        &self,
+        command: CreateHostCommunityAssignment,
+        require_mac_address: bool,
+    ) -> Result<HostCommunityAssignment, AppError> {
+        host_community_assignments::move_host_community_assignment(
+            self.storage,
+            command,
+            require_mac_address,
+            self.events,
         )
         .await
     }

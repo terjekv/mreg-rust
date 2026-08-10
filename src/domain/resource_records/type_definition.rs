@@ -113,6 +113,58 @@ impl RecordTypeDefinition {
             }
         }
     }
+
+    pub(crate) fn validate_legacy_record_input(
+        &self,
+        owner_name: &DnsName,
+        structured_data: Option<&Value>,
+        raw_rdata: Option<&RawRdataValue>,
+    ) -> Result<ValidatedRecordContent, AppError> {
+        validate_owner_name(
+            self.name(),
+            owner_name.as_str(),
+            self.schema().rfc_profile()?.as_ref(),
+        )?;
+        let (Some(payload), None) = (structured_data, raw_rdata) else {
+            return Err(AppError::validation(
+                "legacy record input requires structured data",
+            ));
+        };
+        let mut validation_payload = payload.clone();
+        let legacy_sshfp = self.name().as_str() == "SSHFP";
+        if legacy_sshfp {
+            let object = validation_payload
+                .as_object_mut()
+                .ok_or_else(|| AppError::validation("record payload must be a JSON object"))?;
+            let raw = object
+                .get("fingerprint")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::validation("SSHFP fingerprint is required"))?
+                .to_string();
+            let expected_len = match object.get("fp_type").and_then(Value::as_u64) {
+                Some(1) => 40,
+                Some(2) => 64,
+                _ => 0,
+            };
+            if expected_len == 0 || raw.len() > expected_len {
+                return Err(AppError::validation(
+                    "legacy SSHFP fingerprint is too long for its hash type",
+                ));
+            }
+            object.insert(
+                "fingerprint".to_string(),
+                Value::String("0".repeat(expected_len)),
+            );
+        }
+        let mut normalized = self.schema().validate_and_normalize(&validation_payload)?;
+        if legacy_sshfp {
+            normalized = validate_builtin_payload(self.name(), &normalized)?;
+            normalized["fingerprint"] = payload["fingerprint"].clone();
+        } else if self.name().as_str() != "NAPTR" {
+            normalized = validate_builtin_payload(self.name(), &normalized)?;
+        }
+        Ok(ValidatedRecordContent::LegacyStructured(normalized))
+    }
 }
 
 /// Command to register a new DNS record type definition.

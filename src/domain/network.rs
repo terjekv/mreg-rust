@@ -5,7 +5,10 @@ use ipnet::IpNet;
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{CidrValue, IpAddressValue, ReservedCount, UpdateField, VlanId},
+    domain::types::{
+        CidrValue, CommunityLimit, IpAddressValue, NetworkPolicyName, ReservedCount, UpdateField,
+        VlanId,
+    },
     errors::AppError,
 };
 
@@ -21,6 +24,8 @@ pub struct Network {
     location: String,
     frozen: bool,
     reserved: ReservedCount,
+    max_communities: Option<CommunityLimit>,
+    policy_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -37,6 +42,8 @@ impl Network {
         location: impl Into<String>,
         frozen: bool,
         reserved: ReservedCount,
+        max_communities: Option<CommunityLimit>,
+        policy_id: Option<Uuid>,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Result<Self, AppError> {
@@ -55,6 +62,8 @@ impl Network {
             location: location.into(),
             frozen,
             reserved,
+            max_communities,
+            policy_id,
             created_at,
             updated_at,
         })
@@ -96,6 +105,14 @@ impl Network {
         self.reserved
     }
 
+    pub fn max_communities(&self) -> Option<CommunityLimit> {
+        self.max_communities
+    }
+
+    pub fn policy_id(&self) -> Option<Uuid> {
+        self.policy_id
+    }
+
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
@@ -124,6 +141,8 @@ pub struct CreateNetwork {
     location: String,
     frozen: bool,
     reserved: ReservedCount,
+    max_communities: Option<CommunityLimit>,
+    policy: Option<NetworkPolicyName>,
 }
 
 impl CreateNetwork {
@@ -146,6 +165,8 @@ impl CreateNetwork {
             location: String::new(),
             frozen: false,
             reserved,
+            max_communities: None,
+            policy: None,
         })
     }
 
@@ -174,6 +195,8 @@ impl CreateNetwork {
             location: location.into(),
             frozen,
             reserved,
+            max_communities: None,
+            policy: None,
         })
     }
 
@@ -208,6 +231,27 @@ impl CreateNetwork {
     pub fn reserved(&self) -> ReservedCount {
         self.reserved
     }
+
+    pub fn max_communities(&self) -> Option<CommunityLimit> {
+        self.max_communities
+    }
+
+    pub fn policy(&self) -> Option<&NetworkPolicyName> {
+        self.policy.as_ref()
+    }
+
+    pub fn with_policy(mut self, policy: Option<NetworkPolicyName>) -> Self {
+        self.policy = policy;
+        if self.policy.is_none() {
+            self.max_communities = None;
+        }
+        self
+    }
+
+    pub fn with_max_communities(mut self, max_communities: Option<CommunityLimit>) -> Self {
+        self.max_communities = max_communities;
+        self
+    }
 }
 
 /// Command to update an existing network.
@@ -220,6 +264,8 @@ pub struct UpdateNetwork {
     pub location: Option<String>,
     pub frozen: Option<bool>,
     pub reserved: Option<ReservedCount>,
+    pub max_communities: UpdateField<CommunityLimit>,
+    pub policy: UpdateField<NetworkPolicyName>,
 }
 
 /// Contiguous IP range excluded from automatic address allocation within a network.
@@ -403,11 +449,6 @@ pub fn network_usable_bounds(
             let network = u128::from(v6.network());
             let first = network.saturating_add(reserved.as_u32() as u128);
             let host_bits = 128u32.saturating_sub(v6.prefix_len() as u32);
-            if host_bits > 20 {
-                return Err(AppError::validation(
-                    "automatic IPv6 allocation is only supported for relatively small prefixes",
-                ));
-            }
             let size = 1u128
                 .checked_shl(host_bits)
                 .ok_or_else(|| AppError::validation("unsupported IPv6 allocation size"))?;

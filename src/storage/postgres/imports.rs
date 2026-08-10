@@ -223,7 +223,8 @@ impl PostgresStorage {
              VALUES
                 ($1::cidr, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING id, network::text AS network, description, vlan, dns_delegated,
-                       category, location, frozen, reserved, created_at, updated_at",
+                       category, location, frozen, reserved, max_communities, policy_id,
+                       created_at, updated_at",
         )
         .bind::<Text, _>(command.cidr().as_str())
         .bind::<Text, _>(command.description())
@@ -366,8 +367,11 @@ impl PostgresStorage {
         let value = resolve_bool(attributes, "value")?
             .ok_or_else(|| AppError::validation("missing required import attribute 'value'"))?;
         let updated = sql_query(
-            "INSERT INTO network_policy_attribute_values (policy_id, attribute_id, value)
-             SELECT p.id, a.id, $3
+            "INSERT INTO network_policy_attribute_values (policy_id, attribute_id, value, position)
+             SELECT p.id, a.id, $3,
+                    COALESCE((SELECT MAX(v.position) + 1
+                              FROM network_policy_attribute_values v
+                              WHERE v.policy_id = p.id), 0)
              FROM network_policies p, network_policy_attributes a
              WHERE p.name = $1 AND a.name = $2",
         )
@@ -881,6 +885,10 @@ impl PostgresStorage {
                 connection,
                 &alias_target_names(normalized, record_type.name()),
             )?,
+            ValidatedRecordContent::LegacyStructured(normalized) => Self::query_alias_owner_names(
+                connection,
+                &alias_target_names(normalized, record_type.name()),
+            )?,
             ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
         };
         let alias_owner_names = alias_lookup
@@ -1171,6 +1179,14 @@ impl ImportStore for PostgresStorage {
                                     item.kind(),
                                     message
                                 )),
+                                AppError::NotAcceptable(message) => {
+                                    AppError::not_acceptable(format!(
+                                        "import item '{}' ({}) failed: {}",
+                                        item.reference(),
+                                        item.kind(),
+                                        message
+                                    ))
+                                }
                                 AppError::Forbidden(message) => AppError::forbidden(format!(
                                     "import item '{}' ({}) failed: {}",
                                     item.reference(),

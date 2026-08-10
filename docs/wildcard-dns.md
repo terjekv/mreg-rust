@@ -11,7 +11,7 @@ This follows RFC 4592: wildcards are DNS synthesis rules at the zone level, not 
 Create wildcard records using the generic `/records` endpoint with no `owner_kind`:
 
 ```json
-POST /api/v1/dns/records
+POST /api/v2/dns/records
 {
   "type_name": "TXT",
   "owner_name": "*.example.org",
@@ -51,7 +51,7 @@ Any record type with `owner_name_syntax: "dns_name"` supports wildcard owner nam
 ### Wildcard MX (catch-all mail)
 
 ```json
-POST /api/v1/dns/records
+POST /api/v2/dns/records
 {
   "type_name": "MX",
   "owner_name": "*.example.org",
@@ -62,7 +62,7 @@ POST /api/v1/dns/records
 ### Wildcard A (catch-all web)
 
 ```json
-POST /api/v1/dns/records
+POST /api/v2/dns/records
 {
   "type_name": "A",
   "owner_name": "*.example.org",
@@ -73,7 +73,7 @@ POST /api/v1/dns/records
 ### Wildcard CNAME
 
 ```json
-POST /api/v1/dns/records
+POST /api/v2/dns/records
 {
   "type_name": "CNAME",
   "owner_name": "*.cdn.example.org",
@@ -86,10 +86,18 @@ POST /api/v1/dns/records
 Use the standard `/records` endpoint with filters:
 
 ```
-GET /api/v1/dns/records?owner_name__startswith=*.
-GET /api/v1/dns/records?owner_name=*.example.org
+GET /api/v2/dns/records?owner_name__startswith=*.
+GET /api/v2/dns/records?owner_name=*.example.org
 ```
 
 ## Relationship to the old mreg
 
 The old mreg supported wildcard hosts as actual host entities (`*.example.org` in the hosts table). In mreg-rust, wildcards are modeled more correctly as DNS records without host entities, following RFC 4592's conceptual model.
+
+The V1 compatibility API retains the old host-shaped create, detail, list, and
+delete behavior as a facade. Creating `*.example.org` through
+`POST /api/v1/hosts/` creates an unanchored wildcard TXT record, and V1 projects
+the records at that owner name into the legacy host response. It does not create
+an inventory host. The same resource is therefore managed through
+`/api/v2/dns/records` or `/api/v2/dns/rrsets` in V2 and never appears under
+`/api/v2/inventory/hosts`.

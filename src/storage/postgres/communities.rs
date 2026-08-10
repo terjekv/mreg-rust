@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{Page, PageRequest},
         types::{CidrValue, CommunityName, NetworkPolicyName},
@@ -165,6 +165,36 @@ pub(super) fn get_by_id(
     row_to_community(row)
 }
 
+pub(in crate::storage::postgres) fn update(
+    connection: &mut PgConnection,
+    community_id: Uuid,
+    command: UpdateCommunity,
+) -> Result<Community, AppError> {
+    let old = get_by_id(connection, community_id)?;
+    let name = command.name.unwrap_or_else(|| old.name().clone());
+    let description = command
+        .description
+        .unwrap_or_else(|| old.description().to_string());
+    let row = sql_query(
+        "UPDATE communities
+         SET name = $1, description = $2, updated_at = now()
+         WHERE id = $3
+         RETURNING id, policy_id,
+                   $4::text AS policy_name,
+                   $5::text AS network_cidr,
+                   name::text AS name, description,
+                   created_at, updated_at",
+    )
+    .bind::<Text, _>(name.as_str())
+    .bind::<Text, _>(description)
+    .bind::<SqlUuid, _>(community_id)
+    .bind::<Text, _>(old.policy_name().as_str())
+    .bind::<Text, _>(old.network_cidr().as_str())
+    .get_result::<CommunityRow>(connection)
+    .map_err(map_unique("community already exists"))?;
+    row_to_community(row)
+}
+
 pub(super) fn delete_by_id(
     connection: &mut PgConnection,
     community_id: Uuid,
@@ -239,6 +269,16 @@ impl CommunityStore for PostgresStorage {
     async fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         self.database
             .run(move |connection| get_by_id(connection, community_id))
+            .await
+    }
+
+    async fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        self.database
+            .run(move |connection| update(connection, community_id, command))
             .await
     }
 

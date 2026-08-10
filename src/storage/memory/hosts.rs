@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, net::IpAddr};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -27,7 +27,7 @@ use super::{
     MemoryState, MemoryStorage,
     attachments::{create_attachment_dhcp_identifier_in_state, find_or_create_attachment_in_state},
     bump_zone_serial_in_state, delete_records_by_name_and_type_in_state,
-    delete_records_by_owner_in_state, paginate_by_cursor,
+    delete_records_by_owner_in_state, paginate_by_cursor, rebuild_record_owner_counts,
     records::create_record_in_state,
     sort_and_paginate,
 };
@@ -79,7 +79,12 @@ pub(super) fn assign_ip_in_state(
 
     let (network, address) = if let Some(address) = command.address().cloned() {
         let network = most_specific_network_for_address(state, &address)?;
-        ensure_address_is_usable(state, &network, &address)?;
+        ensure_address_is_usable(
+            state,
+            &network,
+            &address,
+            command.allow_reserved_addresses(),
+        )?;
         (network, address)
     } else {
         let wanted_network = command.network().cloned().ok_or_else(|| {
@@ -99,11 +104,10 @@ pub(super) fn assign_ip_in_state(
         (network, address)
     };
 
-    let key = address.as_str();
-    if state.ip_addresses.contains_key(&key) {
+    if state.ip_addresses.contains_key(&address) {
         return Err(AppError::conflict(format!(
             "IP address '{}' is already allocated",
-            key
+            address.as_str()
         )));
     }
 
@@ -115,7 +119,7 @@ pub(super) fn assign_ip_in_state(
         command.mac_address().cloned(),
     )?;
     let assignment = IpAddressAssignment::restore(
-        Uuid::new_v4(),
+        command.assignment_id().unwrap_or_else(Uuid::new_v4),
         host.id(),
         attachment.id(),
         address,
@@ -124,7 +128,7 @@ pub(super) fn assign_ip_in_state(
         now,
         now,
     )?;
-    state.ip_addresses.insert(key, assignment.clone());
+    state.ip_addresses.insert(address, assignment.clone());
 
     // Auto-create DHCP identifiers from MAC address
     if let Some(mac) = attachment.mac_address() {
@@ -193,18 +197,21 @@ fn ensure_address_is_usable(
     state: &MemoryState,
     network: &Network,
     address: &IpAddressValue,
+    allow_reserved: bool,
 ) -> Result<(), AppError> {
     if !cidr_contains(network.cidr(), address) {
         return Err(AppError::validation(
             "IP address is outside the selected network",
         ));
     }
-    let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
-    let value = ip_to_u128(address.as_inner());
-    if value < first || value > last {
-        return Err(AppError::validation(
-            "IP address falls inside reserved or unusable network space",
-        ));
+    if !allow_reserved {
+        let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+        let value = ip_to_u128(address.as_inner());
+        if value < first || value > last {
+            return Err(AppError::validation(
+                "IP address falls inside reserved or unusable network space",
+            ));
+        }
     }
     if state
         .excluded_ranges
@@ -217,7 +224,7 @@ fn ensure_address_is_usable(
             "IP address falls inside an excluded range",
         ));
     }
-    if state.ip_addresses.contains_key(&address.as_str()) {
+    if state.ip_addresses.contains_key(address) {
         return Err(AppError::conflict(format!(
             "IP address '{}' is already allocated",
             address.as_str()
@@ -231,12 +238,33 @@ fn allocate_address_in_network(
     network: &Network,
 ) -> Result<IpAddressValue, AppError> {
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
+    let excluded = state
+        .excluded_ranges
+        .get(&network.cidr().as_str())
+        .into_iter()
+        .flat_map(|ranges| ranges.iter())
+        .map(|range| {
+            (
+                ip_to_u128(range.start_ip().as_inner()),
+                ip_to_u128(range.end_ip().as_inner()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let is_excluded = |candidate: u128| {
+        excluded
+            .iter()
+            .any(|(start, end)| candidate >= *start && candidate <= *end)
+    };
     match network.cidr().as_inner() {
         ipnet::IpNet::V4(_) => {
             for candidate in first..=last {
-                let address =
-                    IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())?;
-                if ensure_address_is_usable(state, network, &address).is_ok() {
+                let address = IpAddressValue::from_addr(IpAddr::V4(std::net::Ipv4Addr::from(
+                    candidate as u32,
+                )));
+                if is_excluded(candidate) {
+                    continue;
+                }
+                if !state.ip_addresses.contains_key(&address) {
                     return Ok(address);
                 }
             }
@@ -246,8 +274,12 @@ fn allocate_address_in_network(
         }
         ipnet::IpNet::V6(_) => {
             for candidate in first..=last {
-                let address = IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
-                if ensure_address_is_usable(state, network, &address).is_ok() {
+                let address =
+                    IpAddressValue::from_addr(IpAddr::V6(std::net::Ipv6Addr::from(candidate)));
+                if is_excluded(candidate) {
+                    continue;
+                }
+                if !state.ip_addresses.contains_key(&address) {
                     return Ok(address);
                 }
             }
@@ -266,40 +298,30 @@ fn allocate_random_address_in_network(
 
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
 
-    // Build the set of usable candidate values
-    let candidates: Vec<u128> = (first..=last)
-        .filter(|c| {
-            let addr = match network.cidr().as_inner() {
-                ipnet::IpNet::V4(_) => {
-                    IpAddressValue::new(std::net::Ipv4Addr::from(*c as u32).to_string())
-                }
-                ipnet::IpNet::V6(_) => {
-                    IpAddressValue::new(std::net::Ipv6Addr::from(*c).to_string())
-                }
-            };
-            match addr {
-                Ok(a) => ensure_address_is_usable(state, network, &a).is_ok(),
-                Err(_) => false,
-            }
-        })
-        .collect();
-
-    if candidates.is_empty() {
-        return Err(AppError::conflict(
-            "network has no remaining allocatable addresses",
-        ));
-    }
-
     let mut rng = rand::thread_rng();
-    let idx = rng.gen_range(0..candidates.len());
-    let chosen = candidates[idx];
-
-    match network.cidr().as_inner() {
+    let make_address = |candidate| match network.cidr().as_inner() {
         ipnet::IpNet::V4(_) => {
-            IpAddressValue::new(std::net::Ipv4Addr::from(chosen as u32).to_string())
+            IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())
         }
-        ipnet::IpNet::V6(_) => IpAddressValue::new(std::net::Ipv6Addr::from(chosen).to_string()),
+        ipnet::IpNet::V6(_) => IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string()),
+    };
+    // Sampling avoids materializing every address in IPv6 prefixes such as /64.
+    for _ in 0..128 {
+        let address = make_address(rng.gen_range(first..=last))?;
+        if ensure_address_is_usable(state, network, &address, false).is_ok() {
+            return Ok(address);
+        }
     }
+    // Dense small networks benefit from a deterministic fallback.
+    for candidate in first..=last {
+        let address = make_address(candidate)?;
+        if ensure_address_is_usable(state, network, &address, false).is_ok() {
+            return Ok(address);
+        }
+    }
+    Err(AppError::conflict(
+        "network has no remaining allocatable addresses",
+    ))
 }
 
 // ---------------------------------------------------------------------
@@ -313,10 +335,22 @@ pub(super) fn list_hosts_in_state(
     page: &PageRequest,
     filter: &HostFilter,
 ) -> Result<Page<Host>, AppError> {
+    let addresses_by_host = if filter.address.is_empty() {
+        None
+    } else {
+        Some(super::host_address_filter_index(state))
+    };
     let items: Vec<Host> = state
         .hosts
         .values()
-        .filter(|host| filter.matches(host, &state.ip_addresses))
+        .filter(|host| {
+            let addresses = addresses_by_host
+                .as_ref()
+                .and_then(|index| index.get(&host.id()))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            filter.matches(host, addresses)
+        })
         .cloned()
         .collect();
     sort_and_paginate(
@@ -459,9 +493,10 @@ pub(super) fn get_host_auth_context_in_state(
     state: &MemoryState,
     name: &Hostname,
 ) -> Result<HostAuthContext, AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
 
     let mut addresses = Vec::new();
     let mut seen_networks = std::collections::BTreeSet::new();
@@ -497,9 +532,10 @@ pub(super) fn update_host_in_state(
     name: &Hostname,
     command: UpdateHost,
 ) -> Result<Host, AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
     let now = Utc::now();
     let new_name = command.name.unwrap_or_else(|| host.name().clone());
     let ttl = command.ttl.resolve(host.ttl());
@@ -591,9 +627,10 @@ pub(super) fn delete_host_in_state(
     state: &mut MemoryState,
     name: &Hostname,
 ) -> Result<(), AppError> {
-    let host = state.hosts.remove(name.as_str()).ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host = state
+        .hosts
+        .remove(name.as_str())
+        .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name.as_str())))?;
     delete_records_by_owner_in_state(state, host.id());
     if let Some(zone_name) = host.zone()
         && let Some(zone) = state.forward_zones.get(zone_name.as_str())
@@ -601,9 +638,21 @@ pub(super) fn delete_host_in_state(
         let zone_id = zone.id();
         bump_zone_serial_in_state(state, zone_id);
     }
+    let ip_address_ids = state
+        .ip_addresses
+        .values()
+        .filter(|assignment| assignment.host_id() == host.id())
+        .map(|assignment| assignment.id())
+        .collect::<std::collections::HashSet<_>>();
     state
         .ip_addresses
         .retain(|_, assignment| assignment.host_id() != host.id());
+    state
+        .ptr_overrides
+        .retain(|_, ptr| ptr.host_name() != host.name());
+    state.host_community_assignments.retain(|_, assignment| {
+        assignment.host_id() != host.id() && !ip_address_ids.contains(&assignment.ip_address_id())
+    });
     Ok(())
 }
 
@@ -621,9 +670,10 @@ pub(super) fn list_ip_addresses_for_host_in_state(
     host: &Hostname,
     page: &PageRequest,
 ) -> Result<Page<IpAddressAssignment>, AppError> {
-    let host = state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", host.as_str()))
-    })?;
+    let host =
+        state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", host.as_str()))
+        })?;
     let mut items: Vec<IpAddressAssignment> = state
         .ip_addresses
         .values()
@@ -664,12 +714,11 @@ pub(super) fn get_ip_address_in_state(
     state: &MemoryState,
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
     state
         .ip_addresses
-        .get(&key)
+        .get(address)
         .cloned()
-        .ok_or_else(|| AppError::not_found(format!("IP address {key}")))
+        .ok_or_else(|| AppError::not_found(format!("IP address {}", address.as_str())))
 }
 
 pub(super) fn assign_ip_address_in_state(
@@ -728,9 +777,11 @@ pub(super) fn update_ip_address_in_state(
     address: &IpAddressValue,
     command: UpdateIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
-    let existing = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
-        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    let existing = state.ip_addresses.get(address).cloned().ok_or_else(|| {
+        AppError::not_found(format!(
+            "IP address assignment '{}' was not found",
+            address.as_str()
+        ))
     })?;
     let now = Utc::now();
     let mac = command.mac_address.resolve(existing.mac_address().cloned());
@@ -744,7 +795,7 @@ pub(super) fn update_ip_address_in_state(
         existing.created_at(),
         now,
     )?;
-    state.ip_addresses.insert(key.clone(), updated.clone());
+    state.ip_addresses.insert(*address, updated.clone());
     Ok(updated)
 }
 
@@ -752,9 +803,11 @@ pub(super) fn unassign_ip_address_in_state(
     state: &mut MemoryState,
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
-    let assignment = state.ip_addresses.remove(&key).ok_or_else(|| {
-        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    let assignment = state.ip_addresses.remove(address).ok_or_else(|| {
+        AppError::not_found(format!(
+            "IP address assignment '{}' was not found",
+            address.as_str()
+        ))
     })?;
 
     let host_name = state
@@ -764,7 +817,11 @@ pub(super) fn unassign_ip_address_in_state(
         .map(|h| h.name().as_str().to_string());
 
     if let Some(host_name) = host_name {
-        let type_name = if assignment.family() == 4 { "A" } else { "AAAA" };
+        let type_name = if assignment.family() == 4 {
+            "A"
+        } else {
+            "AAAA"
+        };
         let addr_str = assignment.address().as_str();
         let mut kept = Vec::new();
         let mut removed = Vec::new();
@@ -783,6 +840,7 @@ pub(super) fn unassign_ip_address_in_state(
             }
         }
         state.records = kept;
+        rebuild_record_owner_counts(state);
         let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
         for rrset_id in rrset_ids {
             if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
@@ -795,6 +853,67 @@ pub(super) fn unassign_ip_address_in_state(
     delete_records_by_name_and_type_in_state(state, &ptr_name, "PTR");
 
     Ok(assignment)
+}
+
+pub(super) fn move_ip_address_in_state(
+    state: &mut MemoryState,
+    old_address: &IpAddressValue,
+    command: AssignIpAddress,
+) -> Result<IpAddressAssignment, AppError> {
+    let old = get_ip_address_in_state(state, old_address)?;
+    if command.assignment_id() != Some(old.id()) {
+        return Err(AppError::validation(
+            "IP address move must preserve the assignment identity",
+        ));
+    }
+    let new_address = command
+        .address()
+        .copied()
+        .ok_or_else(|| AppError::validation("IP address move requires an explicit address"))?;
+    let new_network = most_specific_network_for_address(state, &new_address)?;
+    let related = state
+        .host_community_assignments
+        .values()
+        .filter(|item| item.ip_address_id() == old.id())
+        .cloned()
+        .collect::<Vec<_>>();
+    for item in &related {
+        let community = state
+            .communities
+            .get(&item.community_id())
+            .ok_or_else(|| AppError::not_found("community assignment target was not found"))?;
+        if community.network_cidr() != new_network.cidr() {
+            return Err(AppError::conflict(
+                "cannot move an IP address to another network while it has community assignments",
+            ));
+        }
+    }
+    unassign_ip_address_in_state(state, old_address)?;
+    let updated = assign_ip_address_in_state(state, command)?;
+    let host_name = state
+        .hosts
+        .values()
+        .find(|host| host.id() == updated.host_id())
+        .map(|host| host.name().clone())
+        .ok_or_else(|| AppError::not_found("host for moved IP address was not found"))?;
+    for old_mapping in related {
+        state.host_community_assignments.insert(
+            old_mapping.id(),
+            crate::domain::host_community_assignment::HostCommunityAssignment::restore(
+                old_mapping.id(),
+                updated.host_id(),
+                host_name.clone(),
+                updated.id(),
+                *updated.address(),
+                old_mapping.community_id(),
+                old_mapping.community_name().clone(),
+                old_mapping.policy_name().clone(),
+                old_mapping.created_at(),
+                Utc::now(),
+            ),
+        );
+    }
+    Ok(updated)
 }
 
 #[async_trait]

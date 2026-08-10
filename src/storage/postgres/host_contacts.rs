@@ -191,6 +191,42 @@ pub(in crate::storage::postgres) fn create(
     })
 }
 
+pub(in crate::storage::postgres) fn replace(
+    connection: &mut PgConnection,
+    command: CreateHostContact,
+) -> Result<HostContact, AppError> {
+    connection.transaction::<HostContact, AppError, _>(|connection| {
+        let row = sql_query(
+            "UPDATE host_contacts
+             SET display_name = $1, updated_at = now()
+             WHERE email = $2
+             RETURNING id, email::text AS email, display_name, created_at, updated_at",
+        )
+        .bind::<Nullable<Text>, _>(command.display_name())
+        .bind::<Text, _>(command.email().as_str())
+        .get_result::<HostContactRow>(connection)
+        .optional()?
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "host contact '{}' was not found",
+                command.email().as_str()
+            ))
+        })?;
+
+        sql_query("DELETE FROM host_contacts_hosts WHERE contact_id = $1")
+            .bind::<SqlUuid, _>(row.id)
+            .execute(connection)?;
+        let host_ids = PostgresStorage::resolve_host_ids(connection, command.hosts())?;
+        for host_name in command.hosts() {
+            sql_query("INSERT INTO host_contacts_hosts (host_id, contact_id) VALUES ($1, $2)")
+                .bind::<SqlUuid, _>(host_ids[host_name])
+                .bind::<SqlUuid, _>(row.id)
+                .execute(connection)?;
+        }
+        build_host_contact(connection, row)
+    })
+}
+
 pub(super) fn get_by_email(
     connection: &mut PgConnection,
     email: &str,
@@ -294,6 +330,15 @@ impl HostContactStore for PostgresStorage {
     ) -> Result<HostContact, AppError> {
         self.database
             .run(move |connection| create(connection, command))
+            .await
+    }
+
+    async fn replace_host_contact(
+        &self,
+        command: CreateHostContact,
+    ) -> Result<HostContact, AppError> {
+        self.database
+            .run(move |connection| replace(connection, command))
             .await
     }
 

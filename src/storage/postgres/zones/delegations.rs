@@ -181,6 +181,92 @@ impl PostgresStorage {
         })
     }
 
+    pub(in crate::storage::postgres) fn replace_forward_zone_delegation_impl(
+        connection: &mut PgConnection,
+        delegation_id: Uuid,
+        command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError> {
+        let zone_name = command.zone_name().as_str().to_string();
+        let name = command.name().as_str().to_string();
+        let comment = command.comment().to_string();
+        let nameserver_values = command.nameservers().to_vec();
+        connection.transaction::<ForwardZoneDelegation, AppError, _>(|connection| {
+            let zone_id = forward_zones::table
+                .filter(forward_zones::name.eq(&zone_name))
+                .select(forward_zones::id)
+                .first::<Uuid>(connection)
+                .optional()?
+                .ok_or_else(|| AppError::not_found("forward zone was not found"))?;
+            let existing = forward_zone_delegations::table
+                .filter(forward_zone_delegations::id.eq(delegation_id))
+                .select(ForwardDelegationRow::as_select())
+                .first::<ForwardDelegationRow>(connection)
+                .optional()?
+                .ok_or_else(|| AppError::not_found("forward zone delegation was not found"))?;
+            let current = existing.into_forward_delegation(Vec::new())?;
+            if current.zone_id() != zone_id || current.name().as_str() != name {
+                return Err(AppError::validation(
+                    "forward zone delegation replacement cannot move or rename the delegation",
+                ));
+            }
+            diesel::update(
+                forward_zone_delegations::table
+                    .filter(forward_zone_delegations::id.eq(delegation_id)),
+            )
+            .set((
+                forward_zone_delegations::comment.eq(&comment),
+                forward_zone_delegations::updated_at.eq(diesel::dsl::now),
+            ))
+            .execute(connection)?;
+            diesel::delete(
+                forward_zone_delegation_nameservers::table.filter(
+                    forward_zone_delegation_nameservers::delegation_id.eq(delegation_id),
+                ),
+            )
+            .execute(connection)?;
+            for ns_id in Self::lookup_nameserver_ids(connection, &nameserver_values)? {
+                insert_into(forward_zone_delegation_nameservers::table)
+                    .values((
+                        forward_zone_delegation_nameservers::delegation_id.eq(delegation_id),
+                        forward_zone_delegation_nameservers::nameserver_id.eq(ns_id),
+                    ))
+                    .execute(connection)?;
+            }
+            sql_query("DELETE FROM records WHERE owner_id = $1")
+                .bind::<SqlUuid, _>(delegation_id)
+                .execute(connection)?;
+            sql_query(
+                "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
+            )
+            .execute(connection)?;
+            for ns in &nameserver_values {
+                use crate::domain::resource_records::{CreateRecordInstance, RecordOwnerKind};
+                use crate::domain::types::RecordTypeName;
+                Self::auto_create_record(
+                    connection,
+                    "NS",
+                    &name,
+                    serde_json::json!({"nsdname": ns.as_str()}),
+                    |type_name, data| {
+                        CreateRecordInstance::new(
+                            RecordTypeName::new(type_name)?,
+                            RecordOwnerKind::ForwardZoneDelegation,
+                            &name,
+                            None,
+                            data,
+                        )
+                    },
+                )?;
+            }
+            Self::bump_zone_serial_tx(connection, zone_id)?;
+            let row = forward_zone_delegations::table
+                .filter(forward_zone_delegations::id.eq(delegation_id))
+                .select(ForwardDelegationRow::as_select())
+                .first::<ForwardDelegationRow>(connection)?;
+            row.into_forward_delegation(nameserver_values)
+        })
+    }
+
     pub(in crate::storage::postgres) fn list_reverse_zone_delegations_impl(
         connection: &mut PgConnection,
         zone_name: &str,

@@ -59,7 +59,7 @@ async fn call_json(request: actix_http::Request, state: AppState) -> (StatusCode
         App::new()
             .app_data(web::Data::new(state))
             .wrap(middleware::Authn)
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
     let response = test::call_service(&app, request).await;
@@ -338,6 +338,35 @@ async fn local_provider_login_issues_namespaced_identity() {
     assert_eq!(body["principal"]["username"], "admin");
     assert_eq!(body["identity_scope"], "local");
     assert_eq!(body["auth_provider_kind"], "local");
+}
+
+#[actix_web::test]
+async fn legacy_token_auth_uses_local_provider_scope() {
+    let mut config = base_config();
+    config.auth_mode = AuthMode::Scoped;
+    config.auth_jwt_signing_key = Some("jwt-signing-secret".to_string());
+    config.auth_providers = vec![local_provider("local")];
+    let state = build_state(config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .wrap(middleware::Authn)
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/token-auth/")
+            .set_form([("username", "admin"), ("password", "secret")])
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let body: Value = test::read_body_json(response).await;
+
+    assert_eq!((status, body["token"].is_string()), (StatusCode::OK, true));
 }
 
 #[actix_web::test]

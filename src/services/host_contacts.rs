@@ -48,6 +48,37 @@ pub async fn create_host_contact(
     Ok(contact)
 }
 
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "host_contact"))]
+pub async fn replace_host_contact(
+    storage: &DynStorage,
+    command: CreateHostContact,
+    events: &EventSinkClient,
+) -> Result<HostContact, AppError> {
+    let (contact, history) = storage
+        .transaction(move |tx| {
+            let old = tx
+                .host_contacts()
+                .get_host_contact_by_email(command.email())?;
+            let contact = tx.host_contacts().replace_host_contact(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "host_contact",
+                Some(contact.id()),
+                contact.email().as_str(),
+                actions::UPDATE,
+                json!({
+                    "old_hosts": old.hosts(),
+                    "hosts": contact.hosts(),
+                    "display_name": contact.display_name(),
+                }),
+            ))?;
+            Ok((contact, event))
+        })
+        .await?;
+    events.emit(&DomainEvent::from(&history)).await;
+    Ok(contact)
+}
+
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "host_contact"))]
 pub async fn get_host_contact(
     store: &(dyn HostContactStore + Send + Sync),

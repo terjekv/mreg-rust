@@ -80,7 +80,7 @@ Every request gets a tracing span with these fields:
 | `request_id` | `X-Request-Id` header or auto-generated UUID | `"550e8400-e29b-41d4-..."` |
 | `principal` | `X-Mreg-User` header or `"anonymous"` | `"admin"` |
 | `http.method` | Request method | `"POST"` |
-| `http.target` | Request path | `"/api/v1/inventory/hosts"` |
+| `http.target` | Request path | `"/api/v2/inventory/hosts"` |
 | `http.status_code` | Response status (set on completion) | `201` |
 
 A log line is emitted when the request completes:
@@ -151,7 +151,7 @@ When `MREG_JSON_LOGS=true`, each log line is a self-contained JSON object:
     "request_id": "550e8400-e29b-41d4-a716-446655440000",
     "principal": "admin",
     "http.method": "POST",
-    "http.target": "/api/v1/inventory/hosts",
+    "http.target": "/api/v2/inventory/hosts",
     "http.status_code": 201
   },
   "spans": [

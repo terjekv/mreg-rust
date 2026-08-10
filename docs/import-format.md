@@ -1,6 +1,6 @@
 # Import Format
 
-This page defines the contract for bulk imports via `POST /api/v1/workflows/imports`.
+This page defines the contract for bulk imports via `POST /api/v2/workflows/imports`.
 It covers payload shape, execution flow, reference rules, backend compatibility,
 failure behavior, and migration-focused examples.
 
@@ -46,9 +46,9 @@ Validation baseline:
 
 Imports are a staged workflow, not a single synchronous mutation:
 
-1. `POST /api/v1/workflows/imports` stores the batch and creates an `import_batch` task.
-2. A worker (or automation) calls `POST /api/v1/workflows/tasks/run-next` to claim and execute queued tasks (including imports).
-3. `GET /api/v1/workflows/imports` shows status and summaries (`validation_report`, `commit_summary`).
+1. `POST /api/v2/workflows/imports` stores the batch and creates an `import_batch` task.
+2. A worker (or automation) calls `POST /api/v2/workflows/tasks/run-next` to claim and execute queued tasks (including imports).
+3. `GET /api/v2/workflows/imports` shows status and summaries (`validation_report`, `commit_summary`).
 
 This means `POST /workflows/imports` by itself does not apply domain entities yet.
 In production, a worker should continuously run the task runner flow; manual
@@ -231,7 +231,7 @@ reference them from `ip_address`, `attachment_dhcp_identifier`,
 ### Minimal staged batch
 
 ```json
-POST /api/v1/workflows/imports
+POST /api/v2/workflows/imports
 {
   "requested_by": "migration-script",
   "items": [
@@ -264,14 +264,14 @@ Typical create response (staged, not yet executed):
 Then execute pending tasks:
 
 ```json
-POST /api/v1/workflows/tasks/run-next
+POST /api/v2/workflows/tasks/run-next
 {}
 ```
 
 ### Attachment-first IP import
 
 ```json
-POST /api/v1/workflows/imports
+POST /api/v2/workflows/imports
 {
   "items": [
     {
@@ -337,7 +337,7 @@ POST /api/v1/workflows/imports
 ### Atomic rollback on late failure
 
 ```json
-POST /api/v1/workflows/imports
+POST /api/v2/workflows/imports
 {
   "items": [
     {

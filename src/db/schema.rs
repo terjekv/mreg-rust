@@ -342,6 +342,7 @@ diesel::table! {
         policy_id -> Uuid,
         attribute_id -> Uuid,
         value -> Bool,
+        position -> Int4,
     }
 }
 

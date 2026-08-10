@@ -71,5 +71,8 @@ impl RawRdataValue {
 #[derive(Clone, Debug)]
 pub enum ValidatedRecordContent {
     Structured(Value),
+    /// Structured data accepted through the explicit V1 compatibility path.
+    /// It is retained honestly but is not rendered as canonical DNS RDATA.
+    LegacyStructured(Value),
     RawRdata(RawRdataValue),
 }

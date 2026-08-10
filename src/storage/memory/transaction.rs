@@ -13,7 +13,7 @@ use crate::{
             UpdateHostAttachment,
         },
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::{
             AttachmentCommunityAssignmentFilter, BacnetIdFilter, CommunityFilter,
             HostCommunityAssignmentFilter, HostContactFilter, HostFilter, HostGroupFilter,
@@ -33,7 +33,11 @@ use crate::{
         label::{CreateLabel, Label, UpdateLabel},
         nameserver::{CreateNameServer, NameServer, UpdateNameServer},
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyAttributeValue, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         resource_records::{
@@ -42,8 +46,8 @@ use crate::{
         },
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
-            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyName, RecordTypeName,
-            ZoneName,
+            HostPolicyName, Hostname, IpAddressValue, LabelName, NetworkPolicyAttributeName,
+            NetworkPolicyName, RecordTypeName, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -85,7 +89,7 @@ use super::{
     },
     communities::{
         create_community_in_state, delete_community_in_state, find_community_by_names_in_state,
-        get_community_in_state, list_communities_in_state,
+        get_community_in_state, list_communities_in_state, update_community_in_state,
     },
     host_community_assignments::{
         create_host_community_assignment_in_state, delete_host_community_assignment_in_state,
@@ -94,11 +98,12 @@ use super::{
     host_contacts::{
         create_host_contact_in_state, delete_host_contact_in_state,
         get_host_contact_by_email_in_state, list_host_contacts_for_hosts_in_state,
-        list_host_contacts_in_state,
+        list_host_contacts_in_state, replace_host_contact_in_state,
     },
     host_groups::{
         create_host_group_in_state, delete_host_group_in_state, get_host_group_by_name_in_state,
         list_host_groups_for_hosts_in_state, list_host_groups_in_state,
+        replace_host_group_in_state,
     },
     host_policy::{
         add_atom_to_role_in_state, add_host_to_role_in_state, add_label_to_role_in_state,
@@ -113,8 +118,8 @@ use super::{
         get_host_auth_context_in_state, get_host_by_name_in_state, get_ip_address_in_state,
         list_hosts_by_names_in_state, list_hosts_in_state,
         list_ip_addresses_for_host_in_state, list_ip_addresses_for_hosts_in_state,
-        list_ip_addresses_in_state, unassign_ip_address_in_state, update_host_in_state,
-        update_ip_address_in_state,
+        list_ip_addresses_in_state, move_ip_address_in_state, unassign_ip_address_in_state,
+        update_host_in_state, update_ip_address_in_state,
     },
     labels::{
         create_label_in_state, delete_label_in_state, get_label_by_name_in_state,
@@ -125,18 +130,23 @@ use super::{
         list_nameservers_in_state, update_nameserver_in_state,
     },
     network_policies::{
-        create_network_policy_in_state, delete_network_policy_in_state,
-        get_network_policy_by_name_in_state, list_network_policies_in_state,
+        create_network_policy_attribute_in_state, create_network_policy_in_state,
+        delete_network_policy_attribute_in_state, delete_network_policy_in_state,
+        get_network_policy_attribute_by_name_in_state, get_network_policy_by_name_in_state,
+        list_network_policies_in_state, list_network_policy_attribute_values_in_state,
+        list_network_policy_attributes_in_state, update_network_policy_attribute_in_state,
+        update_network_policy_in_state,
     },
     networks::{
         add_excluded_range_in_state, count_unused_addresses_in_state, create_network_in_state,
-        delete_network_in_state, get_network_by_cidr_in_state, list_excluded_ranges_in_state,
-        list_networks_in_state, list_unused_addresses_in_state, list_used_addresses_in_state,
-        update_network_in_state,
+        delete_excluded_range_in_state, delete_network_in_state, get_network_by_cidr_in_state,
+        list_excluded_ranges_in_state, list_networks_in_state, list_unused_addresses_in_state,
+        list_used_addresses_in_state, update_network_in_state,
     },
     ptr_overrides::{
         create_ptr_override_in_state, delete_ptr_override_in_state,
         get_ptr_override_by_address_in_state, list_ptr_overrides_in_state,
+        replace_ptr_override_in_state,
     },
     records::{
         create_record_type_in_state, create_record_with_serial_bump_in_state,
@@ -155,7 +165,8 @@ use super::{
         get_forward_zone_by_name_in_state, get_reverse_zone_by_name_in_state,
         list_forward_zone_delegations_in_state, list_forward_zones_in_state,
         list_reverse_zone_delegations_in_state, list_reverse_zones_in_state,
-        update_forward_zone_in_state, update_reverse_zone_in_state,
+        replace_forward_zone_delegation_in_state, update_forward_zone_in_state,
+        update_reverse_zone_in_state,
     },
 };
 
@@ -297,6 +308,14 @@ impl<'tx> TxHostStore for MemTxStorage<'tx> {
         assign_ip_address_in_state(&mut self.state.borrow_mut(), command)
     }
 
+    fn move_ip_address(
+        &self,
+        address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        move_ip_address_in_state(&mut self.state.borrow_mut(), address, command)
+    }
+
     fn update_ip_address(
         &self,
         address: &IpAddressValue,
@@ -421,6 +440,17 @@ impl<'tx> TxZoneStore for MemTxStorage<'tx> {
     ) -> Result<ForwardZoneDelegation, AppError> {
         create_forward_zone_delegation_in_state(&mut self.state.borrow_mut(), command)
     }
+    fn replace_forward_zone_delegation(
+        &self,
+        delegation_id: Uuid,
+        command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError> {
+        replace_forward_zone_delegation_in_state(
+            &mut self.state.borrow_mut(),
+            delegation_id,
+            command,
+        )
+    }
     fn delete_forward_zone_delegation(&self, delegation_id: Uuid) -> Result<(), AppError> {
         delete_forward_zone_delegation_in_state(&mut self.state.borrow_mut(), delegation_id)
     }
@@ -458,6 +488,9 @@ impl<'tx> TxHostContactStore for MemTxStorage<'tx> {
     }
     fn create_host_contact(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
         create_host_contact_in_state(&mut self.state.borrow_mut(), command)
+    }
+    fn replace_host_contact(&self, command: CreateHostContact) -> Result<HostContact, AppError> {
+        replace_host_contact_in_state(&mut self.state.borrow_mut(), command)
     }
     fn get_host_contact_by_email(
         &self,
@@ -513,6 +546,13 @@ impl<'tx> TxNetworkStore for MemTxStorage<'tx> {
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError> {
         add_excluded_range_in_state(&mut self.state.borrow_mut(), network, command)
+    }
+    fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: Uuid,
+    ) -> Result<(), AppError> {
+        delete_excluded_range_in_state(&mut self.state.borrow_mut(), network, range_id)
     }
     fn list_used_addresses(
         &self,
@@ -668,6 +708,13 @@ impl<'tx> TxHostGroupStore for MemTxStorage<'tx> {
     fn create_host_group(&self, command: CreateHostGroup) -> Result<HostGroup, AppError> {
         create_host_group_in_state(&mut self.state.borrow_mut(), command)
     }
+    fn replace_host_group(
+        &self,
+        name: &HostGroupName,
+        command: CreateHostGroup,
+    ) -> Result<HostGroup, AppError> {
+        replace_host_group_in_state(&mut self.state.borrow_mut(), name, command)
+    }
     fn get_host_group_by_name(&self, name: &HostGroupName) -> Result<HostGroup, AppError> {
         get_host_group_by_name_in_state(&self.state.borrow(), name)
     }
@@ -727,6 +774,12 @@ impl<'tx> TxPtrOverrideStore for MemTxStorage<'tx> {
     ) -> Result<PtrOverride, AppError> {
         create_ptr_override_in_state(&mut self.state.borrow_mut(), command)
     }
+    fn replace_ptr_override(
+        &self,
+        command: CreatePtrOverride,
+    ) -> Result<PtrOverride, AppError> {
+        replace_ptr_override_in_state(&mut self.state.borrow_mut(), command)
+    }
     fn get_ptr_override_by_address(
         &self,
         address: &IpAddressValue,
@@ -758,8 +811,29 @@ impl<'tx> TxNetworkPolicyStore for MemTxStorage<'tx> {
     ) -> Result<NetworkPolicy, AppError> {
         get_network_policy_by_name_in_state(&self.state.borrow(), name)
     }
+    fn update_network_policy(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+        update_network_policy_in_state(&mut self.state.borrow_mut(), name, command)
+    }
     fn delete_network_policy(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         delete_network_policy_in_state(&mut self.state.borrow_mut(), name)
+    }
+    fn list_network_policy_attribute_values(&self, policy: &NetworkPolicyName) -> Result<Vec<NetworkPolicyAttributeValue>, AppError> {
+        list_network_policy_attribute_values_in_state(&self.state.borrow(), policy)
+    }
+    fn list_network_policy_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        list_network_policy_attributes_in_state(&self.state.borrow(), page)
+    }
+    fn create_network_policy_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        create_network_policy_attribute_in_state(&mut self.state.borrow_mut(), command)
+    }
+    fn get_network_policy_attribute_by_name(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+        get_network_policy_attribute_by_name_in_state(&self.state.borrow(), name)
+    }
+    fn update_network_policy_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+        update_network_policy_attribute_in_state(&mut self.state.borrow_mut(), name, command)
+    }
+    fn delete_network_policy_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+        delete_network_policy_attribute_in_state(&mut self.state.borrow_mut(), name)
     }
 }
 
@@ -776,6 +850,13 @@ impl<'tx> TxCommunityStore for MemTxStorage<'tx> {
     }
     fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         get_community_in_state(&self.state.borrow(), community_id)
+    }
+    fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        update_community_in_state(&mut self.state.borrow_mut(), community_id, command)
     }
     fn delete_community(&self, community_id: Uuid) -> Result<(), AppError> {
         delete_community_in_state(&mut self.state.borrow_mut(), community_id)
