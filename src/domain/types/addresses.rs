@@ -31,6 +31,7 @@ impl MacAddressKind {
 pub struct MacAddressValue(MacAddr);
 
 impl MacAddressValue {
+    #[inline(always)]
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
         let value = value.as_ref().trim();
         let parsed = match MacAddr6::from_str(value) {
