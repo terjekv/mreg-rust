@@ -33,7 +33,15 @@ pub struct MacAddressValue(MacAddr);
 impl MacAddressValue {
     #[inline(always)]
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        let bytes = value.as_bytes();
+        let value = if bytes.first().is_some_and(u8::is_ascii_hexdigit)
+            && bytes.last().is_some_and(u8::is_ascii_hexdigit)
+        {
+            value
+        } else {
+            value.trim()
+        };
         let parsed = match MacAddr6::from_str(value) {
             Ok(address) => MacAddr::V6(address),
             Err(error @ ParseError::InvalidCharacter(..)) => {

@@ -37,6 +37,7 @@ mod tests {
     #[rstest]
     #[case("aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF")]
     #[case("aa-bb-cc-dd-ee-ff-00-11", "AA:BB:CC:DD:EE:FF:00:11")]
+    #[case("\u{2003}aa:bb:cc:dd:ee:ff\u{2003}", "AA:BB:CC:DD:EE:FF")]
     fn mac_address_normalizes_both_lengths(#[case] raw: &str, #[case] expected: &str) {
         let value = MacAddressValue::new(raw).expect("MAC address should parse");
         assert_eq!(value.as_str(), expected);
