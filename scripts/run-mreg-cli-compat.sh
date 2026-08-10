@@ -47,7 +47,14 @@ if ! curl --fail --silent http://127.0.0.1:8000/api/meta/health/heartbeat >/dev/
     exit 1
 fi
 
-docker build -f "$MREG_CLI_DIR/ci/Dockerfile" -t mreg-cli-compat "$MREG_CLI_DIR"
+# The pinned Dockerfile bootstraps an obsolete uv and then asks it to update
+# itself. Install the lockfile-compatible release directly so the fixture does
+# not depend on the old self-updater or on whichever uv version is latest.
+sed \
+    -e 's#/uv/0\.5\.6/#/uv/0.11.28/#' \
+    -e '/\/root\/\.local\/bin\/uv self update -q/d' \
+    "$MREG_CLI_DIR/ci/Dockerfile" |
+    docker build -f - -t mreg-cli-compat "$MREG_CLI_DIR"
 if [[ $(uname -s) == Darwin ]]; then
     SERVER_URL=http://host.docker.internal:8000
     NETWORK_ARG=

@@ -57,7 +57,7 @@ use crate::{
             RecordInstance, RecordRrset, RecordTypeDefinition, built_in_record_types,
         },
         tasks::TaskEnvelope,
-        types::{IpAddressValue, NetworkPolicyAttributeName},
+        types::{IpAddressValue, MacAddressValue, NetworkPolicyAttributeName},
         zone::{ForwardZone, ForwardZoneDelegation, ReverseZone, ReverseZoneDelegation},
     },
     errors::AppError,
@@ -116,6 +116,16 @@ pub(super) fn host_address_filter_index(state: &MemoryState) -> HashMap<Uuid, Ve
     index
 }
 
+pub(super) fn rebuild_record_owner_counts(state: &mut MemoryState) {
+    state.record_owner_counts.clear();
+    for record in &state.records {
+        *state
+            .record_owner_counts
+            .entry(record.owner_name().to_string())
+            .or_default() += 1;
+    }
+}
+
 /// Simple pagination for types without a UUID id (e.g. BacnetIdAssignment).
 pub(super) fn paginate_simple<T>(items: Vec<T>, page: &PageRequest) -> Page<T> {
     let total = items.len() as u64;
@@ -168,6 +178,35 @@ pub(super) struct StoredImportBatch {
     pub(super) summary: ImportBatchSummary,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct HostAttachmentKey {
+    host_id: Uuid,
+    network_id: Uuid,
+    mac_address: Option<MacAddressValue>,
+}
+
+impl HostAttachmentKey {
+    pub(super) fn new(
+        host_id: Uuid,
+        network_id: Uuid,
+        mac_address: Option<&MacAddressValue>,
+    ) -> Self {
+        Self {
+            host_id,
+            network_id,
+            mac_address: mac_address.cloned(),
+        }
+    }
+
+    pub(super) fn from_attachment(attachment: &HostAttachment) -> Self {
+        Self::new(
+            attachment.host_id(),
+            attachment.network_id(),
+            attachment.mac_address(),
+        )
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct MemoryState {
     pub(super) host_policy_atoms: BTreeMap<String, HostPolicyAtom>,
@@ -182,6 +221,7 @@ pub(super) struct MemoryState {
     pub(super) excluded_ranges: BTreeMap<String, Vec<ExcludedRange>>,
     pub(super) hosts: BTreeMap<String, Host>,
     pub(super) host_attachments: BTreeMap<Uuid, HostAttachment>,
+    pub(super) host_attachment_keys: HashMap<HostAttachmentKey, Uuid>,
     pub(super) ip_addresses: BTreeMap<IpAddressValue, IpAddressAssignment>,
     pub(super) host_contacts: BTreeMap<String, HostContact>,
     pub(super) host_groups: BTreeMap<String, HostGroup>,
@@ -202,6 +242,7 @@ pub(super) struct MemoryState {
     pub(super) record_types: BTreeMap<String, RecordTypeDefinition>,
     pub(super) rrsets: BTreeMap<Uuid, RecordRrset>,
     pub(super) records: Vec<RecordInstance>,
+    pub(super) record_owner_counts: HashMap<String, usize>,
     pub(super) history_events: Vec<HistoryEvent>,
     pub(super) revoked_tokens: BTreeMap<String, (String, chrono::DateTime<Utc>)>,
     pub(super) principal_revoked_before: BTreeMap<String, chrono::DateTime<Utc>>,
@@ -335,6 +376,7 @@ pub(super) fn delete_records_by_owner_in_state(state: &mut MemoryState, owner_id
         }
     }
     state.records = kept;
+    rebuild_record_owner_counts(state);
     let count = removed.len() as u64;
     let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
     for rrset_id in rrset_ids {
@@ -364,6 +406,7 @@ pub(super) fn delete_records_by_name_and_type_in_state(
         }
     }
     state.records = kept;
+    rebuild_record_owner_counts(state);
     let count = removed.len() as u64;
     let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
     for rrset_id in rrset_ids {

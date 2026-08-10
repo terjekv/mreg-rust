@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Avoided linear in-memory attachment and DNS relationship lookups during
+  automatic IP assignment as inventories grow.
 - Kept v1 compatibility mutations isolated from native v2 semantics: host and
   delegation cleanup is identity-based, relationship and record moves preserve
   UUIDs where possible, and native duplicate-create conflict behavior remains

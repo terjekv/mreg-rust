@@ -22,7 +22,8 @@ use crate::{
 };
 
 use super::{
-    MemoryState, MemoryStorage, bump_zone_serial_in_state, paginate_by_cursor, sort_and_paginate,
+    MemoryState, MemoryStorage, bump_zone_serial_in_state, paginate_by_cursor,
+    rebuild_record_owner_counts, sort_and_paginate,
 };
 
 pub(super) fn create_record_in_state(
@@ -59,41 +60,33 @@ pub(super) fn create_record_in_state(
             command.raw_rdata(),
         )?
     };
-    let same_owner_records = state
-        .records
-        .iter()
-        .filter(|record| record.owner_name() == command.owner_name().as_str())
-        .map(|record| {
-            ExistingRecordSummary::new(
+    let (same_owner_records, same_rrset_records, existing_rrset_id) = if state
+        .record_owner_counts
+        .contains_key(command.owner_name().as_str())
+    {
+        let mut same_owner_records = Vec::new();
+        let mut same_rrset_records = Vec::new();
+        let mut existing_rrset_id = None;
+        for record in &state.records {
+            if record.owner_name() != command.owner_name().as_str() {
+                continue;
+            }
+            let summary = ExistingRecordSummary::new(
                 record.type_name().clone(),
                 record.ttl(),
                 record.data().clone(),
                 record.raw_rdata().cloned(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let existing_rrset_id = state
-        .rrsets
-        .values()
-        .find(|rrset| {
-            rrset.type_id() == record_type.id()
-                && rrset.owner_name() == command.owner_name()
-                && rrset.dns_class() == &DnsClass::IN
-        })
-        .map(RecordRrset::id);
-    let same_rrset_records = state
-        .records
-        .iter()
-        .filter(|record| existing_rrset_id.is_some_and(|rrset_id| record.rrset_id() == rrset_id))
-        .map(|record| {
-            ExistingRecordSummary::new(
-                record.type_name().clone(),
-                record.ttl(),
-                record.data().clone(),
-                record.raw_rdata().cloned(),
-            )
-        })
-        .collect::<Vec<_>>();
+            );
+            if record.type_id() == record_type.id() {
+                existing_rrset_id = Some(record.rrset_id());
+                same_rrset_records.push(summary.clone());
+            }
+            same_owner_records.push(summary);
+        }
+        (same_owner_records, same_rrset_records, existing_rrset_id)
+    } else {
+        (Vec::new(), Vec::new(), None)
+    };
     let alias_owner_names = match &validated {
         ValidatedRecordContent::Structured(normalized) => {
             alias_target_names(normalized, record_type.name())
@@ -181,6 +174,10 @@ pub(super) fn create_record_in_state(
         now,
     );
     state.records.push(record.clone());
+    *state
+        .record_owner_counts
+        .entry(record.owner_name().to_string())
+        .or_default() += 1;
     Ok(record)
 }
 
@@ -611,6 +608,7 @@ pub(super) fn delete_record_in_state(
         .position(|r| r.id() == record_id)
         .ok_or_else(|| AppError::not_found("record not found"))?;
     let removed = state.records.remove(position);
+    rebuild_record_owner_counts(state);
     let zone_id = removed.zone_id();
     let rrset_id = removed.rrset_id();
     let rrset_still_has_records = state.records.iter().any(|r| r.rrset_id() == rrset_id);
@@ -657,6 +655,7 @@ pub(super) fn delete_rrset_in_state(
         .remove(&rrset_id)
         .ok_or_else(|| AppError::not_found("rrset not found"))?;
     state.records.retain(|r| r.rrset_id() != rrset_id);
+    rebuild_record_owner_counts(state);
     if let Some(zone_id) = rrset.zone_id() {
         bump_zone_serial_in_state(state, zone_id);
     }
@@ -691,6 +690,7 @@ pub(super) fn delete_records_by_owner_in_state(
         }
     });
     let count = original_len.saturating_sub(state.records.len()) as u64;
+    rebuild_record_owner_counts(state);
     for rrset_id in rrset_ids {
         if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
             state.rrsets.remove(&rrset_id);
@@ -718,6 +718,7 @@ pub(super) fn delete_records_by_owner_name_and_type_in_state(
         }
     }
     state.records = kept;
+    rebuild_record_owner_counts(state);
     let count = removed_records.len() as u64;
     let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
     for rrset_id in rrset_ids {
@@ -761,6 +762,7 @@ pub(super) fn rename_record_owner_in_state(
             }
         })
         .collect();
+    rebuild_record_owner_counts(state);
     // Update rrsets where anchor_id matches
     let rrset_ids: Vec<Uuid> = state
         .rrsets

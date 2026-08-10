@@ -27,7 +27,7 @@ use super::{
     MemoryState, MemoryStorage,
     attachments::{create_attachment_dhcp_identifier_in_state, find_or_create_attachment_in_state},
     bump_zone_serial_in_state, delete_records_by_name_and_type_in_state,
-    delete_records_by_owner_in_state, paginate_by_cursor,
+    delete_records_by_owner_in_state, paginate_by_cursor, rebuild_record_owner_counts,
     records::create_record_in_state,
     sort_and_paginate,
 };
@@ -840,6 +840,7 @@ pub(super) fn unassign_ip_address_in_state(
             }
         }
         state.records = kept;
+        rebuild_record_owner_counts(state);
         let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
         for rrset_id in rrset_ids {
             if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
