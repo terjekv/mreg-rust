@@ -165,10 +165,10 @@ Django mreg has limited DHCP support (MAC address on IP assignment, export scrip
 
 mreg-rust introduces a full DHCP data model:
 
-- **Attachments** represent a host's network interface (NIC), with optional MAC address
+- **Attachments** represent a host's network interface (NIC), with an optional EUI-48 or EUI-64 MAC address
 - **DHCP identifiers** per attachment: IPv4 `client_id` or IPv6 DUID (LLT, EN, LL, UUID, raw), with priority ordering
 - **Prefix reservations** for DHCPv6-PD
-- **Auto-creation** of identifiers from MAC when IPs are assigned (configurable via `MREG_DHCP_AUTO_V4_CLIENT_ID` and `MREG_DHCP_AUTO_V6_DUID_LL`)
+- **Auto-creation** of Ethernet identifiers from EUI-48 addresses when IPs are assigned (configurable via `MREG_DHCP_AUTO_V4_CLIENT_ID` and `MREG_DHCP_AUTO_V6_DUID_LL`)
 - **Built-in export templates** for Kea DHCPv4/v6 and ISC DHCPd files, both full configs and host snippets.
 
 See [dhcp-and-attachments.md](dhcp-and-attachments.md) for the full workflow.

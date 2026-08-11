@@ -17,12 +17,44 @@ pub use update_field::*;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::{
         BacnetIdentifier, CidrValue, CommunityName, DnsCharacterString, DnsName, DomainNameValue,
         EmailAddressValue, HexEncodedValue, HostGroupName, Hostname, IpAddressValue, Ipv4AddrValue,
-        Ipv6AddrValue, LabelName, NetworkPolicyName, RecordTypeName, SerialNumber, SoaSeconds, Ttl,
-        VlanId,
+        Ipv6AddrValue, LabelName, MacAddressKind, MacAddressValue, NetworkPolicyName,
+        RecordTypeName, SerialNumber, SoaSeconds, Ttl, VlanId,
     };
+
+    #[rstest]
+    #[case("aa:bb:cc:dd:ee:ff", MacAddressKind::Eui48)]
+    #[case("aa:bb:cc:dd:ee:ff:00:11", MacAddressKind::Eui64)]
+    fn mac_address_distinguishes_eui_kind(#[case] raw: &str, #[case] expected: MacAddressKind) {
+        let value = MacAddressValue::new(raw).expect("MAC address should parse");
+        assert_eq!(value.kind(), expected);
+    }
+
+    #[rstest]
+    #[case("aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF")]
+    #[case("aa-bb-cc-dd-ee-ff-00-11", "AA:BB:CC:DD:EE:FF:00:11")]
+    #[case("\u{2003}aa:bb:cc:dd:ee:ff\u{2003}", "AA:BB:CC:DD:EE:FF")]
+    fn mac_address_normalizes_both_lengths(#[case] raw: &str, #[case] expected: &str) {
+        let value = MacAddressValue::new(raw).expect("MAC address should parse");
+        assert_eq!(value.as_str(), expected);
+    }
+
+    #[rstest]
+    #[case("aa:bb:cc:dd:ee:ff", true)]
+    #[case("aa:bb:cc:dd:ee:ff:00:11", false)]
+    fn mac_address_exposes_only_eui48_as_ethernet(#[case] raw: &str, #[case] expected: bool) {
+        let value = MacAddressValue::new(raw).expect("MAC address should parse");
+        assert_eq!(value.as_eui48().is_some(), expected);
+    }
+
+    #[test]
+    fn mac_address_rejects_unsupported_length() {
+        assert!(MacAddressValue::new("aa:bb:cc:dd:ee:ff:00").is_err());
+    }
 
     #[test]
     fn dns_names_are_canonicalized_to_lowercase_without_trailing_dot() {

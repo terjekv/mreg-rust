@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 use common::TestCtx;
 use mreg_rust::domain::{
+    exports::CreateExportRun,
     pagination::PageRequest,
     tasks::{CreateTask, TaskStatus},
 };
@@ -411,6 +412,38 @@ async fn ip_patch_mac_scenario(ctx: &TestCtx) {
             .as_str()
             .unwrap()
             .eq_ignore_ascii_case("aa:bb:cc:dd:ee:ff")
+    );
+}
+
+async fn ip_assign_eui64_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(4);
+    let host = ctx.host("eui64");
+    let address = ctx.ip_in_cidr(&cidr, 10);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+
+    let (status, body) = ctx
+        .post_json(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:11",
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        (
+            status,
+            body["mac_address"].as_str(),
+            body["mac_address_kind"].as_str(),
+        ),
+        (
+            StatusCode::CREATED,
+            Some("AA:BB:CC:DD:EE:FF:00:11"),
+            Some("eui64"),
+        )
     );
 }
 
@@ -1407,6 +1440,10 @@ dual_backend_test!(ip_patch_mac, |ctx| {
     ip_patch_mac_scenario(&ctx).await;
 });
 
+dual_backend_test!(ip_assign_eui64, |ctx| {
+    ip_assign_eui64_scenario(&ctx).await;
+});
+
 dual_backend_test!(zone_create, |ctx| {
     zone_create_scenario(&ctx).await;
 });
@@ -2263,6 +2300,156 @@ async fn ip_assign_no_auto_dhcp_without_mac_scenario(ctx: &TestCtx) {
     );
 }
 
+async fn ip_assign_eui64_does_not_create_ethernet_identifiers_scenario(ctx: &TestCtx) {
+    let cidr_v4 = ctx.cidr(4);
+    let address_v4 = ctx.ip_in_cidr(&cidr_v4, 10);
+    let host = ctx.host("dhcp-eui64");
+    ctx.seed_network(&cidr_v4).await;
+    ctx.seed_host(&host).await;
+
+    let status_v4 = ctx
+        .post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address_v4,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:11",
+            }),
+        )
+        .await;
+
+    let v4_cidr_seed = ctx.cidr(5);
+    let prefix = v4_cidr_seed.strip_suffix("/24").expect("expected /24");
+    let octets: Vec<&str> = prefix.split('.').collect();
+    let group = format!(
+        "{:x}{:02x}",
+        octets[1].parse::<u16>().unwrap(),
+        octets[2].parse::<u16>().unwrap()
+    );
+    let cidr_v6 = format!("fd00:{group}::/120");
+    let address_v6 = format!("fd00:{group}::10");
+    let status_v6_network = ctx
+        .post(
+            "/inventory/networks",
+            json!({
+                "cidr": cidr_v6,
+                "description": "EUI-64 DHCP behavior test",
+            }),
+        )
+        .await;
+    let status_v6 = ctx
+        .post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address_v6,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:12",
+            }),
+        )
+        .await;
+
+    let body = ctx.get_json(&format!("/inventory/hosts/{host}")).await;
+    let identifier_count = body["attachments"]
+        .as_array()
+        .expect("attachments list")
+        .iter()
+        .flat_map(|attachment| {
+            attachment["dhcp_identifiers"]
+                .as_array()
+                .expect("DHCP identifier list")
+        })
+        .count();
+
+    assert_eq!(
+        (status_v4, status_v6_network, status_v6, identifier_count,),
+        (
+            StatusCode::CREATED,
+            StatusCode::CREATED,
+            StatusCode::CREATED,
+            0,
+        )
+    );
+}
+
+async fn eui64_is_not_used_as_ethernet_export_matcher_scenario(ctx: &TestCtx) {
+    let _guard = task_queue_mutex().lock().await;
+    let cidr = ctx.cidr(6);
+    let host = ctx.host("export-eui64");
+    let address = ctx.ip_in_cidr(&cidr, 10);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+
+    let assign_status = ctx
+        .post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:13",
+            }),
+        )
+        .await;
+
+    let storage = ctx.storage();
+    let run = storage
+        .exports()
+        .create_export_run(
+            CreateExportRun::new(
+                "dhcp-canonical-json",
+                Some("tester".to_string()),
+                "dhcp",
+                json!({}),
+            )
+            .expect("valid export command"),
+        )
+        .await
+        .expect("create export run");
+    let rendered = storage
+        .exports()
+        .run_export(run.id())
+        .await
+        .expect("run DHCP export");
+    let output: serde_json::Value = serde_json::from_str(
+        rendered
+            .rendered_output()
+            .expect("successful export has output"),
+    )
+    .expect("canonical export is JSON");
+    let network = output["dhcp4_networks"]
+        .as_array()
+        .expect("DHCPv4 networks")
+        .iter()
+        .find(|network| network["cidr"].as_str() == Some(cidr.as_str()))
+        .expect("exported network");
+    let attachment = network["attachments"]
+        .as_array()
+        .expect("network attachments")
+        .iter()
+        .find(|attachment| attachment["host_name"].as_str() == Some(host.as_str()))
+        .expect("exported attachment");
+    let included_as_dhcp4 = network["dhcp4_attachments"]
+        .as_array()
+        .expect("DHCPv4 attachments")
+        .iter()
+        .any(|attachment| attachment["host_name"].as_str() == Some(host.as_str()));
+    let warned = output["warnings"]
+        .as_array()
+        .expect("export warnings")
+        .iter()
+        .any(|warning| warning.as_str().is_some_and(|text| text.contains("EUI-64")));
+
+    assert_eq!(
+        (
+            assign_status,
+            attachment["mac_address_kind"].as_str(),
+            attachment["matchers"]["ipv4"].is_null(),
+            included_as_dhcp4,
+            warned,
+        ),
+        (StatusCode::CREATED, Some("eui64"), true, false, true)
+    );
+}
+
 dual_backend_test_auto_dhcp!(ip_assign_auto_creates_v4_client_id, |ctx| {
     ip_assign_auto_creates_v4_client_id_scenario(&ctx).await;
 });
@@ -2277,6 +2464,17 @@ dual_backend_test_auto_dhcp!(ip_assign_no_duplicate_dhcp_identifier, |ctx| {
 
 dual_backend_test_auto_dhcp!(ip_assign_no_auto_dhcp_without_mac, |ctx| {
     ip_assign_no_auto_dhcp_without_mac_scenario(&ctx).await;
+});
+
+dual_backend_test_auto_dhcp!(
+    ip_assign_eui64_does_not_create_ethernet_identifiers,
+    |ctx| {
+        ip_assign_eui64_does_not_create_ethernet_identifiers_scenario(&ctx).await;
+    }
+);
+
+dual_backend_test!(eui64_is_not_used_as_ethernet_export_matcher, |ctx| {
+    eui64_is_not_used_as_ethernet_export_matcher_scenario(&ctx).await;
 });
 
 // ─── Security & correctness fixes ────────────────────────────────────────────

@@ -21,7 +21,10 @@ use crate::{
 use super::authz::{UpdateAuthzBuilder, request as authz_request, require, require_all};
 use super::{
     attachment_community_assignments::AttachmentCommunityAssignmentResponse,
-    attachments::{AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse},
+    attachments::{
+        AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse,
+        MacAddressKindResponse,
+    },
     hosts::IpAddressResponse,
 };
 
@@ -260,6 +263,7 @@ pub struct NetworkHostInventoryResponse {
 pub struct NetworkAttachmentInventoryResponse {
     attachment_id: Uuid,
     mac_address: Option<String>,
+    mac_address_kind: Option<MacAddressKindResponse>,
     ip_addresses: Vec<IpAddressResponse>,
     dhcp_identifiers: Vec<AttachmentDhcpIdentifierResponse>,
     prefix_reservations: Vec<AttachmentPrefixReservationResponse>,
@@ -385,6 +389,9 @@ async fn build_network_response_impl(
             .push(NetworkAttachmentInventoryResponse {
                 attachment_id: attachment.id(),
                 mac_address: attachment.mac_address().map(|value| value.as_str()),
+                mac_address_kind: attachment
+                    .mac_address()
+                    .map(|value| value.kind().into()),
                 ip_addresses: ip_addresses_by_attachment
                     .get(&attachment.id())
                     .cloned()

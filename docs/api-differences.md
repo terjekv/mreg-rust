@@ -102,7 +102,7 @@ POST /api/v1/dns/records
 }
 ```
 
-Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation), `allocation` (`"first_free"` or `"random"`, defaults to `"first_free"`), and optional `mac_address`. The request is atomic — if any IP assignment fails, the host is not created. Omitting `ip_addresses` creates the host without IPs (standalone `POST /api/v1/inventory/ip-addresses` still works for later assignment). IP assignment auto-creates A/AAAA and PTR records.
+Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation), `allocation` (`"first_free"` or `"random"`, defaults to `"first_free"`), and optional `mac_address`. MAC addresses may be EUI-48 or EUI-64; responses distinguish them with `mac_address_kind`. The request is atomic — if any IP assignment fails, the host is not created. Omitting `ip_addresses` creates the host without IPs (standalone `POST /api/v1/inventory/ip-addresses` still works for later assignment). IP assignment auto-creates A/AAAA and PTR records.
 
 ### Network fields
 
