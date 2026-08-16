@@ -13,13 +13,13 @@ concurrency:
 
 jobs:
   bench:
-    uses: terjekv/github-action-iai-callgrind/.github/workflows/rust-pr-bench.yml@546297390768bebf7a5b88c9b422cac1eeabc455 # v2.0.2
+    uses: terjekv/rust-pr-bench/.github/workflows/rust-pr-bench.yml@0343a98c94e04d326c5fbfea753fad9934eee7be # v1.0.0
     with:
-      action_ref: 546297390768bebf7a5b88c9b422cac1eeabc455
+      action_ref: 0343a98c94e04d326c5fbfea753fad9934eee7be
       backend: all
       auto_discover: true
       criterion_cli_args: "--noplot --sample-size 80 --measurement-time 6"
       criterion_statistic: median
-      regression_threshold_pct_iai_callgrind: 3
+      regression_threshold_pct_gungraun: 3
       regression_threshold_pct_criterion: 8
       fail_on_regression: true
