@@ -64,10 +64,12 @@ use crate::{
 use super::{
     MemoryState, MemoryStorage,
     attachments::{
-        create_attachment_community_assignment_in_state, create_attachment_dhcp_identifier_in_state,
-        create_attachment_in_state, create_attachment_prefix_reservation_in_state,
-        delete_attachment_community_assignment_in_state, delete_attachment_dhcp_identifier_in_state,
-        delete_attachment_in_state, delete_attachment_prefix_reservation_in_state,
+        create_attachment_community_assignment_in_state,
+        create_attachment_dhcp_identifier_in_state, create_attachment_in_state,
+        create_attachment_prefix_reservation_in_state,
+        delete_attachment_community_assignment_in_state,
+        delete_attachment_dhcp_identifier_in_state, delete_attachment_in_state,
+        delete_attachment_prefix_reservation_in_state,
         get_attachment_community_assignment_in_state, get_attachment_in_state,
         list_attachment_community_assignments_for_attachments_in_state,
         list_attachment_community_assignments_in_state,
@@ -111,10 +113,9 @@ use super::{
     hosts::{
         assign_ip_address_in_state, create_host_in_state, delete_host_in_state,
         get_host_auth_context_in_state, get_host_by_name_in_state, get_ip_address_in_state,
-        list_hosts_by_names_in_state, list_hosts_in_state,
-        list_ip_addresses_for_host_in_state, list_ip_addresses_for_hosts_in_state,
-        list_ip_addresses_in_state, unassign_ip_address_in_state, update_host_in_state,
-        update_ip_address_in_state,
+        list_hosts_by_names_in_state, list_hosts_in_state, list_ip_addresses_for_host_in_state,
+        list_ip_addresses_for_hosts_in_state, list_ip_addresses_in_state,
+        unassign_ip_address_in_state, update_host_in_state, update_ip_address_in_state,
     },
     labels::{
         create_label_in_state, delete_label_in_state, get_label_by_name_in_state,
@@ -229,11 +230,7 @@ impl<'tx> TxStorage for MemTxStorage<'tx> {
 }
 
 impl<'tx> TxHostStore for MemTxStorage<'tx> {
-    fn list_hosts(
-        &self,
-        page: &PageRequest,
-        filter: &HostFilter,
-    ) -> Result<Page<Host>, AppError> {
+    fn list_hosts(&self, page: &PageRequest, filter: &HostFilter) -> Result<Page<Host>, AppError> {
         list_hosts_in_state(&self.state.borrow(), page, filter)
     }
 
@@ -261,10 +258,7 @@ impl<'tx> TxHostStore for MemTxStorage<'tx> {
         delete_host_in_state(&mut self.state.borrow_mut(), name)
     }
 
-    fn list_ip_addresses(
-        &self,
-        page: &PageRequest,
-    ) -> Result<Page<IpAddressAssignment>, AppError> {
+    fn list_ip_addresses(&self, page: &PageRequest) -> Result<Page<IpAddressAssignment>, AppError> {
         list_ip_addresses_in_state(&self.state.borrow(), page)
     }
 
@@ -283,17 +277,11 @@ impl<'tx> TxHostStore for MemTxStorage<'tx> {
         list_ip_addresses_for_hosts_in_state(&self.state.borrow(), hosts)
     }
 
-    fn get_ip_address(
-        &self,
-        address: &IpAddressValue,
-    ) -> Result<IpAddressAssignment, AppError> {
+    fn get_ip_address(&self, address: &IpAddressValue) -> Result<IpAddressAssignment, AppError> {
         get_ip_address_in_state(&self.state.borrow(), address)
     }
 
-    fn assign_ip_address(
-        &self,
-        command: AssignIpAddress,
-    ) -> Result<IpAddressAssignment, AppError> {
+    fn assign_ip_address(&self, command: AssignIpAddress) -> Result<IpAddressAssignment, AppError> {
         assign_ip_address_in_state(&mut self.state.borrow_mut(), command)
     }
 
@@ -367,10 +355,7 @@ impl<'tx> TxZoneStore for MemTxStorage<'tx> {
     fn list_forward_zones(&self, page: &PageRequest) -> Result<Page<ForwardZone>, AppError> {
         list_forward_zones_in_state(&self.state.borrow(), page)
     }
-    fn create_forward_zone(
-        &self,
-        command: CreateForwardZone,
-    ) -> Result<ForwardZone, AppError> {
+    fn create_forward_zone(&self, command: CreateForwardZone) -> Result<ForwardZone, AppError> {
         create_forward_zone_in_state(&mut self.state.borrow_mut(), command)
     }
     fn get_forward_zone_by_name(&self, name: &ZoneName) -> Result<ForwardZone, AppError> {
@@ -389,10 +374,7 @@ impl<'tx> TxZoneStore for MemTxStorage<'tx> {
     fn list_reverse_zones(&self, page: &PageRequest) -> Result<Page<ReverseZone>, AppError> {
         list_reverse_zones_in_state(&self.state.borrow(), page)
     }
-    fn create_reverse_zone(
-        &self,
-        command: CreateReverseZone,
-    ) -> Result<ReverseZone, AppError> {
+    fn create_reverse_zone(&self, command: CreateReverseZone) -> Result<ReverseZone, AppError> {
         create_reverse_zone_in_state(&mut self.state.borrow_mut(), command)
     }
     fn get_reverse_zone_by_name(&self, name: &ZoneName) -> Result<ReverseZone, AppError> {
@@ -514,10 +496,7 @@ impl<'tx> TxNetworkStore for MemTxStorage<'tx> {
     ) -> Result<ExcludedRange, AppError> {
         add_excluded_range_in_state(&mut self.state.borrow_mut(), network, command)
     }
-    fn list_used_addresses(
-        &self,
-        cidr: &CidrValue,
-    ) -> Result<Vec<IpAddressAssignment>, AppError> {
+    fn list_used_addresses(&self, cidr: &CidrValue) -> Result<Vec<IpAddressAssignment>, AppError> {
         list_used_addresses_in_state(&self.state.borrow(), cidr)
     }
     fn list_unused_addresses(
@@ -536,10 +515,7 @@ impl<'tx> TxAttachmentStore for MemTxStorage<'tx> {
     fn list_attachments(&self, page: &PageRequest) -> Result<Page<HostAttachment>, AppError> {
         list_attachments_in_state(&self.state.borrow(), page)
     }
-    fn list_attachments_for_host(
-        &self,
-        host: &Hostname,
-    ) -> Result<Vec<HostAttachment>, AppError> {
+    fn list_attachments_for_host(&self, host: &Hostname) -> Result<Vec<HostAttachment>, AppError> {
         list_attachments_for_host_in_state(&self.state.borrow(), host)
     }
     fn list_attachments_for_hosts(
@@ -554,10 +530,7 @@ impl<'tx> TxAttachmentStore for MemTxStorage<'tx> {
     ) -> Result<Vec<HostAttachment>, AppError> {
         list_attachments_for_network_in_state(&self.state.borrow(), network)
     }
-    fn create_attachment(
-        &self,
-        command: CreateHostAttachment,
-    ) -> Result<HostAttachment, AppError> {
+    fn create_attachment(&self, command: CreateHostAttachment) -> Result<HostAttachment, AppError> {
         create_attachment_in_state(&mut self.state.borrow_mut(), command)
     }
     fn get_attachment(&self, attachment_id: Uuid) -> Result<HostAttachment, AppError> {
@@ -671,10 +644,7 @@ impl<'tx> TxHostGroupStore for MemTxStorage<'tx> {
     fn get_host_group_by_name(&self, name: &HostGroupName) -> Result<HostGroup, AppError> {
         get_host_group_by_name_in_state(&self.state.borrow(), name)
     }
-    fn list_host_groups_for_hosts(
-        &self,
-        hosts: &[Hostname],
-    ) -> Result<Vec<HostGroup>, AppError> {
+    fn list_host_groups_for_hosts(&self, hosts: &[Hostname]) -> Result<Vec<HostGroup>, AppError> {
         list_host_groups_for_hosts_in_state(&self.state.borrow(), hosts)
     }
     fn delete_host_group(&self, name: &HostGroupName) -> Result<(), AppError> {
@@ -696,10 +666,7 @@ impl<'tx> TxBacnetStore for MemTxStorage<'tx> {
     ) -> Result<BacnetIdAssignment, AppError> {
         create_bacnet_id_in_state(&mut self.state.borrow_mut(), command)
     }
-    fn get_bacnet_id(
-        &self,
-        bacnet_id: BacnetIdentifier,
-    ) -> Result<BacnetIdAssignment, AppError> {
+    fn get_bacnet_id(&self, bacnet_id: BacnetIdentifier) -> Result<BacnetIdAssignment, AppError> {
         get_bacnet_id_in_state(&self.state.borrow(), bacnet_id)
     }
     fn list_bacnet_ids_for_hosts(
@@ -721,10 +688,7 @@ impl<'tx> TxPtrOverrideStore for MemTxStorage<'tx> {
     ) -> Result<Page<PtrOverride>, AppError> {
         list_ptr_overrides_in_state(&self.state.borrow(), page, filter)
     }
-    fn create_ptr_override(
-        &self,
-        command: CreatePtrOverride,
-    ) -> Result<PtrOverride, AppError> {
+    fn create_ptr_override(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
         create_ptr_override_in_state(&mut self.state.borrow_mut(), command)
     }
     fn get_ptr_override_by_address(
@@ -840,10 +804,7 @@ impl<'tx> TxHostPolicyStore for MemTxStorage<'tx> {
     fn list_roles_for_host(&self, host_name: &Hostname) -> Result<Vec<HostPolicyRole>, AppError> {
         list_roles_for_host_in_state(&self.state.borrow(), host_name)
     }
-    fn list_roles_for_hosts(
-        &self,
-        hosts: &[Hostname],
-    ) -> Result<Vec<HostPolicyRole>, AppError> {
+    fn list_roles_for_hosts(&self, hosts: &[Hostname]) -> Result<Vec<HostPolicyRole>, AppError> {
         list_roles_for_hosts_in_state(&self.state.borrow(), hosts)
     }
     fn create_role(&self, command: CreateHostPolicyRole) -> Result<HostPolicyRole, AppError> {
@@ -929,10 +890,7 @@ impl<'tx> TxRecordStore for MemTxStorage<'tx> {
     fn get_rrset(&self, rrset_id: Uuid) -> Result<RecordRrset, AppError> {
         get_rrset_in_state(&self.state.borrow(), rrset_id)
     }
-    fn list_records_for_hosts(
-        &self,
-        hosts: &[Hostname],
-    ) -> Result<Vec<RecordInstance>, AppError> {
+    fn list_records_for_hosts(&self, hosts: &[Hostname]) -> Result<Vec<RecordInstance>, AppError> {
         list_records_for_hosts_in_state(&self.state.borrow(), hosts)
     }
     fn create_record_type(
@@ -941,10 +899,7 @@ impl<'tx> TxRecordStore for MemTxStorage<'tx> {
     ) -> Result<RecordTypeDefinition, AppError> {
         create_record_type_in_state(&mut self.state.borrow_mut(), command)
     }
-    fn create_record(
-        &self,
-        command: CreateRecordInstance,
-    ) -> Result<RecordInstance, AppError> {
+    fn create_record(&self, command: CreateRecordInstance) -> Result<RecordInstance, AppError> {
         create_record_with_serial_bump_in_state(&mut self.state.borrow_mut(), command)
     }
     fn update_record(
@@ -963,10 +918,7 @@ impl<'tx> TxRecordStore for MemTxStorage<'tx> {
     fn delete_rrset(&self, rrset_id: Uuid) -> Result<(), AppError> {
         delete_rrset_in_state(&mut self.state.borrow_mut(), rrset_id)
     }
-    fn find_records_by_owner(
-        &self,
-        owner_id: Uuid,
-    ) -> Result<Vec<RecordInstance>, AppError> {
+    fn find_records_by_owner(&self, owner_id: Uuid) -> Result<Vec<RecordInstance>, AppError> {
         find_records_by_owner_in_state(&self.state.borrow(), owner_id)
     }
     fn delete_records_by_owner(&self, owner_id: Uuid) -> Result<u64, AppError> {
@@ -983,11 +935,7 @@ impl<'tx> TxRecordStore for MemTxStorage<'tx> {
             type_name,
         )
     }
-    fn rename_record_owner(
-        &self,
-        owner_id: Uuid,
-        new_name: &DnsName,
-    ) -> Result<u64, AppError> {
+    fn rename_record_owner(&self, owner_id: Uuid, new_name: &DnsName) -> Result<u64, AppError> {
         rename_record_owner_in_state(&mut self.state.borrow_mut(), owner_id, new_name)
     }
 }

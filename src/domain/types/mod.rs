@@ -128,8 +128,8 @@ mod tests {
     }
 
     #[test]
-    fn bacnet_identifier_rejects_zero() {
-        assert!(BacnetIdentifier::new(0).is_err());
+    fn bacnet_identifier_accepts_zero() {
+        assert!(BacnetIdentifier::new(0).is_ok());
     }
 
     #[test]
@@ -140,26 +140,26 @@ mod tests {
     #[test]
     fn serial_next_rfc1912_increments_within_day() {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 30).unwrap();
-        let serial = SerialNumber::new(202603300000).expect("serial");
+        let serial = SerialNumber::new(2026033000).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603300001);
+        assert_eq!(next.as_u32(), 2026033001);
     }
 
     #[test]
     fn serial_next_rfc1912_rolls_to_new_day() {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let serial = SerialNumber::new(202603300005).expect("serial");
+        let serial = SerialNumber::new(2026033005).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603310000);
+        assert_eq!(next.as_u32(), 2026033100);
     }
 
     #[test]
     fn serial_next_rfc1912_handles_clock_skew() {
         // Serial is ahead of today (clock went backwards)
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 28).unwrap();
-        let serial = SerialNumber::new(202603300005).expect("serial");
+        let serial = SerialNumber::new(2026033005).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603300006);
+        assert_eq!(next.as_u32(), 2026033006);
     }
 
     #[test]
@@ -168,7 +168,7 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 30).unwrap();
         let serial = SerialNumber::new(1).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603300000);
+        assert_eq!(next.as_u32(), 2026033000);
     }
 
     #[test]
@@ -257,8 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn serial_rejects_overflow() {
-        assert!(SerialNumber::new(i64::MAX as u64 + 1).is_err());
+    fn serial_arithmetic_wraps_at_u32_max() {
+        assert_eq!(SerialNumber::new(u32::MAX).unwrap().next().as_u32(), 0);
     }
 
     #[test]
@@ -287,15 +287,15 @@ mod tests {
 
     #[test]
     fn vlan_id_accepts_valid_values() {
-        let value = VlanId::new(0).expect("0 should be valid");
-        assert_eq!(value.as_u32(), 0);
         let value = VlanId::new(4094).expect("4094 should be valid");
         assert_eq!(value.as_u32(), 4094);
     }
 
-    #[test]
-    fn vlan_id_rejects_out_of_range() {
-        assert!(VlanId::new(4095).is_err());
-        assert!(VlanId::new(5000).is_err());
+    #[rstest::rstest]
+    #[case(0)]
+    #[case(4095)]
+    #[case(5000)]
+    fn vlan_id_rejects_out_of_range(#[case] value: u32) {
+        assert!(VlanId::new(value).is_err());
     }
 }

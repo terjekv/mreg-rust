@@ -74,12 +74,12 @@
 - `RawRdataValue`: RFC 3597 wire-format RDATA with presentation format `\# <len> <hex>`.
 - `ValidatedRecordContent`: enum of Structured (JSON) or RawRdata after validation.
 - `ExistingRecordSummary`: lightweight summary for relationship validation.
-- Built-in types (18): A, AAAA, NS, PTR, CNAME, MX, TXT, SRV, NAPTR, SSHFP, LOC, HINFO, DS, DNSKEY, CAA, TLSA, SVCB, HTTPS.
+- Built-in types (25): A, AAAA, NS, PTR, CNAME, DNAME, MX, TXT, SRV, NAPTR, SSHFP, LOC, HINFO, DS, DNSKEY, CDS, CDNSKEY, CSYNC, CAA, TLSA, SMIMEA, SVCB, HTTPS, URI, OPENPGPKEY.
 - Built-in RR semantics are tightened by RFC-aware validation rules documented in `docs/rr-standards.md`.
 
 ## Pagination, Sorting, and Filtering
 
-- `PageRequest`: cursor-based page request with `after` (UUID cursor), `limit`, `sort_by`, `sort_dir`.
+- `PageRequest`: keyset page request with `after` (opaque cursor), `limit`, `sort_by`, `sort_dir`.
 - `Page<T>`: storage-layer page result with items, total count, and next cursor.
 - `PageResponse<T>`: API-layer serializable wrapper mapped from `Page<T>`.
 - `SortDirection`: enum `Asc` | `Desc`.

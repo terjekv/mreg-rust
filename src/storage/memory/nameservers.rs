@@ -19,10 +19,16 @@ pub(super) fn list_nameservers_in_state(
     page: &PageRequest,
 ) -> Result<Page<NameServer>, AppError> {
     let items: Vec<NameServer> = state.nameservers.values().cloned().collect();
-    sort_and_paginate(items, page, &["created_at"], |ns, field| match field {
-        "created_at" => ns.created_at().to_rfc3339(),
-        _ => ns.name().as_str().to_string(),
-    })
+    sort_and_paginate(
+        items,
+        page,
+        &["name", "created_at", "updated_at"],
+        |ns, field| match field {
+            "created_at" => ns.created_at().to_rfc3339(),
+            "updated_at" => ns.updated_at().to_rfc3339(),
+            _ => ns.name().as_str().to_string(),
+        },
+    )
 }
 
 pub(super) fn create_nameserver_in_state(
@@ -90,6 +96,16 @@ pub(super) fn delete_nameserver_in_state(
             .any(|nameserver| nameserver == name)
     }) || state.reverse_zones.values().any(|zone| {
         zone.nameservers()
+            .iter()
+            .any(|nameserver| nameserver == name)
+    }) || state.forward_zone_delegations.values().any(|delegation| {
+        delegation
+            .nameservers()
+            .iter()
+            .any(|nameserver| nameserver == name)
+    }) || state.reverse_zone_delegations.values().any(|delegation| {
+        delegation
+            .nameservers()
             .iter()
             .any(|nameserver| nameserver == name)
     }) {

@@ -51,7 +51,7 @@ use crate::{
         nameserver::NameServer,
         network::{ExcludedRange, Network},
         network_policy::NetworkPolicy,
-        pagination::{Page, PageRequest, SortDirection},
+        pagination::{Page, PageRequest, SortDirection, decode_cursor, encode_cursor},
         ptr_override::PtrOverride,
         resource_records::{
             RecordInstance, RecordRrset, RecordTypeDefinition, built_in_record_types,
@@ -74,13 +74,31 @@ pub(super) fn paginate_by_cursor<T: HasId>(
     items: Vec<T>,
     page: &PageRequest,
 ) -> Result<Page<T>, AppError> {
+    paginate_keyset(items, page, "__id", &SortDirection::Asc, |item| {
+        item.id().to_string()
+    })
+}
+
+fn paginate_keyset<T: HasId>(
+    items: Vec<T>,
+    page: &PageRequest,
+    sort_by: &str,
+    sort_dir: &SortDirection,
+    key_fn: impl Fn(&T) -> String,
+) -> Result<Page<T>, AppError> {
     let total = items.len() as u64;
-    let start = if let Some(cursor) = page.after() {
+    let start = if let Some(value) = page.after() {
+        let cursor = decode_cursor(value, sort_by, sort_dir)?;
         items
             .iter()
-            .position(|item| item.id() == cursor)
-            .map(|pos| pos + 1)
-            .ok_or_else(|| AppError::validation("pagination cursor was not found"))?
+            .position(|item| {
+                let key_comparison = key_fn(item).as_str().cmp(cursor.key());
+                (match sort_dir {
+                    SortDirection::Asc => key_comparison.is_gt(),
+                    SortDirection::Desc => key_comparison.is_lt(),
+                }) || (key_comparison.is_eq() && item.id() > cursor.id())
+            })
+            .unwrap_or(items.len())
     } else {
         0
     };
@@ -93,7 +111,10 @@ pub(super) fn paginate_by_cursor<T: HasId>(
         page_items.pop();
     }
     let next_cursor = if has_more {
-        page_items.last().map(|item| item.id())
+        page_items
+            .last()
+            .map(|item| encode_cursor(sort_by, sort_dir, key_fn(item), item.id()))
+            .transpose()?
     } else {
         None
     };
@@ -102,20 +123,6 @@ pub(super) fn paginate_by_cursor<T: HasId>(
         total,
         next_cursor,
     })
-}
-
-/// Simple pagination for types without a UUID id (e.g. BacnetIdAssignment).
-pub(super) fn paginate_simple<T>(items: Vec<T>, page: &PageRequest) -> Page<T> {
-    let total = items.len() as u64;
-    let limit = page.limit() as usize;
-    // For types without UUID cursor, we only support offset-less first-page pagination
-    // or returning all items. The cursor is ignored.
-    let page_items: Vec<T> = items.into_iter().take(limit).collect();
-    Page {
-        items: page_items,
-        total,
-        next_cursor: None,
-    }
 }
 
 pub(super) fn sort_items<T: HasId>(
@@ -135,7 +142,8 @@ pub(super) fn sort_items<T: HasId>(
     let descending = *page.sort_direction() == SortDirection::Desc;
     items.sort_by(|a, b| {
         let cmp = key_fn(a, field).cmp(&key_fn(b, field));
-        if descending { cmp.reverse() } else { cmp }
+        let cmp = if descending { cmp.reverse() } else { cmp };
+        cmp.then_with(|| a.id().cmp(&b.id()))
     });
     Ok(())
 }
@@ -146,8 +154,10 @@ pub(super) fn sort_and_paginate<T: HasId>(
     valid_fields: &[&str],
     key_fn: impl Fn(&T, &str) -> String,
 ) -> Result<Page<T>, AppError> {
-    sort_items(&mut items, page, valid_fields, key_fn)?;
-    paginate_by_cursor(items, page)
+    let field = page.sort_by().unwrap_or("name").to_string();
+    let direction = page.sort_direction().clone();
+    sort_items(&mut items, page, valid_fields, &key_fn)?;
+    paginate_keyset(items, page, &field, &direction, |item| key_fn(item, &field))
 }
 
 #[derive(Clone)]
@@ -188,9 +198,22 @@ pub(super) struct MemoryState {
     pub(super) record_types: BTreeMap<String, RecordTypeDefinition>,
     pub(super) rrsets: BTreeMap<Uuid, RecordRrset>,
     pub(super) records: Vec<RecordInstance>,
+    /// Record instance ID -> IP assignment ID for generated A/AAAA/PTR data.
+    pub(super) managed_ip_records: BTreeMap<Uuid, (Uuid, bool)>,
     pub(super) history_events: Vec<HistoryEvent>,
+    pub(super) event_delivery: BTreeMap<Uuid, MemoryEventDelivery>,
     pub(super) revoked_tokens: BTreeMap<String, (String, chrono::DateTime<Utc>)>,
     pub(super) principal_revoked_before: BTreeMap<String, chrono::DateTime<Utc>>,
+}
+
+#[derive(Clone)]
+pub(super) struct MemoryEventDelivery {
+    pub(super) attempts: u32,
+    pub(super) available_at: chrono::DateTime<Utc>,
+    pub(super) lease_id: Option<Uuid>,
+    pub(super) lease_until: Option<chrono::DateTime<Utc>>,
+    pub(super) delivered_at: Option<chrono::DateTime<Utc>>,
+    pub(super) last_error: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -264,7 +287,8 @@ pub(super) fn bump_zone_serial_in_state(state: &mut MemoryState, zone_id: Uuid) 
                 zone.refresh(),
                 zone.retry(),
                 zone.expire(),
-                zone.soa_ttl(),
+                zone.soa_record_ttl(),
+                zone.negative_ttl(),
                 zone.default_ttl(),
                 zone.created_at(),
                 now,
@@ -287,7 +311,8 @@ pub(super) fn bump_zone_serial_in_state(state: &mut MemoryState, zone_id: Uuid) 
             zone.refresh(),
             zone.retry(),
             zone.expire(),
-            zone.soa_ttl(),
+            zone.soa_record_ttl(),
+            zone.negative_ttl(),
             zone.default_ttl(),
             zone.created_at(),
             now,
@@ -453,6 +478,10 @@ impl Storage for MemoryStorage {
     }
 
     fn audit(&self) -> &(dyn AuditStore + Send + Sync) {
+        self
+    }
+
+    fn outbox(&self) -> &(dyn crate::storage::OutboxStore + Send + Sync) {
         self
     }
 

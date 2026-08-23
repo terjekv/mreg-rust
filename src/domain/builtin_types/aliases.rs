@@ -63,8 +63,8 @@ pub(super) fn builtin_dname() -> Result<CreateRecordTypeDefinition, AppError> {
                     "rfc_refs": ["RFC6672"],
                     "owner_name_syntax": "dns_name",
                     "rrset_ttl_must_match": true,
-                    "exclusive_with_other_types_at_owner": true,
-                    "blocks_other_types_when_present": true,
+                    "exclusive_with_other_types_at_owner": false,
+                    "blocks_other_types_when_present": false,
                     "target_fields_must_not_be_aliases": [],
                     "supports_null_domain_target": false
                 }

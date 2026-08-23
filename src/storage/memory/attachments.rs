@@ -90,6 +90,26 @@ fn community_matches_attachment(community: &Community, attachment: &HostAttachme
     community.network_cidr() == attachment.network_cidr()
 }
 
+fn ensure_attachment_network_mutable(
+    state: &MemoryState,
+    attachment_id: Uuid,
+) -> Result<HostAttachment, AppError> {
+    let attachment = state
+        .host_attachments
+        .get(&attachment_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    let network = state
+        .networks
+        .values()
+        .find(|network| network.id() == attachment.network_id())
+        .ok_or_else(|| AppError::internal("host attachment references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    Ok(attachment)
+}
+
 pub(super) fn create_attachment_in_state(
     state: &mut MemoryState,
     command: CreateHostAttachment,
@@ -114,6 +134,9 @@ pub(super) fn create_attachment_in_state(
                 command.network().as_str()
             ))
         })?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
 
     if state.host_attachments.values().any(|attachment| {
         attachment.host_id() == host.id()
@@ -184,12 +207,7 @@ pub(super) fn create_attachment_dhcp_identifier_in_state(
     state: &mut MemoryState,
     command: CreateAttachmentDhcpIdentifier,
 ) -> Result<AttachmentDhcpIdentifier, AppError> {
-    if !state
-        .host_attachments
-        .contains_key(&command.attachment_id())
-    {
-        return Err(AppError::not_found("host attachment was not found"));
-    }
+    ensure_attachment_network_mutable(state, command.attachment_id())?;
     if state
         .attachment_dhcp_identifiers
         .values()
@@ -225,12 +243,29 @@ pub(super) fn create_attachment_prefix_reservation_in_state(
     state: &mut MemoryState,
     command: CreateAttachmentPrefixReservation,
 ) -> Result<AttachmentPrefixReservation, AppError> {
-    let attachment = state
-        .host_attachments
-        .get(&command.attachment_id())
-        .cloned()
-        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    let attachment = ensure_attachment_network_mutable(state, command.attachment_id())?;
     validate_prefix_reservation_for_attachment(&attachment, command.prefix())?;
+    let overlaps = state
+        .attachment_prefix_reservations
+        .values()
+        .filter_map(|reservation| {
+            state
+                .host_attachments
+                .get(&reservation.attachment_id())
+                .filter(|existing_attachment| {
+                    existing_attachment.network_id() == attachment.network_id()
+                })
+                .map(|_| reservation.prefix())
+        })
+        .any(|existing| {
+            existing.as_inner().contains(command.prefix().as_inner())
+                || command.prefix().as_inner().contains(existing.as_inner())
+        });
+    if overlaps {
+        return Err(AppError::conflict(
+            "prefix reservation overlaps an existing reservation in the network",
+        ));
+    }
     let now = Utc::now();
     let reservation = AttachmentPrefixReservation::restore(
         Uuid::new_v4(),
@@ -249,11 +284,7 @@ pub(super) fn create_attachment_community_assignment_in_state(
     state: &mut MemoryState,
     command: CreateAttachmentCommunityAssignment,
 ) -> Result<AttachmentCommunityAssignment, AppError> {
-    let attachment = state
-        .host_attachments
-        .get(&command.attachment_id())
-        .cloned()
-        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    let attachment = ensure_attachment_network_mutable(state, command.attachment_id())?;
     let community = state
         .communities
         .values()
@@ -383,11 +414,7 @@ pub(super) fn update_attachment_in_state(
     attachment_id: Uuid,
     command: UpdateHostAttachment,
 ) -> Result<HostAttachment, AppError> {
-    let existing = state
-        .host_attachments
-        .get(&attachment_id)
-        .cloned()
-        .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+    let existing = ensure_attachment_network_mutable(state, attachment_id)?;
     let now = Utc::now();
     let updated = HostAttachment::restore(
         existing.id(),
@@ -410,6 +437,7 @@ pub(super) fn delete_attachment_in_state(
     state: &mut MemoryState,
     attachment_id: Uuid,
 ) -> Result<(), AppError> {
+    ensure_attachment_network_mutable(state, attachment_id)?;
     if state
         .ip_addresses
         .values()
@@ -464,6 +492,12 @@ pub(super) fn delete_attachment_dhcp_identifier_in_state(
     state: &mut MemoryState,
     identifier_id: Uuid,
 ) -> Result<(), AppError> {
+    let attachment_id = state
+        .attachment_dhcp_identifiers
+        .get(&identifier_id)
+        .map(AttachmentDhcpIdentifier::attachment_id)
+        .ok_or_else(|| AppError::not_found("attachment DHCP identifier was not found"))?;
+    ensure_attachment_network_mutable(state, attachment_id)?;
     state
         .attachment_dhcp_identifiers
         .remove(&identifier_id)
@@ -500,6 +534,12 @@ pub(super) fn delete_attachment_prefix_reservation_in_state(
     state: &mut MemoryState,
     reservation_id: Uuid,
 ) -> Result<(), AppError> {
+    let attachment_id = state
+        .attachment_prefix_reservations
+        .get(&reservation_id)
+        .map(AttachmentPrefixReservation::attachment_id)
+        .ok_or_else(|| AppError::not_found("attachment prefix reservation was not found"))?;
+    ensure_attachment_network_mutable(state, attachment_id)?;
     state
         .attachment_prefix_reservations
         .remove(&reservation_id)
@@ -561,6 +601,12 @@ pub(super) fn delete_attachment_community_assignment_in_state(
     state: &mut MemoryState,
     assignment_id: Uuid,
 ) -> Result<(), AppError> {
+    let attachment_id = state
+        .attachment_community_assignments
+        .get(&assignment_id)
+        .map(AttachmentCommunityAssignment::attachment_id)
+        .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))?;
+    ensure_attachment_network_mutable(state, attachment_id)?;
     state
         .attachment_community_assignments
         .remove(&assignment_id)

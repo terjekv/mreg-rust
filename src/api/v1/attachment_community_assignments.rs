@@ -29,7 +29,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 pub struct AttachmentCommunityAssignmentQuery {
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -101,6 +105,36 @@ impl AttachmentCommunityAssignmentResponse {
     }
 }
 
+fn assignment_authorization(
+    req: &HttpRequest,
+    action: &str,
+    assignment: &AttachmentCommunityAssignment,
+) -> crate::authz::AuthorizationRequestBuilder {
+    authz_request(
+        req,
+        action,
+        authz::actions::resource_kinds::ATTACHMENT_COMMUNITY_ASSIGNMENT,
+        assignment.id().to_string(),
+    )
+    .attr(
+        "attachment_id",
+        AttrValue::String(assignment.attachment_id().to_string()),
+    )
+    .attr(
+        "host_name",
+        AttrValue::String(assignment.host_name().as_str().to_string()),
+    )
+    .attr("network", AttrValue::Ip(assignment.network_cidr().as_str()))
+    .attr(
+        "policy_name",
+        AttrValue::String(assignment.policy_name().as_str().to_string()),
+    )
+    .attr(
+        "community_name",
+        AttrValue::String(assignment.community_name().as_str().to_string()),
+    )
+}
+
 #[get("/policy/network/attachment-community-assignments")]
 pub(crate) async fn list_attachment_community_assignments(
     req: HttpRequest,
@@ -136,6 +170,23 @@ pub(crate) async fn create_attachment_community_assignment(
     payload: web::Json<CreateAttachmentCommunityAssignmentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
+    let attachment = state
+        .services
+        .attachments()
+        .get_attachment(request.attachment_id)
+        .await?;
+    let policy_name = NetworkPolicyName::new(&request.policy_name)?;
+    let community_name = CommunityName::new(&request.community_name)?;
+    let community = state
+        .services
+        .communities()
+        .find_by_names(&policy_name, &community_name)
+        .await?;
+    if community.network_cidr() != attachment.network_cidr() {
+        return Err(AppError::validation(
+            "community must belong to the attachment network",
+        ));
+    }
     require(
         &state,
         authz_request(
@@ -146,15 +197,20 @@ pub(crate) async fn create_attachment_community_assignment(
         )
         .attr(
             "attachment_id",
-            AttrValue::String(request.attachment_id.to_string()),
+            AttrValue::String(attachment.id().to_string()),
         )
         .attr(
+            "host_name",
+            AttrValue::String(attachment.host_name().as_str().to_string()),
+        )
+        .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+        .attr(
             "policy_name",
-            AttrValue::String(request.policy_name.clone()),
+            AttrValue::String(community.policy_name().as_str().to_string()),
         )
         .attr(
             "community_name",
-            AttrValue::String(request.community_name.clone()),
+            AttrValue::String(community.name().as_str().to_string()),
         ),
     )
     .await?;
@@ -177,21 +233,20 @@ pub(crate) async fn get_attachment_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let assignment_id = path.into_inner();
-    require(
-        &state,
-        authz_request(
-            &req,
-            authz::actions::attachment_community_assignment::GET,
-            authz::actions::resource_kinds::ATTACHMENT_COMMUNITY_ASSIGNMENT,
-            assignment_id.to_string(),
-        ),
-    )
-    .await?;
     let assignment = state
         .services
         .attachments()
         .get_attachment_community_assignment(assignment_id)
         .await?;
+    require(
+        &state,
+        assignment_authorization(
+            &req,
+            authz::actions::attachment_community_assignment::GET,
+            &assignment,
+        ),
+    )
+    .await?;
     Ok(
         HttpResponse::Ok().json(AttachmentCommunityAssignmentResponse::from_domain(
             &assignment,
@@ -206,13 +261,17 @@ pub(crate) async fn delete_attachment_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let assignment_id = path.into_inner();
+    let assignment = state
+        .services
+        .attachments()
+        .get_attachment_community_assignment(assignment_id)
+        .await?;
     require(
         &state,
-        authz_request(
+        assignment_authorization(
             &req,
             authz::actions::attachment_community_assignment::DELETE,
-            authz::actions::resource_kinds::ATTACHMENT_COMMUNITY_ASSIGNMENT,
-            assignment_id.to_string(),
+            &assignment,
         ),
     )
     .await?;

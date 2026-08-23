@@ -38,6 +38,7 @@ fn wildcard_zone_match(c: &mut Criterion) {
                     SoaSeconds::new(3600).expect("retry"),
                     SoaSeconds::new(604800).expect("expire"),
                     Ttl::new(3600).expect("soa ttl"),
+                    Ttl::new(3600).expect("negative ttl"),
                     Ttl::new(3600).expect("default ttl"),
                 ))
                 .await

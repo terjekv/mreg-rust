@@ -58,6 +58,19 @@ pub(super) fn create_host_community_assignment_in_state(
                 command.community_name().as_str()
             ))
         })?;
+    let network = state
+        .networks
+        .values()
+        .find(|network| network.id() == assignment.network_id())
+        .ok_or_else(|| AppError::internal("IP assignment references an unknown network"))?;
+    if community.network_cidr() != network.cidr() {
+        return Err(AppError::validation(
+            "community must belong to the IP assignment network",
+        ));
+    }
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     if state.host_community_assignments.values().any(|mapping| {
         mapping.host_id() == host.id()
             && mapping.ip_address_id() == assignment.id()
@@ -129,6 +142,28 @@ pub(super) fn delete_host_community_assignment_in_state(
     state: &mut MemoryState,
     mapping_id: Uuid,
 ) -> Result<(), AppError> {
+    let assignment = state
+        .host_community_assignments
+        .get(&mapping_id)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "host community assignment '{}' was not found",
+                mapping_id
+            ))
+        })?;
+    let ip = state
+        .ip_addresses
+        .get(&assignment.address().as_str())
+        .ok_or_else(|| AppError::internal("community assignment references an unknown IP"))?;
+    let network = state
+        .networks
+        .values()
+        .find(|network| network.id() == ip.network_id())
+        .ok_or_else(|| AppError::internal("IP assignment references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     state
         .host_community_assignments
         .remove(&mapping_id)

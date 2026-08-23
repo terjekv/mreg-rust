@@ -10,6 +10,22 @@ This guide covers migrating from the original Django-based mreg to mreg-rust. It
 - [ ] `MREG_ALLOW_DEV_AUTHZ_BYPASS=true` set during migration (or Treetop configured)
 - [ ] Test database populated and verified
 
+## Breaking invariant migration
+
+Migration `00000000000003_enforce_domain_invariants` intentionally has no
+compatibility mode. Before applying it, correct data that violates the new DNS
+and inventory invariants: VLANs outside 1–4094, BACnet IDs above 4194302,
+negative TTL/time values, duplicate DNS type codes or record payloads,
+overlapping attachment identities, forward/reverse zones with the same name,
+invalid attachment/IP/network relationships, overlapping exclusions or IPv6
+prefix reservations, communities assigned across networks, and network
+reserved counts that leave no allocatable address.
+
+Legacy SOA serials above 2^32−1 are normalized modulo 2^32 by the migration.
+Force a full secondary refresh after the upgrade. `soa_ttl` is renamed to
+`negative_ttl`, and the separate `soa_record_ttl` column is initialized to
+43200; review that default for every migrated zone.
+
 ## Data migration
 
 ### Approach: API-based import
@@ -71,6 +87,7 @@ When you assign an IP address to a host:
 
 When you create a zone:
 - **NS records** are auto-created for each nameserver
+- existing IP assignments are reconciled and missing managed A/AAAA or PTR records are backfilled
 
 You do NOT need to manually create A, AAAA, NS, or PTR records — they are synthesized from the structural data.
 
@@ -156,9 +173,9 @@ When rendering zone files via export templates, the following data is available 
 ### Zones
 ```
 forward_zones[].name, .primary_ns, .nameservers[], .email,
-  .serial_no, .refresh, .retry, .expire, .soa_ttl, .default_ttl, .updated
+  .serial_no, .refresh, .retry, .expire, .soa_record_ttl, .negative_ttl, .default_ttl, .updated
 reverse_zones[].name, .network, .primary_ns, .nameservers[], .email,
-  .serial_no, .refresh, .retry, .expire, .soa_ttl, .default_ttl, .updated
+  .serial_no, .refresh, .retry, .expire, .soa_record_ttl, .negative_ttl, .default_ttl, .updated
 forward_zone_delegations[].name, .zone_id, .nameservers[], .comment
 reverse_zone_delegations[].name, .zone_id, .nameservers[], .comment
 ```
@@ -189,12 +206,12 @@ scope, parameters (from the export run)
 ```jinja
 $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum
+    {{ zone.negative_ttl }}     ; minimum
 )
 
 {% for record in records %}
@@ -210,9 +227,8 @@ $TTL {{ zone.default_ttl }}
 
 The existing mreg-cli will not work directly against mreg-rust due to different URL paths and payload formats. Options:
 
-1. **Wait for `/api/compat/`** — a compatibility layer is planned (see [api-compatibility.md](api-compatibility.md))
-2. **Use the new API directly** — curl, httpie, or a new CLI
-3. **Use Swagger UI** — available at `/swagger-ui/` for interactive exploration
+1. **Use the new API directly** — curl, httpie, or a new CLI
+2. **Use Swagger UI** — available at `/swagger-ui/` for interactive exploration
 
 ### Authentication changes
 

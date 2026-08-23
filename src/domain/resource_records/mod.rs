@@ -1,6 +1,7 @@
 mod field_schema;
 mod instances;
 mod ownership;
+mod presentation;
 mod raw_rdata;
 mod type_definition;
 mod type_schema;
@@ -8,13 +9,16 @@ mod type_schema;
 pub use field_schema::*;
 pub use instances::*;
 pub use ownership::*;
+pub use presentation::*;
 pub use raw_rdata::*;
 pub use type_definition::*;
 pub use type_schema::*;
 
 // Re-export public functions from extracted modules so existing callers continue to work.
 pub use crate::domain::builtin_types::built_in_record_types;
-pub use crate::domain::record_validation::{alias_target_names, validate_record_relationships};
+pub use crate::domain::record_validation::{
+    alias_target_names, validate_alias_graph, validate_record_relationships,
+};
 
 #[cfg(test)]
 mod tests {

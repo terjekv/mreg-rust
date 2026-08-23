@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, vec_to_page};
+use super::helpers::{map_unique, sort_and_vec_to_page_by};
 
 impl PostgresStorage {
     pub(super) fn query_nameservers(
@@ -33,7 +33,16 @@ impl PostgresStorage {
         page: &PageRequest,
     ) -> Result<Page<NameServer>, AppError> {
         let items = Self::query_nameservers(connection)?;
-        Ok(vec_to_page(items, page))
+        sort_and_vec_to_page_by(
+            items,
+            page,
+            &["name", "created_at", "updated_at"],
+            |item, field| match field {
+                "created_at" => item.created_at().to_rfc3339(),
+                "updated_at" => item.updated_at().to_rfc3339(),
+                _ => item.name().as_str().to_string(),
+            },
+        )
     }
 
     pub(super) fn create_nameserver_in_conn(
@@ -79,18 +88,14 @@ impl PostgresStorage {
                 .returning(NameServerRow::as_returning())
                 .get_result::<NameServerRow>(connection)
                 .optional()?
-                .ok_or_else(|| {
-                    AppError::not_found(format!("nameserver '{}' was not found", name))
-                })?
+                .ok_or_else(|| AppError::not_found(format!("nameserver '{}' was not found", name)))?
                 .into_domain()
         } else {
             nameservers::table
                 .filter(nameservers::name.eq(&name))
                 .first::<NameServerRow>(connection)
                 .optional()?
-                .ok_or_else(|| {
-                    AppError::not_found(format!("nameserver '{}' was not found", name))
-                })?
+                .ok_or_else(|| AppError::not_found(format!("nameserver '{}' was not found", name)))?
                 .into_domain()
         }
     }

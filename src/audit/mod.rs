@@ -76,6 +76,36 @@ pub struct HistoryEvent {
     created_at: DateTime<Utc>,
 }
 
+/// A leased audit event awaiting delivery to configured external sinks.
+#[derive(Clone, Debug)]
+pub struct OutboxClaim {
+    event: HistoryEvent,
+    lease_id: Uuid,
+    attempt: u32,
+}
+
+impl OutboxClaim {
+    pub fn new(event: HistoryEvent, lease_id: Uuid, attempt: u32) -> Self {
+        Self {
+            event,
+            lease_id,
+            attempt,
+        }
+    }
+
+    pub fn event(&self) -> &HistoryEvent {
+        &self.event
+    }
+
+    pub fn lease_id(&self) -> Uuid {
+        self.lease_id
+    }
+
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+}
+
 impl HistoryEvent {
     #[allow(clippy::too_many_arguments)]
     pub fn restore(

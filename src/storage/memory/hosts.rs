@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
@@ -7,12 +5,18 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        attachment::{CreateAttachmentDhcpIdentifier, DhcpIdentifierFamily, DhcpIdentifierKind},
+        attachment::{
+            CreateAttachmentDhcpIdentifier, DhcpIdentifierFamily, DhcpIdentifierKind,
+            HostAttachment,
+        },
         filters::HostFilter,
         host::{
             AllocationPolicy, AssignIpAddress, CreateHost, Host, HostAuthContext,
             IpAddressAssignment, UpdateHost, UpdateIpAddress,
         },
+        host_contact::HostContact,
+        host_group::HostGroup,
+        host_policy::HostPolicyRole,
         network::{Network, cidr_contains, ip_to_u128, network_usable_bounds},
         pagination::{Page, PageRequest},
         resource_records::{CreateRecordInstance, RecordInstance, RecordOwnerKind, RecordRrset},
@@ -26,9 +30,8 @@ use crate::{
 use super::{
     MemoryState, MemoryStorage,
     attachments::{create_attachment_dhcp_identifier_in_state, find_or_create_attachment_in_state},
-    bump_zone_serial_in_state, delete_records_by_name_and_type_in_state,
-    delete_records_by_owner_in_state, paginate_by_cursor,
-    records::create_record_in_state,
+    bump_zone_serial_in_state, delete_records_by_owner_in_state, paginate_by_cursor,
+    records::{create_record_with_serial_bump_in_state, delete_record_in_state},
     sort_and_paginate,
 };
 
@@ -77,8 +80,52 @@ pub(super) fn assign_ip_in_state(
             ))
         })?;
 
+    let requested_attachment = command
+        .attachment_id()
+        .map(|id| {
+            state
+                .host_attachments
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| AppError::not_found("host attachment was not found"))
+        })
+        .transpose()?;
+    if let Some(attachment) = &requested_attachment {
+        if attachment.host_id() != host.id() {
+            return Err(AppError::validation(
+                "attachment does not belong to the requested host",
+            ));
+        }
+        if command
+            .mac_address()
+            .is_some_and(|mac| Some(mac) != attachment.mac_address())
+        {
+            return Err(AppError::validation(
+                "assignment MAC address does not match the attachment",
+            ));
+        }
+    }
+
     let (network, address) = if let Some(address) = command.address().cloned() {
-        let network = most_specific_network_for_address(state, &address)?;
+        let network = if let Some(attachment) = &requested_attachment {
+            if !attachment
+                .network_cidr()
+                .as_inner()
+                .contains(&address.as_inner())
+            {
+                return Err(AppError::validation(
+                    "IP address is outside the requested attachment network",
+                ));
+            }
+            state
+                .networks
+                .values()
+                .find(|network| network.id() == attachment.network_id())
+                .cloned()
+                .ok_or_else(|| AppError::not_found("attachment network was not found"))?
+        } else {
+            most_specific_network_for_address(state, &address)?
+        };
         ensure_address_is_usable(state, &network, &address)?;
         (network, address)
     } else {
@@ -95,7 +142,17 @@ pub(super) fn assign_ip_in_state(
                     wanted_network.as_str()
                 ))
             })?;
-        let address = allocate_address_in_network(state, &network)?;
+        if let Some(attachment) = &requested_attachment
+            && attachment.network_id() != network.id()
+        {
+            return Err(AppError::validation(
+                "requested network does not match the attachment network",
+            ));
+        }
+        let address = match command.allocation() {
+            AllocationPolicy::FirstFree => allocate_address_in_network(state, &network)?,
+            AllocationPolicy::Random => allocate_random_address_in_network(state, &network)?,
+        };
         (network, address)
     };
 
@@ -108,12 +165,16 @@ pub(super) fn assign_ip_in_state(
     }
 
     let now = Utc::now();
-    let attachment = find_or_create_attachment_in_state(
-        state,
-        host.name(),
-        network.cidr(),
-        command.mac_address().cloned(),
-    )?;
+    let attachment = if let Some(attachment) = requested_attachment {
+        attachment
+    } else {
+        find_or_create_attachment_in_state(
+            state,
+            host.name(),
+            network.cidr(),
+            command.mac_address().cloned(),
+        )?
+    };
     let assignment = IpAddressAssignment::restore(
         Uuid::new_v4(),
         host.id(),
@@ -197,6 +258,9 @@ fn ensure_address_is_usable(
     network: &Network,
     address: &IpAddressValue,
 ) -> Result<(), AppError> {
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     if !cidr_contains(network.cidr(), address) {
         return Err(AppError::validation(
             "IP address is outside the selected network",
@@ -234,31 +298,41 @@ fn allocate_address_in_network(
     network: &Network,
 ) -> Result<IpAddressValue, AppError> {
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
-    match network.cidr().as_inner() {
-        ipnet::IpNet::V4(_) => {
-            for candidate in first..=last {
-                let address =
-                    IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())?;
-                if ensure_address_is_usable(state, network, &address).is_ok() {
-                    return Ok(address);
-                }
+    let used = state
+        .ip_addresses
+        .values()
+        .filter(|assignment| network.contains(assignment.address()))
+        .map(|assignment| ip_to_u128(assignment.address().as_inner()))
+        .collect::<std::collections::HashSet<_>>();
+    let excluded = state
+        .excluded_ranges
+        .get(&network.cidr().as_str())
+        .cloned()
+        .unwrap_or_default();
+    let mut candidate = first;
+    loop {
+        if let Some(range) = excluded.iter().find(|range| {
+            ip_to_u128(range.start_ip().as_inner()) <= candidate
+                && candidate <= ip_to_u128(range.end_ip().as_inner())
+        }) {
+            let end = ip_to_u128(range.end_ip().as_inner());
+            if end >= last {
+                break;
             }
-            Err(AppError::conflict(
-                "network has no remaining allocatable IPv4 addresses",
-            ))
+            candidate = end + 1;
+            continue;
         }
-        ipnet::IpNet::V6(_) => {
-            for candidate in first..=last {
-                let address = IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
-                if ensure_address_is_usable(state, network, &address).is_ok() {
-                    return Ok(address);
-                }
-            }
-            Err(AppError::conflict(
-                "network has no remaining allocatable IPv6 addresses",
-            ))
+        if !used.contains(&candidate) {
+            return address_from_u128(network, candidate);
         }
+        if candidate == last {
+            break;
+        }
+        candidate += 1;
     }
+    Err(AppError::conflict(
+        "network has no remaining allocatable addresses",
+    ))
 }
 
 fn allocate_random_address_in_network(
@@ -269,39 +343,27 @@ fn allocate_random_address_in_network(
 
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
 
-    // Build the set of usable candidate values
-    let candidates: Vec<u128> = (first..=last)
-        .filter(|c| {
-            let addr = match network.cidr().as_inner() {
-                ipnet::IpNet::V4(_) => {
-                    IpAddressValue::new(std::net::Ipv4Addr::from(*c as u32).to_string())
-                }
-                ipnet::IpNet::V6(_) => {
-                    IpAddressValue::new(std::net::Ipv6Addr::from(*c).to_string())
-                }
-            };
-            match addr {
-                Ok(a) => ensure_address_is_usable(state, network, &a).is_ok(),
-                Err(_) => false,
-            }
-        })
-        .collect();
-
-    if candidates.is_empty() {
-        return Err(AppError::conflict(
-            "network has no remaining allocatable addresses",
-        ));
-    }
-
     let mut rng = rand::thread_rng();
-    let idx = rng.gen_range(0..candidates.len());
-    let chosen = candidates[idx];
+    for _ in 0..256 {
+        let chosen = if first == last {
+            first
+        } else {
+            rng.gen_range(first..=last)
+        };
+        let address = address_from_u128(network, chosen)?;
+        if ensure_address_is_usable(state, network, &address).is_ok() {
+            return Ok(address);
+        }
+    }
+    allocate_address_in_network(state, network)
+}
 
+fn address_from_u128(network: &Network, value: u128) -> Result<IpAddressValue, AppError> {
     match network.cidr().as_inner() {
         ipnet::IpNet::V4(_) => {
-            IpAddressValue::new(std::net::Ipv4Addr::from(chosen as u32).to_string())
+            IpAddressValue::new(std::net::Ipv4Addr::from(value as u32).to_string())
         }
-        ipnet::IpNet::V6(_) => IpAddressValue::new(std::net::Ipv6Addr::from(chosen).to_string()),
+        ipnet::IpNet::V6(_) => IpAddressValue::new(std::net::Ipv6Addr::from(value).to_string()),
     }
 }
 
@@ -339,6 +401,7 @@ pub(super) fn create_host_in_state(
     state: &mut MemoryState,
     command: CreateHost,
 ) -> Result<Host, AppError> {
+    let original_state = state.clone();
     let ip_specs = command.ip_assignments().to_vec();
     let host = insert_host_record_in_state(state, command)?;
 
@@ -347,86 +410,14 @@ pub(super) fn create_host_in_state(
     // for callers that aren't running inside a transaction.
     let result = (|| -> Result<(), AppError> {
         for spec in &ip_specs {
-            let assign_cmd = if *spec.allocation() == AllocationPolicy::Random {
-                if let Some(network_cidr) = spec.network() {
-                    let network = state
-                        .networks
-                        .get(&network_cidr.as_str())
-                        .cloned()
-                        .ok_or_else(|| {
-                            AppError::not_found(format!(
-                                "network '{}' was not found",
-                                network_cidr.as_str()
-                            ))
-                        })?;
-                    let address = allocate_random_address_in_network(state, &network)?;
-                    let cmd = AssignIpAddress::new(
-                        host.name().clone(),
-                        Some(address),
-                        None,
-                        spec.mac_address().cloned(),
-                    )?;
-                    cmd.with_auto_dhcp(spec.auto_v4_client_id(), spec.auto_v6_duid_ll())
-                } else {
-                    spec.clone().into_assign_command(host.name().clone())?
-                }
-            } else {
-                spec.clone().into_assign_command(host.name().clone())?
-            };
-            let host_name = host.name().clone();
-            let assignment = assign_ip_in_state(state, assign_cmd)?;
-
-            // Auto-create A/AAAA record
-            let rtype = if assignment.family() == 4 {
-                record_type_names::a()
-            } else {
-                record_type_names::aaaa()
-            };
-            let record_cmd = CreateRecordInstance::new(
-                rtype,
-                RecordOwnerKind::Host,
-                host_name.as_str(),
-                None,
-                json!({ "address": assignment.address().as_str() }),
-            );
-            if let Ok(cmd) = record_cmd {
-                create_record_in_state(state, cmd)?;
-            }
-
-            // Auto-create PTR record if a matching reverse zone exists
-            let ptr_name = ip_to_ptr_name(assignment.address());
-            let has_matching_rz = state.reverse_zones.values().any(|rz| {
-                rz.network()
-                    .is_some_and(|net| net.as_inner().contains(&assignment.address().as_inner()))
-            });
-            if has_matching_rz {
-                let ptr_cmd = CreateRecordInstance::new(
-                    record_type_names::ptr(),
-                    RecordOwnerKind::ReverseZone,
-                    &ptr_name,
-                    None,
-                    json!({ "ptrdname": host_name.as_str() }),
-                );
-                match ptr_cmd {
-                    Ok(cmd) => {
-                        if let Err(err) = create_record_in_state(state, cmd) {
-                            tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to construct cascading PTR record command");
-                    }
-                }
-            }
+            let assign_cmd = spec.clone().into_assign_command(host.name().clone())?;
+            assign_ip_address_in_state(state, assign_cmd)?;
         }
         Ok(())
     })();
 
     if let Err(err) = result {
-        let host_id = host.id();
-        state.ip_addresses.retain(|_, a| a.host_id() != host_id);
-        delete_records_by_owner_in_state(state, host_id);
-        state.hosts.remove(host.name().as_str());
+        *state = original_state;
         return Err(err);
     }
 
@@ -462,9 +453,10 @@ pub(super) fn get_host_auth_context_in_state(
     state: &MemoryState,
     name: &Hostname,
 ) -> Result<HostAuthContext, AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
 
     let mut addresses = Vec::new();
     let mut seen_networks = std::collections::BTreeSet::new();
@@ -500,9 +492,10 @@ pub(super) fn update_host_in_state(
     name: &Hostname,
     command: UpdateHost,
 ) -> Result<Host, AppError> {
-    let host = state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
     let now = Utc::now();
     let new_name = command.name.unwrap_or_else(|| host.name().clone());
     let ttl = command.ttl.resolve(host.ttl());
@@ -594,9 +587,35 @@ pub(super) fn delete_host_in_state(
     state: &mut MemoryState,
     name: &Hostname,
 ) -> Result<(), AppError> {
-    let host = state.hosts.remove(name.as_str()).ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", name.as_str()))
-    })?;
+    let host =
+        state.hosts.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", name.as_str()))
+        })?;
+
+    if state
+        .host_attachments
+        .values()
+        .filter(|attachment| attachment.host_id() == host.id())
+        .any(|attachment| {
+            state
+                .networks
+                .values()
+                .any(|network| network.id() == attachment.network_id() && network.frozen())
+        })
+    {
+        return Err(AppError::conflict("host is attached to a frozen network"));
+    }
+
+    let addresses = state
+        .ip_addresses
+        .values()
+        .filter(|assignment| assignment.host_id() == host.id())
+        .map(|assignment| *assignment.address())
+        .collect::<Vec<_>>();
+    for address in addresses {
+        unassign_ip_address_in_state(state, &address)?;
+    }
+
     delete_records_by_owner_in_state(state, host.id());
     if let Some(zone_name) = host.zone()
         && let Some(zone) = state.forward_zones.get(zone_name.as_str())
@@ -604,9 +623,90 @@ pub(super) fn delete_host_in_state(
         let zone_id = zone.id();
         bump_zone_serial_in_state(state, zone_id);
     }
+    let attachment_ids = state
+        .host_attachments
+        .values()
+        .filter(|attachment| attachment.host_id() == host.id())
+        .map(HostAttachment::id)
+        .collect::<std::collections::HashSet<_>>();
     state
-        .ip_addresses
+        .attachment_dhcp_identifiers
+        .retain(|_, value| !attachment_ids.contains(&value.attachment_id()));
+    state
+        .attachment_prefix_reservations
+        .retain(|_, value| !attachment_ids.contains(&value.attachment_id()));
+    state
+        .attachment_community_assignments
+        .retain(|_, value| !attachment_ids.contains(&value.attachment_id()));
+    state
+        .host_attachments
+        .retain(|id, _| !attachment_ids.contains(id));
+    state
+        .host_community_assignments
         .retain(|_, assignment| assignment.host_id() != host.id());
+    state
+        .ptr_overrides
+        .retain(|_, ptr_override| ptr_override.host_name() != host.name());
+    state
+        .bacnet_ids
+        .retain(|_, assignment| assignment.host_name() != host.name());
+
+    let now = Utc::now();
+    for contact in state.host_contacts.values_mut() {
+        if contact.hosts().iter().any(|item| item == host.name()) {
+            *contact = HostContact::restore(
+                contact.id(),
+                contact.email().clone(),
+                contact.display_name().map(str::to_string),
+                contact
+                    .hosts()
+                    .iter()
+                    .filter(|item| *item != host.name())
+                    .cloned()
+                    .collect(),
+                contact.created_at(),
+                now,
+            )?;
+        }
+    }
+    for group in state.host_groups.values_mut() {
+        if group.hosts().iter().any(|item| item == host.name()) {
+            *group = HostGroup::restore(
+                group.id(),
+                group.name().clone(),
+                group.description(),
+                group
+                    .hosts()
+                    .iter()
+                    .filter(|item| *item != host.name())
+                    .cloned()
+                    .collect(),
+                group.parent_groups().to_vec(),
+                group.owner_groups().to_vec(),
+                group.created_at(),
+                now,
+            )?;
+        }
+    }
+    for role in state.host_policy_roles.values_mut() {
+        if role.hosts().iter().any(|item| item == host.name().as_str()) {
+            *role = HostPolicyRole::restore(
+                role.id(),
+                role.name().clone(),
+                role.description().to_string(),
+                role.atoms().to_vec(),
+                role.hosts()
+                    .iter()
+                    .filter(|item| item.as_str() != host.name().as_str())
+                    .cloned()
+                    .collect(),
+                role.labels().to_vec(),
+                role.created_at(),
+                now,
+            );
+        }
+    }
+    state.hosts.remove(name.as_str());
     Ok(())
 }
 
@@ -624,9 +724,10 @@ pub(super) fn list_ip_addresses_for_host_in_state(
     host: &Hostname,
     page: &PageRequest,
 ) -> Result<Page<IpAddressAssignment>, AppError> {
-    let host = state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("host '{}' was not found", host.as_str()))
-    })?;
+    let host =
+        state.hosts.get(host.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("host '{}' was not found", host.as_str()))
+        })?;
     let mut items: Vec<IpAddressAssignment> = state
         .ip_addresses
         .values()
@@ -679,51 +780,151 @@ pub(super) fn assign_ip_address_in_state(
     state: &mut MemoryState,
     command: AssignIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
-    let host_name = command.host_name().clone();
     let assignment = assign_ip_in_state(state, command)?;
 
+    create_managed_forward_record_in_state(state, &assignment)?;
+
+    create_managed_ptr_record_in_state(state, &assignment)?;
+
+    Ok(assignment)
+}
+
+pub(super) fn create_managed_forward_record_in_state(
+    state: &mut MemoryState,
+    assignment: &IpAddressAssignment,
+) -> Result<(), AppError> {
+    let host_name = state
+        .hosts
+        .values()
+        .find(|host| host.id() == assignment.host_id())
+        .map(|host| host.name().clone())
+        .ok_or_else(|| AppError::not_found("assignment host was not found"))?;
+    let owner = DnsName::new(host_name.as_str())?;
+    let Some(zone_id) = super::records::best_matching_zone_for_owner_name(state, &owner) else {
+        return Ok(());
+    };
+    if !state
+        .forward_zones
+        .values()
+        .any(|zone| zone.id() == zone_id)
+    {
+        return Ok(());
+    }
     let rtype = if assignment.family() == 4 {
         record_type_names::a()
     } else {
         record_type_names::aaaa()
     };
-    let record_cmd = CreateRecordInstance::new(
+    let address = assignment.address().as_str();
+    let already_present = state.records.iter().any(|record| {
+        record.zone_id() == Some(zone_id)
+            && record.owner_name() == host_name.as_str()
+            && record.type_name() == &rtype
+            && record
+                .data()
+                .get("address")
+                .and_then(serde_json::Value::as_str)
+                == Some(address.as_str())
+    });
+    if already_present {
+        return Ok(());
+    }
+    let cmd = CreateRecordInstance::new(
         rtype,
         RecordOwnerKind::Host,
         host_name.as_str(),
         None,
-        json!({ "address": assignment.address().as_str() }),
-    );
-    if let Ok(cmd) = record_cmd {
-        create_record_in_state(state, cmd)?;
-    }
+        json!({ "address": address }),
+    )?;
+    let record = create_record_with_serial_bump_in_state(state, cmd)?;
+    state
+        .managed_ip_records
+        .insert(record.id(), (assignment.id(), false));
+    Ok(())
+}
 
+pub(super) fn delete_managed_forward_records_in_state(
+    state: &mut MemoryState,
+    assignment_id: Uuid,
+) -> Result<(), AppError> {
+    delete_managed_records_of_kind_in_state(state, assignment_id, false)
+}
+
+pub(super) fn create_managed_ptr_record_in_state(
+    state: &mut MemoryState,
+    assignment: &IpAddressAssignment,
+) -> Result<(), AppError> {
+    let host_name = state
+        .hosts
+        .values()
+        .find(|host| host.id() == assignment.host_id())
+        .map(|host| host.name().clone())
+        .ok_or_else(|| AppError::not_found("assignment host was not found"))?;
     let ptr_name = ip_to_ptr_name(assignment.address());
-    let has_matching_rz = state.reverse_zones.values().any(|rz| {
-        rz.network()
-            .is_some_and(|net| net.as_inner().contains(&assignment.address().as_inner()))
-    });
-    if has_matching_rz {
-        let ptr_cmd = CreateRecordInstance::new(
+    let ptr_owner = DnsName::new(&ptr_name)?;
+    let zone_id = super::records::best_matching_zone_for_owner_name(state, &ptr_owner);
+    if zone_id.is_some_and(|id| state.reverse_zones.values().any(|zone| zone.id() == id)) {
+        let target_name = match state.ptr_overrides.get(&assignment.address().as_str()) {
+            Some(override_record) => match override_record.target_name() {
+                Some(target) => target.as_str(),
+                None => return Ok(()),
+            },
+            None => host_name.as_str(),
+        };
+        let already_present = state.records.iter().any(|record| {
+            record.zone_id() == zone_id
+                && record.owner_name() == ptr_name
+                && record.type_name() == &record_type_names::ptr()
+                && record
+                    .data()
+                    .get("ptrdname")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(target_name)
+        });
+        if already_present {
+            return Ok(());
+        }
+        let ptr_cmd = CreateRecordInstance::new_unanchored(
             record_type_names::ptr(),
-            RecordOwnerKind::ReverseZone,
             &ptr_name,
             None,
-            json!({ "ptrdname": host_name.as_str() }),
+            json!({ "ptrdname": target_name }),
         );
-        match ptr_cmd {
-            Ok(cmd) => {
-                if let Err(err) = create_record_in_state(state, cmd) {
-                    tracing::warn!(error = %err, "failed to auto-create cascading PTR record");
-                }
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to construct cascading PTR record command");
-            }
+        let cmd = ptr_cmd?;
+        let record = create_record_with_serial_bump_in_state(state, cmd)?;
+        state
+            .managed_ip_records
+            .insert(record.id(), (assignment.id(), true));
+    }
+    Ok(())
+}
+
+pub(super) fn delete_managed_ptr_records_in_state(
+    state: &mut MemoryState,
+    assignment_id: Uuid,
+) -> Result<(), AppError> {
+    delete_managed_records_of_kind_in_state(state, assignment_id, true)
+}
+
+fn delete_managed_records_of_kind_in_state(
+    state: &mut MemoryState,
+    assignment_id: Uuid,
+    ptr: bool,
+) -> Result<(), AppError> {
+    let record_ids = state
+        .managed_ip_records
+        .iter()
+        .filter_map(|(record_id, (managed_assignment_id, is_ptr))| {
+            (*managed_assignment_id == assignment_id && *is_ptr == ptr).then_some(*record_id)
+        })
+        .collect::<Vec<_>>();
+    for record_id in record_ids {
+        state.managed_ip_records.remove(&record_id);
+        if state.records.iter().any(|record| record.id() == record_id) {
+            delete_record_in_state(state, record_id)?;
         }
     }
-
-    Ok(assignment)
+    Ok(())
 }
 
 pub(super) fn update_ip_address_in_state(
@@ -735,6 +936,14 @@ pub(super) fn update_ip_address_in_state(
     let existing = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
         AppError::not_found(format!("IP address assignment '{}' was not found", key))
     })?;
+    let network = state
+        .networks
+        .values()
+        .find(|network| network.id() == existing.network_id())
+        .ok_or_else(|| AppError::internal("IP assignment references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let now = Utc::now();
     let mac = command.mac_address.resolve(existing.mac_address().cloned());
     let updated = IpAddressAssignment::restore(
@@ -756,46 +965,32 @@ pub(super) fn unassign_ip_address_in_state(
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
     let key = address.as_str();
-    let assignment = state.ip_addresses.remove(&key).ok_or_else(|| {
+    let assignment = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
         AppError::not_found(format!("IP address assignment '{}' was not found", key))
     })?;
-
-    let host_name = state
-        .hosts
+    let network = state
+        .networks
         .values()
-        .find(|h| h.id() == assignment.host_id())
-        .map(|h| h.name().as_str().to_string());
+        .find(|network| network.id() == assignment.network_id())
+        .ok_or_else(|| AppError::internal("IP assignment references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    state.ip_addresses.remove(&key);
 
-    if let Some(host_name) = host_name {
-        let type_name = if assignment.family() == 4 { "A" } else { "AAAA" };
-        let addr_str = assignment.address().as_str();
-        let mut kept = Vec::new();
-        let mut removed = Vec::new();
-        for record in state.records.drain(..) {
-            if record.owner_name().eq_ignore_ascii_case(&host_name)
-                && record.type_name().as_str() == type_name
-                && record
-                    .data()
-                    .get("address")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|a| a == addr_str)
-            {
-                removed.push(record);
-            } else {
-                kept.push(record);
-            }
-        }
-        state.records = kept;
-        let rrset_ids: HashSet<Uuid> = removed.iter().map(|r| r.rrset_id()).collect();
-        for rrset_id in rrset_ids {
-            if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
-                state.rrsets.remove(&rrset_id);
-            }
+    let managed_record_ids = state
+        .managed_ip_records
+        .iter()
+        .filter_map(|(record_id, (assignment_id, _))| {
+            (*assignment_id == assignment.id()).then_some(*record_id)
+        })
+        .collect::<Vec<_>>();
+    for record_id in managed_record_ids {
+        state.managed_ip_records.remove(&record_id);
+        if state.records.iter().any(|record| record.id() == record_id) {
+            delete_record_in_state(state, record_id)?;
         }
     }
-
-    let ptr_name = ip_to_ptr_name(assignment.address());
-    delete_records_by_name_and_type_in_state(state, &ptr_name, "PTR");
 
     Ok(assignment)
 }

@@ -14,7 +14,7 @@ use crate::{
         types::{CidrValue, CommunityName, NetworkPolicyName},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, rows_to_page, run_count_query, run_dynamic_query},
+    storage::postgres::helpers::{map_unique, rows_to_page_by, run_count_query, run_dynamic_query},
     storage::{CommunityStore, postgres::PostgresStorage},
 };
 
@@ -105,7 +105,19 @@ pub(super) fn list(
         .collect::<Result<Vec<_>, AppError>>()?;
 
     // sql_conditions() handles all filter fields; no Rust-side filter needed.
-    Ok(rows_to_page(items, page, total))
+    let sort_by = page.sort_by().unwrap_or("name");
+    rows_to_page_by(
+        items,
+        page,
+        total,
+        sort_by,
+        page.sort_direction(),
+        |item| match sort_by {
+            "policy_name" => item.policy_name().as_str().to_string(),
+            "created_at" => item.created_at().to_rfc3339(),
+            _ => item.name().as_str().to_string(),
+        },
+    )
 }
 
 pub(in crate::storage::postgres) fn create(
@@ -119,6 +131,9 @@ pub(in crate::storage::postgres) fn create(
 
         // Resolve network
         let network = PostgresStorage::query_network_by_cidr(connection, command.network_cidr())?;
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
 
         let row = sql_query(
             "INSERT INTO communities (policy_id, network_id, name, description)
@@ -169,6 +184,11 @@ pub(super) fn delete_by_id(
     connection: &mut PgConnection,
     community_id: Uuid,
 ) -> Result<(), AppError> {
+    let community = get_by_id(connection, community_id)?;
+    let network = PostgresStorage::query_network_by_cidr(connection, community.network_cidr())?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let deleted = sql_query("DELETE FROM communities WHERE id = $1")
         .bind::<SqlUuid, _>(community_id)
         .execute(connection)

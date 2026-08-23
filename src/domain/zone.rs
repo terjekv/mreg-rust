@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use uuid::Uuid;
 
 use crate::{
@@ -22,7 +23,8 @@ pub struct ForwardZone {
     refresh: SoaSeconds,
     retry: SoaSeconds,
     expire: SoaSeconds,
-    soa_ttl: Ttl,
+    soa_record_ttl: Ttl,
+    negative_ttl: Ttl,
     default_ttl: Ttl,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -42,7 +44,8 @@ impl ForwardZone {
         refresh: SoaSeconds,
         retry: SoaSeconds,
         expire: SoaSeconds,
-        soa_ttl: Ttl,
+        soa_record_ttl: Ttl,
+        negative_ttl: Ttl,
         default_ttl: Ttl,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
@@ -60,7 +63,8 @@ impl ForwardZone {
             refresh,
             retry,
             expire,
-            soa_ttl,
+            soa_record_ttl,
+            negative_ttl,
             default_ttl,
             created_at,
             updated_at,
@@ -100,8 +104,11 @@ impl ForwardZone {
     pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
-    pub fn soa_ttl(&self) -> Ttl {
-        self.soa_ttl
+    pub fn soa_record_ttl(&self) -> Ttl {
+        self.soa_record_ttl
+    }
+    pub fn negative_ttl(&self) -> Ttl {
+        self.negative_ttl
     }
     pub fn default_ttl(&self) -> Ttl {
         self.default_ttl
@@ -129,7 +136,8 @@ pub struct ReverseZone {
     refresh: SoaSeconds,
     retry: SoaSeconds,
     expire: SoaSeconds,
-    soa_ttl: Ttl,
+    soa_record_ttl: Ttl,
+    negative_ttl: Ttl,
     default_ttl: Ttl,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -150,11 +158,13 @@ impl ReverseZone {
         refresh: SoaSeconds,
         retry: SoaSeconds,
         expire: SoaSeconds,
-        soa_ttl: Ttl,
+        soa_record_ttl: Ttl,
+        negative_ttl: Ttl,
         default_ttl: Ttl,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Result<Self, AppError> {
+        validate_reverse_zone_name(&name, network.as_ref())?;
         let nameservers = normalize_nameservers(primary_ns.clone(), nameservers);
         Ok(Self {
             id,
@@ -169,7 +179,8 @@ impl ReverseZone {
             refresh,
             retry,
             expire,
-            soa_ttl,
+            soa_record_ttl,
+            negative_ttl,
             default_ttl,
             created_at,
             updated_at,
@@ -212,8 +223,11 @@ impl ReverseZone {
     pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
-    pub fn soa_ttl(&self) -> Ttl {
-        self.soa_ttl
+    pub fn soa_record_ttl(&self) -> Ttl {
+        self.soa_record_ttl
+    }
+    pub fn negative_ttl(&self) -> Ttl {
+        self.negative_ttl
     }
     pub fn default_ttl(&self) -> Ttl {
         self.default_ttl
@@ -237,7 +251,8 @@ pub struct CreateForwardZone {
     refresh: SoaSeconds,
     retry: SoaSeconds,
     expire: SoaSeconds,
-    soa_ttl: Ttl,
+    soa_record_ttl: Ttl,
+    negative_ttl: Ttl,
     default_ttl: Ttl,
 }
 
@@ -252,7 +267,8 @@ impl CreateForwardZone {
         refresh: SoaSeconds,
         retry: SoaSeconds,
         expire: SoaSeconds,
-        soa_ttl: Ttl,
+        soa_record_ttl: Ttl,
+        negative_ttl: Ttl,
         default_ttl: Ttl,
     ) -> Self {
         Self {
@@ -264,7 +280,8 @@ impl CreateForwardZone {
             refresh,
             retry,
             expire,
-            soa_ttl,
+            soa_record_ttl,
+            negative_ttl,
             default_ttl,
         }
     }
@@ -293,8 +310,11 @@ impl CreateForwardZone {
     pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
-    pub fn soa_ttl(&self) -> Ttl {
-        self.soa_ttl
+    pub fn soa_record_ttl(&self) -> Ttl {
+        self.soa_record_ttl
+    }
+    pub fn negative_ttl(&self) -> Ttl {
+        self.negative_ttl
     }
     pub fn default_ttl(&self) -> Ttl {
         self.default_ttl
@@ -313,7 +333,8 @@ pub struct CreateReverseZone {
     refresh: SoaSeconds,
     retry: SoaSeconds,
     expire: SoaSeconds,
-    soa_ttl: Ttl,
+    soa_record_ttl: Ttl,
+    negative_ttl: Ttl,
     default_ttl: Ttl,
 }
 
@@ -329,10 +350,12 @@ impl CreateReverseZone {
         refresh: SoaSeconds,
         retry: SoaSeconds,
         expire: SoaSeconds,
-        soa_ttl: Ttl,
+        soa_record_ttl: Ttl,
+        negative_ttl: Ttl,
         default_ttl: Ttl,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, AppError> {
+        validate_reverse_zone_name(&name, network.as_ref())?;
+        Ok(Self {
             name,
             network,
             primary_ns: primary_ns.clone(),
@@ -342,9 +365,10 @@ impl CreateReverseZone {
             refresh,
             retry,
             expire,
-            soa_ttl,
+            soa_record_ttl,
+            negative_ttl,
             default_ttl,
-        }
+        })
     }
 
     pub fn name(&self) -> &ZoneName {
@@ -374,8 +398,11 @@ impl CreateReverseZone {
     pub fn expire(&self) -> SoaSeconds {
         self.expire
     }
-    pub fn soa_ttl(&self) -> Ttl {
-        self.soa_ttl
+    pub fn soa_record_ttl(&self) -> Ttl {
+        self.soa_record_ttl
+    }
+    pub fn negative_ttl(&self) -> Ttl {
+        self.negative_ttl
     }
     pub fn default_ttl(&self) -> Ttl {
         self.default_ttl
@@ -391,7 +418,8 @@ pub struct UpdateForwardZone {
     pub refresh: Option<SoaSeconds>,
     pub retry: Option<SoaSeconds>,
     pub expire: Option<SoaSeconds>,
-    pub soa_ttl: Option<Ttl>,
+    pub soa_record_ttl: Option<Ttl>,
+    pub negative_ttl: Option<Ttl>,
     pub default_ttl: Option<Ttl>,
 }
 
@@ -404,7 +432,8 @@ pub struct UpdateReverseZone {
     pub refresh: Option<SoaSeconds>,
     pub retry: Option<SoaSeconds>,
     pub expire: Option<SoaSeconds>,
-    pub soa_ttl: Option<Ttl>,
+    pub soa_record_ttl: Option<Ttl>,
+    pub negative_ttl: Option<Ttl>,
     pub default_ttl: Option<Ttl>,
 }
 
@@ -479,13 +508,14 @@ impl CreateForwardZoneDelegation {
         name: DnsName,
         comment: String,
         nameservers: Vec<DnsName>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, AppError> {
+        validate_delegation(&zone_name, &name, &nameservers)?;
+        Ok(Self {
             zone_name,
             name,
             comment,
             nameservers,
-        }
+        })
     }
 
     pub fn zone_name(&self) -> &ZoneName {
@@ -573,13 +603,14 @@ impl CreateReverseZoneDelegation {
         name: DnsName,
         comment: String,
         nameservers: Vec<DnsName>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, AppError> {
+        validate_delegation(&zone_name, &name, &nameservers)?;
+        Ok(Self {
             zone_name,
             name,
             comment,
             nameservers,
-        }
+        })
     }
 
     pub fn zone_name(&self) -> &ZoneName {
@@ -604,4 +635,105 @@ fn normalize_nameservers(primary_ns: DnsName, nameservers: Vec<DnsName>) -> Vec<
         }
     }
     normalized
+}
+
+fn validate_delegation(
+    zone_name: &ZoneName,
+    delegation_name: &DnsName,
+    nameservers: &[DnsName],
+) -> Result<(), AppError> {
+    if nameservers.is_empty() {
+        return Err(AppError::validation(
+            "a zone delegation requires at least one nameserver",
+        ));
+    }
+    let zone = zone_name.as_str();
+    let name = delegation_name.as_str();
+    if name.len() <= zone.len()
+        || !name.ends_with(zone)
+        || name.as_bytes().get(name.len() - zone.len() - 1) != Some(&b'.')
+    {
+        return Err(AppError::validation(format!(
+            "delegation '{}' must be a strict descendant of zone '{}'",
+            name, zone
+        )));
+    }
+    Ok(())
+}
+
+fn validate_reverse_zone_name(
+    name: &ZoneName,
+    network: Option<&CidrValue>,
+) -> Result<(), AppError> {
+    let actual = name.as_str();
+    let is_ipv4 = actual == "in-addr.arpa" || actual.ends_with(".in-addr.arpa");
+    let is_ipv6 = actual == "ip6.arpa" || actual.ends_with(".ip6.arpa");
+    if !is_ipv4 && !is_ipv6 {
+        return Err(AppError::validation(
+            "reverse zone names must be below in-addr.arpa or ip6.arpa",
+        ));
+    }
+
+    if let Some(network) = network {
+        let expected = match network.as_inner() {
+            IpNet::V4(value) => {
+                if value.prefix_len() % 8 != 0 {
+                    return Err(AppError::validation(
+                        "IPv4 reverse zones require octet-aligned networks; RFC 2317 classless delegation must be represented explicitly by delegations",
+                    ));
+                }
+                let count = usize::from(value.prefix_len() / 8);
+                let mut labels = value.network().octets()[..count]
+                    .iter()
+                    .rev()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>();
+                labels.extend(["in-addr".to_string(), "arpa".to_string()]);
+                labels.join(".")
+            }
+            IpNet::V6(value) => {
+                if value.prefix_len() % 4 != 0 {
+                    return Err(AppError::validation(
+                        "IPv6 reverse zones require nibble-aligned networks",
+                    ));
+                }
+                let hex = format!("{:032x}", u128::from(value.network()));
+                let count = usize::from(value.prefix_len() / 4);
+                let mut labels = hex[..count]
+                    .chars()
+                    .rev()
+                    .map(|character| character.to_string())
+                    .collect::<Vec<_>>();
+                labels.extend(["ip6".to_string(), "arpa".to_string()]);
+                labels.join(".")
+            }
+        };
+        if actual != expected {
+            return Err(AppError::validation(format!(
+                "reverse zone name '{}' does not correspond to network '{}'; expected '{}'",
+                actual,
+                network.as_str(),
+                expected
+            )));
+        }
+    } else if is_ipv4 {
+        let prefix = actual.strip_suffix(".in-addr.arpa").unwrap_or("");
+        if !prefix.is_empty() && prefix.split('.').any(|label| label.parse::<u8>().is_err()) {
+            return Err(AppError::validation(
+                "IPv4 reverse zone labels must be decimal octets",
+            ));
+        }
+    } else {
+        let prefix = actual.strip_suffix(".ip6.arpa").unwrap_or("");
+        if !prefix.is_empty()
+            && prefix
+                .split('.')
+                .any(|label| label.len() != 1 || !label.chars().all(|ch| ch.is_ascii_hexdigit()))
+        {
+            return Err(AppError::validation(
+                "IPv6 reverse zone labels must be single hexadecimal nibbles",
+            ));
+        }
+    }
+    Ok(())
 }

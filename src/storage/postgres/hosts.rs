@@ -20,9 +20,10 @@ use crate::{
             AllocationPolicy, AssignIpAddress, CreateHost, Host, HostAuthContext,
             IpAddressAssignment, UpdateHost, UpdateIpAddress,
         },
-        pagination::{Page, PageRequest, SortDirection},
+        pagination::{Page, PageRequest, SortDirection, decode_cursor},
         types::{
-            CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressValue, Ttl, ZoneName,
+            CidrValue, DhcpPriority, DnsName, Hostname, IpAddressValue, MacAddressValue, Ttl,
+            ZoneName,
         },
     },
     errors::AppError,
@@ -31,7 +32,8 @@ use crate::{
 
 use super::PostgresStorage;
 use super::helpers::{
-    limited_rows_to_page, map_unique, run_count_query, run_dynamic_query, vec_to_page,
+    IntSentinelRow, limited_rows_to_page_by, map_unique, run_count_query, run_dynamic_query,
+    vec_to_page_by,
 };
 
 /// Resolved values for a host update, computed from the command and the existing host.
@@ -41,6 +43,32 @@ struct ResolvedHostUpdate {
     comment: String,
     zone_name: Option<String>,
     zone_id: Option<uuid::Uuid>,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ManagedIpRecordRow {
+    #[diesel(sql_type = SqlUuid)]
+    record_id: Uuid,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    zone_id: Option<Uuid>,
+}
+
+pub(super) fn assignment_address_key(assignment: &IpAddressAssignment) -> String {
+    let family = if assignment.address().as_inner().is_ipv4() {
+        4
+    } else {
+        6
+    };
+    format!(
+        "{family}:{:039}",
+        crate::domain::network::ip_to_u128(assignment.address().as_inner())
+    )
+}
+
+#[derive(diesel::QueryableByName)]
+struct NullableTextRow {
+    #[diesel(sql_type = Nullable<Text>)]
+    value: Option<String>,
 }
 
 #[derive(diesel::QueryableByName)]
@@ -327,8 +355,41 @@ impl PostgresStorage {
     ) -> Result<IpAddressAssignment, AppError> {
         let host = Self::query_host_by_name(connection, command.host_name())?;
 
+        let requested_attachment = command
+            .attachment_id()
+            .map(|id| Self::query_attachment_by_id(connection, id))
+            .transpose()?;
+        if let Some(attachment) = &requested_attachment {
+            if attachment.host_id() != host.id() {
+                return Err(AppError::validation(
+                    "attachment does not belong to the requested host",
+                ));
+            }
+            if command
+                .mac_address()
+                .is_some_and(|mac| Some(mac) != attachment.mac_address())
+            {
+                return Err(AppError::validation(
+                    "assignment MAC address does not match the attachment",
+                ));
+            }
+        }
+
         let (network, address) = if let Some(address) = command.address().cloned() {
-            let network = Self::query_network_containing_ip(connection, &address)?;
+            let network = if let Some(attachment) = &requested_attachment {
+                if !attachment
+                    .network_cidr()
+                    .as_inner()
+                    .contains(&address.as_inner())
+                {
+                    return Err(AppError::validation(
+                        "IP address is outside the requested attachment network",
+                    ));
+                }
+                Self::query_network_by_cidr(connection, attachment.network_cidr())?
+            } else {
+                Self::query_network_containing_ip(connection, &address)?
+            };
             Self::ensure_address_usable(connection, &network, &address)?;
             (network, address)
         } else {
@@ -336,7 +397,21 @@ impl PostgresStorage {
                 AppError::validation("automatic allocation requires a target network")
             })?;
             let network = Self::query_network_by_cidr(connection, target_network)?;
-            let address = Self::allocate_address_in_network(connection, &network)?;
+            if let Some(attachment) = &requested_attachment
+                && attachment.network_id() != network.id()
+            {
+                return Err(AppError::validation(
+                    "requested network does not match the attachment network",
+                ));
+            }
+            let address = match command.allocation() {
+                AllocationPolicy::FirstFree => {
+                    Self::allocate_address_in_network(connection, &network)?
+                }
+                AllocationPolicy::Random => {
+                    Self::allocate_random_address_in_network(connection, &network)?
+                }
+            };
             (network, address)
         };
 
@@ -344,12 +419,16 @@ impl PostgresStorage {
             std::net::IpAddr::V4(_) => 4,
             std::net::IpAddr::V6(_) => 6,
         };
-        let attachment = Self::find_or_create_attachment(
-            connection,
-            host.name(),
-            network.cidr(),
-            command.mac_address(),
-        )?;
+        let attachment = if let Some(attachment) = requested_attachment {
+            attachment
+        } else {
+            Self::find_or_create_attachment(
+                connection,
+                host.name(),
+                network.cidr(),
+                command.mac_address(),
+            )?
+        };
 
         let assignment = sql_query(
             "INSERT INTO ip_addresses (host_id, attachment_id, address, family, mac_address)
@@ -428,7 +507,7 @@ impl PostgresStorage {
             crate::domain::resource_records::CreateRecordInstance,
             AppError,
         >,
-    ) -> Result<(), AppError> {
+    ) -> Result<Uuid, AppError> {
         use crate::domain::types::{DnsName, RecordTypeName};
 
         let record_type =
@@ -444,6 +523,12 @@ impl PostgresStorage {
             command.anchor_name(),
             command.owner_name(),
         )?;
+        if record_type.schema().zone_bound() && zone_id.is_none() {
+            return Err(AppError::validation(format!(
+                "record type '{}' must belong to an existing zone",
+                record_type.name().as_str()
+            )));
+        }
 
         let validated = record_type.validate_record_input(
             command.owner_name(),
@@ -452,10 +537,14 @@ impl PostgresStorage {
         )?;
 
         let same_owner_records =
-            Self::query_existing_owner_records(connection, command.owner_name())?;
+            Self::query_existing_owner_records(connection, command.owner_name(), zone_id)?;
 
-        let existing_rrset =
-            Self::query_rrset_by_type_and_owner(connection, record_type.id(), &owner_name)?;
+        let existing_rrset = Self::query_rrset_by_type_and_owner(
+            connection,
+            record_type.id(),
+            &owner_name,
+            zone_id,
+        )?;
 
         let same_rrset_records = if let Some(rrset) = &existing_rrset {
             Self::query_existing_rrset_records(connection, rrset.id())?
@@ -488,6 +577,7 @@ impl PostgresStorage {
             &same_rrset_records,
             &alias_owner_names,
         )?;
+        Self::validate_alias_graph_in_conn(connection, record_type.name(), &owner_name, zone_id)?;
 
         let rrset = if let Some(rrset) = existing_rrset {
             rrset
@@ -499,7 +589,11 @@ impl PostgresStorage {
             ref normalized,
         ) = validated
         {
-            Self::render_record_data(record_type.schema().render_template(), normalized)?
+            Self::render_record_data(
+                record_type.name(),
+                record_type.schema().render_template(),
+                normalized,
+            )?
         } else {
             None
         };
@@ -510,11 +604,11 @@ impl PostgresStorage {
             Self::bump_zone_serial_tx(connection, zone_id)?;
         }
 
-        Ok(())
+        Ok(record.id())
     }
 
     /// Auto-create an A or AAAA record for a newly assigned IP address.
-    fn auto_create_forward_record(
+    pub(in crate::storage::postgres) fn auto_create_forward_record(
         connection: &mut PgConnection,
         assignment: &IpAddressAssignment,
     ) -> Result<(), AppError> {
@@ -531,6 +625,20 @@ impl PostgresStorage {
             return Ok(());
         };
 
+        let forward_zone = sql_query(
+            "SELECT id FROM forward_zones
+             WHERE lower($1) = lower(name::text)
+                OR lower($1) LIKE '%.' || lower(name::text)
+             ORDER BY length(name::text) DESC
+             LIMIT 1",
+        )
+        .bind::<Text, _>(&host_name)
+        .get_result::<crate::db::models::UuidRow>(connection)
+        .optional()?;
+        let Some(forward_zone) = forward_zone else {
+            return Ok(());
+        };
+
         let type_name = match assignment.family() {
             4 => "A",
             6 => "AAAA",
@@ -539,19 +647,41 @@ impl PostgresStorage {
 
         let data = serde_json::json!({ "address": assignment.address().as_str() });
 
-        Self::auto_create_record(connection, type_name, &host_name, data, |tn, d| {
-            CreateRecordInstance::new(
-                RecordTypeName::new(tn)?,
-                RecordOwnerKind::Host,
-                &host_name,
-                None,
-                d,
-            )
-        })
+        let already_present = sql_query(
+            "SELECT 1 AS value
+             FROM records r
+             JOIN rrsets rs ON rs.id = r.rrset_id
+             JOIN record_types rt ON rt.id = rs.type_id
+             WHERE rs.zone_id = $1 AND rs.owner_name = $2
+               AND rt.name = $3 AND r.data ->> 'address' = $4
+             LIMIT 1",
+        )
+        .bind::<SqlUuid, _>(forward_zone.id())
+        .bind::<Text, _>(&host_name)
+        .bind::<Text, _>(type_name)
+        .bind::<Text, _>(assignment.address().as_str())
+        .get_result::<IntSentinelRow>(connection)
+        .optional()?
+        .is_some();
+        if already_present {
+            return Ok(());
+        }
+
+        let record_id =
+            Self::auto_create_record(connection, type_name, &host_name, data, |tn, d| {
+                CreateRecordInstance::new(
+                    RecordTypeName::new(tn)?,
+                    RecordOwnerKind::Host,
+                    &host_name,
+                    None,
+                    d,
+                )
+            })?;
+        Self::mark_ip_record_managed(connection, assignment.id(), record_id, "forward")
     }
 
     /// Auto-create a PTR record in the matching reverse zone for a newly assigned IP.
-    fn auto_create_ptr_record(
+    pub(in crate::storage::postgres) fn auto_create_ptr_record(
         connection: &mut PgConnection,
         assignment: &IpAddressAssignment,
     ) -> Result<(), AppError> {
@@ -577,98 +707,152 @@ impl PostgresStorage {
             return Ok(());
         }
 
-        let target = if host_name.ends_with('.') {
-            host_name
-        } else {
-            format!("{}.", host_name)
+        let override_target = sql_query(
+            "SELECT target_name::text AS value
+             FROM ptr_overrides
+             WHERE host_id = $1 AND address = $2::inet",
+        )
+        .bind::<SqlUuid, _>(assignment.host_id())
+        .bind::<Text, _>(assignment.address().as_str())
+        .get_result::<NullableTextRow>(connection)
+        .optional()?;
+        let target = match override_target {
+            Some(row) => match row.value {
+                Some(target) => target,
+                None => return Ok(()),
+            },
+            None => host_name,
         };
+
+        let already_present = sql_query(
+            "SELECT 1 AS value
+             FROM records r
+             JOIN rrsets rs ON rs.id = r.rrset_id
+             JOIN record_types rt ON rt.id = rs.type_id
+             WHERE rs.zone_id = $1 AND rs.owner_name = $2
+               AND rt.name = 'PTR' AND r.data ->> 'ptrdname' = $3
+             LIMIT 1",
+        )
+        .bind::<SqlUuid, _>(reverse_zone_id.expect("checked above"))
+        .bind::<Text, _>(&ptr_name)
+        .bind::<Text, _>(&target)
+        .get_result::<IntSentinelRow>(connection)
+        .optional()?
+        .is_some();
+        if already_present {
+            return Ok(());
+        }
 
         let data = serde_json::json!({ "ptrdname": target });
 
-        Self::auto_create_record(connection, "PTR", &ptr_name, data, |tn, d| {
+        let record_id = Self::auto_create_record(connection, "PTR", &ptr_name, data, |tn, d| {
             CreateRecordInstance::new_unanchored(RecordTypeName::new(tn)?, &ptr_name, None, d)
-        })
+        })?;
+        Self::mark_ip_record_managed(connection, assignment.id(), record_id, "ptr")
     }
 
-    /// Shared logic for auto-deleting a DNS record by owner name, record type,
-    /// and an optional data filter (e.g. matching a specific address value).
-    fn auto_delete_record(
+    pub(in crate::storage::postgres) fn reconcile_managed_forward_records_for_zone(
         connection: &mut PgConnection,
-        owner_name: &str,
-        type_name: &str,
-        data_filter: Option<(&str, &str)>,
+        zone_id: Uuid,
+        zone_name: &str,
     ) -> Result<(), AppError> {
-        let deleted = if let Some((json_key, json_value)) = data_filter {
-            sql_query(
-                "DELETE FROM records r
-                 USING rrsets rs, record_types rt
-                 WHERE r.rrset_id = rs.id AND rs.type_id = rt.id
-                 AND rs.owner_name = $1 AND rt.name = $2
-                 AND r.data->>$3 = $4",
-            )
-            .bind::<Text, _>(owner_name)
-            .bind::<Text, _>(type_name)
-            .bind::<Text, _>(json_key)
-            .bind::<Text, _>(json_value)
-            .execute(connection)?
-        } else {
-            sql_query(
-                "DELETE FROM records r
-                 USING rrsets rs, record_types rt
-                 WHERE r.rrset_id = rs.id AND rs.type_id = rt.id
-                 AND rs.owner_name = $1 AND rt.name = $2",
-            )
-            .bind::<Text, _>(owner_name)
-            .bind::<Text, _>(type_name)
-            .execute(connection)?
-        };
-
-        if deleted > 0 {
-            sql_query(
-                "DELETE FROM rrsets WHERE NOT EXISTS (SELECT 1 FROM records WHERE rrset_id = rrsets.id)",
-            )
-            .execute(connection)?;
+        let hosts = Self::query_hosts(connection)?;
+        let host_names = hosts
+            .into_iter()
+            .map(|host| (host.id(), host.name().clone()))
+            .collect::<BTreeMap<_, _>>();
+        for assignment in Self::query_ip_addresses(connection)? {
+            let Some(host_name) = host_names.get(&assignment.host_id()) else {
+                continue;
+            };
+            let within = host_name.as_str() == zone_name
+                || host_name
+                    .as_str()
+                    .strip_suffix(zone_name)
+                    .is_some_and(|prefix| prefix.ends_with('.'));
+            if !within
+                || Self::best_matching_zone_for_owner_name(
+                    connection,
+                    &DnsName::new(host_name.as_str())?,
+                )? != Some(zone_id)
+            {
+                continue;
+            }
+            Self::delete_managed_ip_records(connection, assignment.id(), Some("forward"))?;
+            Self::auto_create_forward_record(connection, &assignment)?;
         }
-
         Ok(())
     }
 
-    /// Delete the A/AAAA record matching the unassigned IP.
-    fn auto_delete_forward_record(
+    pub(in crate::storage::postgres) fn reconcile_managed_ptr_records_for_zone(
         connection: &mut PgConnection,
-        row: &IpAddressAssignmentRow,
+        zone_id: Uuid,
     ) -> Result<(), AppError> {
-        let type_name = match row.family() {
-            4 => "A",
-            6 => "AAAA",
-            _ => return Ok(()),
-        };
+        use crate::domain::types::ip_to_ptr_name;
 
-        let host_name = hosts::table
-            .filter(hosts::id.eq(row.host_id()))
-            .select(hosts::name)
-            .first::<String>(connection)
-            .optional()?;
-
-        let Some(host_name) = host_name else {
-            return Ok(());
-        };
-
-        let addr = row.address_str();
-        Self::auto_delete_record(connection, &host_name, type_name, Some(("address", &addr)))
+        for assignment in Self::query_ip_addresses(connection)? {
+            let owner = DnsName::new(ip_to_ptr_name(assignment.address()))?;
+            if Self::best_matching_zone_for_owner_name(connection, &owner)? != Some(zone_id) {
+                continue;
+            }
+            Self::delete_managed_ip_records(connection, assignment.id(), Some("ptr"))?;
+            Self::auto_create_ptr_record(connection, &assignment)?;
+        }
+        Ok(())
     }
 
-    /// Delete the PTR record matching the unassigned IP.
-    fn auto_delete_ptr_record(
+    fn mark_ip_record_managed(
         connection: &mut PgConnection,
-        row: &IpAddressAssignmentRow,
+        assignment_id: Uuid,
+        record_id: Uuid,
+        kind: &str,
     ) -> Result<(), AppError> {
-        use crate::domain::types::{IpAddressValue, ip_to_ptr_name};
+        sql_query(
+            "INSERT INTO managed_ip_records (ip_address_id, record_id, kind)
+             VALUES ($1, $2, $3)",
+        )
+        .bind::<SqlUuid, _>(assignment_id)
+        .bind::<SqlUuid, _>(record_id)
+        .bind::<Text, _>(kind)
+        .execute(connection)?;
+        Ok(())
+    }
 
-        let address = IpAddressValue::new(row.address_str())?;
-        let ptr_name = ip_to_ptr_name(&address);
-
-        Self::auto_delete_record(connection, &ptr_name, "PTR", None)
+    pub(in crate::storage::postgres) fn delete_managed_ip_records(
+        connection: &mut PgConnection,
+        assignment_id: Uuid,
+        kind: Option<&str>,
+    ) -> Result<(), AppError> {
+        let managed = sql_query(
+            "SELECT managed.record_id, records.zone_id
+             FROM managed_ip_records managed
+             JOIN records ON records.id = managed.record_id
+             WHERE managed.ip_address_id = $1
+               AND ($2 IS NULL OR managed.kind = $2)",
+        )
+        .bind::<SqlUuid, _>(assignment_id)
+        .bind::<Nullable<Text>, _>(kind)
+        .load::<ManagedIpRecordRow>(connection)?;
+        if managed.is_empty() {
+            return Ok(());
+        }
+        let record_ids = managed.iter().map(|row| row.record_id).collect::<Vec<_>>();
+        sql_query("DELETE FROM records WHERE id = ANY($1)")
+            .bind::<Array<SqlUuid>, _>(&record_ids)
+            .execute(connection)?;
+        sql_query(
+            "DELETE FROM rrsets
+             WHERE NOT EXISTS (SELECT 1 FROM records WHERE records.rrset_id = rrsets.id)",
+        )
+        .execute(connection)?;
+        let zone_ids = managed
+            .into_iter()
+            .filter_map(|row| row.zone_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        for zone_id in zone_ids {
+            Self::bump_zone_serial_tx(connection, zone_id)?;
+        }
+        Ok(())
     }
 
     /// Resolve updated field values from an `UpdateHost` command, falling back
@@ -767,11 +951,12 @@ impl PostgresStorage {
         } else {
             format!(" WHERE {}", clauses.join(" AND "))
         };
-        let order_col = match page.sort_by() {
-            Some("comment") => "h.comment",
-            Some("created_at") => "h.created_at",
-            Some("updated_at") => "h.updated_at",
-            Some("name") | None => "h.name::text",
+        let sort_by = page.sort_by().unwrap_or("name");
+        let (order_col, cursor_cast) = match page.sort_by() {
+            Some("comment") => ("h.comment", "text"),
+            Some("created_at") => ("h.created_at", "timestamptz"),
+            Some("updated_at") => ("h.updated_at", "timestamptz"),
+            Some("name") | None => ("h.name::text", "text"),
             Some(other) => {
                 return Err(AppError::validation(format!(
                     "unsupported sort_by field for hosts: {other}"
@@ -785,11 +970,19 @@ impl PostgresStorage {
         let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
         let total = run_count_query(connection, &count_sql, &values)?;
 
-        let cursor_clause = if let Some(cursor) = page.after() {
-            let idx = values.len() + 1;
-            values.push(cursor.to_string());
+        let cursor_clause = if let Some(value) = page.after() {
+            let cursor = decode_cursor(value, sort_by, page.sort_direction())?;
+            let key_idx = values.len() + 1;
+            values.push(cursor.key().to_string());
+            let id_idx = values.len() + 1;
+            values.push(cursor.id().to_string());
+            let operator = match page.sort_direction() {
+                SortDirection::Asc => ">",
+                SortDirection::Desc => "<",
+            };
             format!(
-                " WHERE _ord > COALESCE((SELECT _ord FROM ranked WHERE id = ${idx}::uuid), 9223372036854775807)"
+                " WHERE (_sort_key {operator} ${key_idx}::{cursor_cast}
+                         OR (_sort_key = ${key_idx}::{cursor_cast} AND id > ${id_idx}::uuid))"
             )
         } else {
             String::new()
@@ -803,12 +996,12 @@ impl PostgresStorage {
             "WITH ranked AS (
                  SELECT h.id, h.name::text AS name, fz.name::text AS zone_name,
                         h.ttl, h.comment, h.created_at, h.updated_at,
-                        ROW_NUMBER() OVER (ORDER BY {order_col} {order_dir}, h.id) AS _ord
+                        {order_col} AS _sort_key
                  FROM hosts h LEFT JOIN forward_zones fz ON fz.id = h.zone_id
                  {where_str}
              )
              SELECT id, name, zone_name, ttl, comment, created_at, updated_at
-             FROM ranked{cursor_clause} ORDER BY _ord{limit_clause}"
+             FROM ranked{cursor_clause} ORDER BY _sort_key {order_dir}, id{limit_clause}"
         );
 
         let rows = run_dynamic_query::<HostRow>(connection, &query_str, &values)?;
@@ -817,7 +1010,14 @@ impl PostgresStorage {
             .map(|row| row.into_domain())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(limited_rows_to_page(items, page, total))
+        limited_rows_to_page_by(items, page, total, sort_by, page.sort_direction(), |host| {
+            match sort_by {
+                "comment" => host.comment().to_string(),
+                "created_at" => host.created_at().to_rfc3339(),
+                "updated_at" => host.updated_at().to_rfc3339(),
+                _ => host.name().as_str().to_string(),
+            }
+        })
     }
 
     pub(super) fn create_host_in_conn(
@@ -858,23 +1058,7 @@ impl PostgresStorage {
         .into_domain()?;
 
         for spec in ip_specs {
-            let assign_cmd = if *spec.allocation() == AllocationPolicy::Random {
-                if let Some(network_cidr) = spec.network() {
-                    let network = Self::query_network_by_cidr(connection, network_cidr)?;
-                    let address = Self::allocate_random_address_in_network(connection, &network)?;
-                    let cmd = AssignIpAddress::new(
-                        host.name().clone(),
-                        Some(address),
-                        None,
-                        spec.mac_address().cloned(),
-                    )?;
-                    cmd.with_auto_dhcp(spec.auto_v4_client_id(), spec.auto_v6_duid_ll())
-                } else {
-                    spec.into_assign_command(host.name().clone())?
-                }
-            } else {
-                spec.into_assign_command(host.name().clone())?
-            };
+            let assign_cmd = spec.into_assign_command(host.name().clone())?;
             let assignment = Self::assign_ip_address_tx(connection, assign_cmd)?;
             Self::auto_create_forward_record(connection, &assignment)?;
             Self::auto_create_ptr_record(connection, &assignment)?;
@@ -928,6 +1112,20 @@ impl PostgresStorage {
             .first::<(uuid::Uuid, Option<uuid::Uuid>)>(connection)
             .optional()?
             .ok_or_else(|| AppError::not_found(format!("host '{}' was not found", name_str)))?;
+
+        let frozen_attachment = sql_query(
+            "SELECT a.id, ''::text AS name
+             FROM host_attachments a
+             JOIN networks n ON n.id = a.network_id
+             WHERE a.host_id = $1 AND n.frozen
+             LIMIT 1",
+        )
+        .bind::<SqlUuid, _>(host_id)
+        .get_result::<super::helpers::NameAndIdRow>(connection)
+        .optional()?;
+        if frozen_attachment.is_some() {
+            return Err(AppError::conflict("host is attached to a frozen network"));
+        }
 
         diesel::delete(records::table.filter(records::owner_id.eq(host_id))).execute(connection)?;
         sql_query(
@@ -1075,6 +1273,14 @@ impl PostgresStorage {
             AppError::not_found(format!("IP address assignment '{}' was not found", addr))
         })?;
 
+        let assignment = row.into_domain()?;
+        let network = Self::query_network_by_id(connection, assignment.network_id())?;
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+
+        Self::delete_managed_ip_records(connection, assignment.id(), None)?;
+
         let deleted = sql_query("DELETE FROM ip_addresses WHERE address = $1::inet")
             .bind::<Text, _>(&addr)
             .execute(connection)?;
@@ -1086,10 +1292,7 @@ impl PostgresStorage {
             )));
         }
 
-        Self::auto_delete_forward_record(connection, &row)?;
-        Self::auto_delete_ptr_record(connection, &row)?;
-
-        row.into_domain()
+        Ok(assignment)
     }
 }
 
@@ -1176,7 +1379,13 @@ impl HostStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_ip_addresses(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "address",
+                    &SortDirection::Asc,
+                    assignment_address_key,
+                )
             })
             .await
     }
@@ -1191,7 +1400,13 @@ impl HostStore for PostgresStorage {
         self.database
             .run(move |connection| {
                 let items = Self::query_ip_addresses_for_host(connection, &host)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "address",
+                    &SortDirection::Asc,
+                    assignment_address_key,
+                )
             })
             .await
     }

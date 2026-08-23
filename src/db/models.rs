@@ -102,7 +102,8 @@ pub struct ForwardZoneRow {
     refresh: i32,
     retry: i32,
     expire: i32,
-    soa_ttl: i32,
+    soa_record_ttl: i32,
+    negative_ttl: i32,
     default_ttl: i32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -126,7 +127,7 @@ impl ForwardZoneRow {
             nameservers,
             EmailAddressValue::new(self.email)?,
             SerialNumber::new(
-                u64::try_from(self.serial_no)
+                u32::try_from(self.serial_no)
                     .map_err(|_| AppError::internal("invalid serial number in database"))?,
             )?,
             self.serial_no_updated_at,
@@ -143,8 +144,12 @@ impl ForwardZoneRow {
                     .map_err(|_| AppError::internal("invalid expire value in database"))?,
             )?,
             Ttl::new(
-                u32::try_from(self.soa_ttl)
-                    .map_err(|_| AppError::internal("invalid soa_ttl value in database"))?,
+                u32::try_from(self.soa_record_ttl)
+                    .map_err(|_| AppError::internal("invalid soa_record_ttl value in database"))?,
+            )?,
+            Ttl::new(
+                u32::try_from(self.negative_ttl)
+                    .map_err(|_| AppError::internal("invalid negative_ttl value in database"))?,
             )?,
             Ttl::new(
                 u32::try_from(self.default_ttl)
@@ -181,7 +186,9 @@ pub struct ReverseZoneRow {
     #[diesel(sql_type = Integer)]
     expire: i32,
     #[diesel(sql_type = Integer)]
-    soa_ttl: i32,
+    soa_record_ttl: i32,
+    #[diesel(sql_type = Integer)]
+    negative_ttl: i32,
     #[diesel(sql_type = Integer)]
     default_ttl: i32,
     #[diesel(sql_type = Timestamptz)]
@@ -210,7 +217,7 @@ impl ReverseZoneRow {
             nameservers,
             EmailAddressValue::new(self.email)?,
             SerialNumber::new(
-                u64::try_from(self.serial_no)
+                u32::try_from(self.serial_no)
                     .map_err(|_| AppError::internal("invalid serial number in database"))?,
             )?,
             self.serial_no_updated_at,
@@ -227,8 +234,12 @@ impl ReverseZoneRow {
                     .map_err(|_| AppError::internal("invalid expire value in database"))?,
             )?,
             Ttl::new(
-                u32::try_from(self.soa_ttl)
-                    .map_err(|_| AppError::internal("invalid soa_ttl value in database"))?,
+                u32::try_from(self.soa_record_ttl)
+                    .map_err(|_| AppError::internal("invalid soa_record_ttl value in database"))?,
+            )?,
+            Ttl::new(
+                u32::try_from(self.negative_ttl)
+                    .map_err(|_| AppError::internal("invalid negative_ttl value in database"))?,
             )?,
             Ttl::new(
                 u32::try_from(self.default_ttl)
@@ -428,6 +439,10 @@ pub struct IpAddressAssignmentRow {
 }
 
 impl IpAddressAssignmentRow {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
     pub fn host_id(&self) -> Uuid {
         self.host_id
     }
@@ -878,11 +893,15 @@ pub struct RecordRow {
 
 impl RecordRow {
     pub fn into_domain(self) -> Result<RecordInstance, AppError> {
+        let type_name = RecordTypeName::new(self.type_name)?;
+        let rendered =
+            crate::domain::resource_records::render_record_data(&type_name, None, &self.data)?
+                .or(self.rendered);
         Ok(RecordInstance::restore(
             self.id,
             self.rrset_id,
             self.type_id,
-            RecordTypeName::new(self.type_name)?,
+            type_name,
             self.anchor_kind
                 .as_deref()
                 .map(parse_record_owner_kind)
@@ -902,7 +921,7 @@ impl RecordRow {
             self.raw_rdata
                 .map(RawRdataValue::from_wire_bytes)
                 .transpose()?,
-            self.rendered,
+            rendered,
             self.created_at,
             self.updated_at,
         ))

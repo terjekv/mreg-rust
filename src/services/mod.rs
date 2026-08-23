@@ -476,6 +476,12 @@ impl HostService<'_> {
     ) -> Result<Page<IpAddressAssignment>, AppError> {
         hosts::list_host_ip_addresses(self.storage.hosts(), name, page).await
     }
+    pub async fn get_ip_address(
+        &self,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError> {
+        self.storage.hosts().get_ip_address(address).await
+    }
     pub async fn assign_ip_address(
         &self,
         command: AssignIpAddress,
@@ -519,7 +525,10 @@ impl AttachmentService<'_> {
             .await
     }
     pub async fn get_attachment(&self, attachment_id: Uuid) -> Result<HostAttachment, AppError> {
-        self.storage.attachments().get_attachment(attachment_id).await
+        self.storage
+            .attachments()
+            .get_attachment(attachment_id)
+            .await
     }
     pub async fn create_attachment(
         &self,
@@ -634,7 +643,8 @@ impl AttachmentService<'_> {
         &self,
         command: CreateAttachmentCommunityAssignment,
     ) -> Result<AttachmentCommunityAssignment, AppError> {
-        attachments::create_attachment_community_assignment(self.storage, command, self.events).await
+        attachments::create_attachment_community_assignment(self.storage, command, self.events)
+            .await
     }
     pub async fn get_attachment_community_assignment(
         &self,
@@ -649,8 +659,12 @@ impl AttachmentService<'_> {
         &self,
         assignment_id: Uuid,
     ) -> Result<(), AppError> {
-        attachments::delete_attachment_community_assignment(self.storage, assignment_id, self.events)
-            .await
+        attachments::delete_attachment_community_assignment(
+            self.storage,
+            assignment_id,
+            self.events,
+        )
+        .await
     }
 }
 
@@ -862,8 +876,12 @@ impl CommunityService<'_> {
         policy_name: &NetworkPolicyName,
         community_name: &CommunityName,
     ) -> Result<Community, AppError> {
-        communities::find_community_by_names(self.storage.communities(), policy_name, community_name)
-            .await
+        communities::find_community_by_names(
+            self.storage.communities(),
+            policy_name,
+            community_name,
+        )
+        .await
     }
 }
 
@@ -948,7 +966,10 @@ impl HostPolicyService<'_> {
         &self,
         host_name: &Hostname,
     ) -> Result<Vec<HostPolicyRole>, AppError> {
-        self.storage.host_policy().list_roles_for_host(host_name).await
+        self.storage
+            .host_policy()
+            .list_roles_for_host(host_name)
+            .await
     }
     pub async fn create_role(
         &self,

@@ -35,7 +35,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 pub struct PtrQuery {
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -96,6 +100,50 @@ impl PtrOverrideResponse {
     }
 }
 
+async fn require_ptr_override_permission(
+    state: &AppState,
+    req: &HttpRequest,
+    action: &str,
+    host_name: &Hostname,
+    address: &IpAddressValue,
+    target_name: Option<&DnsName>,
+) -> Result<(), AppError> {
+    let assignment = state.services.hosts().get_ip_address(address).await?;
+    let attachment = state
+        .services
+        .attachments()
+        .get_attachment(assignment.attachment_id())
+        .await?;
+    if attachment.host_name() != host_name {
+        return Err(AppError::validation(
+            "PTR override address must be assigned to the supplied host",
+        ));
+    }
+    let mut authorization = authz_request(
+        req,
+        action,
+        authz::actions::resource_kinds::PTR_OVERRIDE,
+        address.as_str(),
+    )
+    .attr(
+        "host_name",
+        AttrValue::String(attachment.host_name().as_str().to_string()),
+    )
+    .attr("address", AttrValue::Ip(address.as_str()))
+    .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+    .attr(
+        "attachment_id",
+        AttrValue::String(attachment.id().to_string()),
+    );
+    if let Some(target_name) = target_name {
+        authorization = authorization.attr(
+            "target_name",
+            AttrValue::String(target_name.as_str().to_string()),
+        );
+    }
+    require(state, authorization).await
+}
+
 /// List PTR overrides
 #[utoipa::path(
     get,
@@ -147,24 +195,17 @@ pub(crate) async fn create_ptr_override(
     state: web::Data<AppState>,
     payload: web::Json<CreatePtrOverrideRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let request = payload.into_inner();
-    let mut authz = authz_request(
+    let command = payload.into_inner().into_command()?;
+    require_ptr_override_permission(
+        state.get_ref(),
         &req,
         authz::actions::ptr_override::CREATE,
-        authz::actions::resource_kinds::PTR_OVERRIDE,
-        request.address.clone(),
+        command.host_name(),
+        command.address(),
+        command.target_name(),
     )
-    .attr("host_name", AttrValue::String(request.host_name.clone()))
-    .attr("address", AttrValue::Ip(request.address.clone()));
-    if let Some(target_name) = &request.target_name {
-        authz = authz.attr("target_name", AttrValue::String(target_name.clone()));
-    }
-    require(&state, authz).await?;
-    let item = state
-        .services
-        .ptr_overrides()
-        .create(request.into_command()?)
-        .await?;
+    .await?;
+    let item = state.services.ptr_overrides().create(command).await?;
     Ok(HttpResponse::Created().json(PtrOverrideResponse::from_domain(&item)))
 }
 
@@ -186,17 +227,16 @@ pub(crate) async fn get_ptr_override(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
-    require(
-        &state,
-        authz_request(
-            &req,
-            authz::actions::ptr_override::GET,
-            authz::actions::resource_kinds::PTR_OVERRIDE,
-            address.as_str(),
-        ),
+    let item = state.services.ptr_overrides().get(&address).await?;
+    require_ptr_override_permission(
+        state.get_ref(),
+        &req,
+        authz::actions::ptr_override::GET,
+        item.host_name(),
+        item.address(),
+        item.target_name(),
     )
     .await?;
-    let item = state.services.ptr_overrides().get(&address).await?;
     Ok(HttpResponse::Ok().json(PtrOverrideResponse::from_domain(&item)))
 }
 
@@ -218,14 +258,14 @@ pub(crate) async fn delete_ptr_override(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
-    require(
-        &state,
-        authz_request(
-            &req,
-            authz::actions::ptr_override::DELETE,
-            authz::actions::resource_kinds::PTR_OVERRIDE,
-            address.as_str(),
-        ),
+    let item = state.services.ptr_overrides().get(&address).await?;
+    require_ptr_override_permission(
+        state.get_ref(),
+        &req,
+        authz::actions::ptr_override::DELETE,
+        item.host_name(),
+        item.address(),
+        item.target_name(),
     )
     .await?;
     state.services.ptr_overrides().delete(&address).await?;

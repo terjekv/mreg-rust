@@ -10,13 +10,13 @@ These three systems serve different purposes and should not be confused:
 |---------|-----------|---------|----------|
 | **Logging** (`tracing`) | Structured log lines to stdout/stderr | Operational diagnostics — request tracing, error details, startup info | Operators, log aggregators (ELK, Datadog) |
 | **Audit** (`/api/v1/system/history`) | Immutable records in the database via `AuditStore` | Compliance and accountability — who changed what, when | Security teams, compliance audits, internal forensics |
-| **Events** (`EventSink`) | Fire-and-forget delivery to external systems | Real-time integration — trigger workflows, sync caches, notify downstream | External services, automation pipelines |
+| **Events** (`EventSink`) | Durable at-least-once delivery to external systems | Real-time integration — trigger workflows, sync caches, notify downstream | External services, automation pipelines |
 
 **Logging** is about what the server is doing. It includes HTTP requests, SQL queries, startup messages, and errors. It is configured via `RUST_LOG` and `MREG_JSON_LOGS`.
 
 **Audit** is about what changed in the domain. Every mutation (create, update, delete) records a `HistoryEvent` in the database with the actor, resource, action, and data diff. Audit records are queryable via the API and persist across restarts.
 
-**Events** are about notifying the outside world. When a mutation succeeds, a `DomainEvent` is emitted to configured sinks. Events are fire-and-forget — if a sink is down, the event is logged as a warning and dropped. For guaranteed delivery, consumers should poll the audit history endpoint.
+**Events** are about notifying the outside world. The audit row is also the transactional outbox row: it is committed atomically with the mutation and retried until every configured sink acknowledges delivery.
 
 ## Architecture
 
@@ -28,10 +28,7 @@ API handler
     → storage trait (persistence only)
 ```
 
-The service layer:
-1. Calls the storage backend to perform the mutation
-2. Records an audit event via `AuditStore`
-3. **On successful audit recording**, emits a `DomainEvent` to the configured `EventSink`. If the audit record fails, the failure is logged at `warn` level and no event is emitted, so external sinks never see a mutation that has no audit row to reconcile against.
+The service layer runs the mutation and audit insert in one storage transaction. After commit it wakes an outbox worker. Workers claim rows with a lease, deliver them concurrently, and either mark them delivered or schedule an exponential-backoff retry. PostgreSQL workers use `FOR UPDATE SKIP LOCKED`, so multiple server instances can safely process the same outbox.
 
 For **update** operations, the service fetches the current state before the mutation so both old and new values are captured.
 
@@ -58,7 +55,7 @@ Every event has this structure:
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | UUID | Unique event identifier; matches the `id` of the corresponding audit history row |
-| `actor` | string | Who performed the action (currently `"system"`) |
+| `actor` | string | Authenticated principal that performed the action |
 | `resource_kind` | string | Entity type: `host`, `label`, `forward_zone`, `record`, etc. |
 | `resource_id` | UUID or null | UUID of the affected resource |
 | `resource_name` | string | Human-readable identifier (hostname, zone name, etc.) |
@@ -91,7 +88,7 @@ Multiple sinks can be active simultaneously. If more than one URL is configured,
 
 ### Webhook (always available)
 
-POSTs the `DomainEvent` as a JSON body to the configured URL. On failure, retries once after 1 second, then drops the event with a warning log.
+POSTs the `DomainEvent` as a JSON body to the configured URL. Non-success responses and transport failures return the event to the outbox retry schedule.
 
 ```bash
 MREG_EVENT_WEBHOOK_URL=https://hooks.example.com/mreg
@@ -100,7 +97,7 @@ MREG_EVENT_WEBHOOK_TIMEOUT_MS=3000
 
 ### AMQP (requires `amqp` feature)
 
-Publishes to a durable topic exchange. The routing key is `{resource_kind}.{action}` (e.g., `host.create`, `forward_zone.delete`), allowing consumers to bind with patterns like `host.*` or `*.delete`.
+Publishes to a durable topic exchange with publisher confirms enabled. Only a broker acknowledgement completes delivery; negative acknowledgements and publish failures are retried. The routing key is `{resource_kind}.{action}` (e.g., `host.create`, `forward_zone.delete`).
 
 ```bash
 MREG_EVENT_AMQP_URL=amqp://guest:guest@localhost:5672
@@ -125,11 +122,11 @@ MREG_EVENT_REDIS_STREAM=mreg:events
 
 Build with: `cargo build --features redis`
 
-## Error handling
+## Delivery semantics and errors
 
-Sink failures are **fire-and-forget**. A failing sink never blocks or rolls back a mutation — the storage operation and audit record have already succeeded. Failures are logged at `warn` level.
+Delivery is **at least once**. Sink failures never roll back an already committed mutation, but they are persisted with an attempt count, next-attempt time, and last error. A crash after a sink accepts an event but before the outbox acknowledgement can cause redelivery, so consumers must deduplicate by event `id`.
 
-For guaranteed delivery, consumers should use the audit history API (`GET /api/v1/system/history`) as the source of truth and treat events as best-effort notifications.
+With multiple sinks, a retry may redeliver to a sink that already succeeded if another sink failed. The same event ID makes this safe for idempotent consumers. The audit history API remains the authoritative event ledger.
 
 ## Feature flags
 

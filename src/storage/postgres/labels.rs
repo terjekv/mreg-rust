@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, vec_to_page};
+use super::helpers::{map_unique, vec_to_page_by};
 
 impl PostgresStorage {
     pub(super) fn query_labels(connection: &mut PgConnection) -> Result<Vec<Label>, AppError> {
@@ -43,6 +43,12 @@ impl PostgresStorage {
             (Some("created_at"), _) => labels::table
                 .order(labels::created_at.asc())
                 .load::<LabelRow>(connection)?,
+            (Some("updated_at"), SortDirection::Desc) => labels::table
+                .order(labels::updated_at.desc())
+                .load::<LabelRow>(connection)?,
+            (Some("updated_at"), _) => labels::table
+                .order(labels::updated_at.asc())
+                .load::<LabelRow>(connection)?,
             (Some("name"), SortDirection::Desc) | (None, SortDirection::Desc) => labels::table
                 .order(labels::name.desc())
                 .load::<LabelRow>(connection)?,
@@ -59,7 +65,19 @@ impl PostgresStorage {
             .into_iter()
             .map(LabelRow::into_domain)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(vec_to_page(items, page))
+        let sort_by = page.sort_by().unwrap_or("name");
+        vec_to_page_by(
+            items,
+            page,
+            sort_by,
+            page.sort_direction(),
+            |label| match sort_by {
+                "description" => label.description().to_string(),
+                "created_at" => label.created_at().to_rfc3339(),
+                "updated_at" => label.updated_at().to_rfc3339(),
+                _ => label.name().as_str().to_string(),
+            },
+        )
     }
 
     pub(super) fn create_label_in_conn(

@@ -28,7 +28,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 }
 
 // Shared default functions used by serde defaults in forward and reverse modules
-fn default_serial_no() -> u64 {
+fn default_serial_no() -> u32 {
     1
 }
 
@@ -46,4 +46,8 @@ fn default_expire() -> u32 {
 
 fn default_ttl_value() -> u32 {
     43_200
+}
+
+fn default_negative_ttl() -> u32 {
+    3_600
 }

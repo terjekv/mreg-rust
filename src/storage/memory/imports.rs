@@ -24,7 +24,7 @@ use crate::{
         },
         label::CreateLabel,
         nameserver::CreateNameServer,
-        network::{CreateExcludedRange, CreateNetwork},
+        network::{CreateExcludedRange, CreateNetwork, UpdateNetwork},
         network_policy::CreateNetworkPolicy,
         pagination::{Page, PageRequest},
         ptr_override::CreatePtrOverride,
@@ -33,15 +33,16 @@ use crate::{
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, EmailAddressValue,
             HostGroupName, Hostname, IpAddressValue, LabelName, MacAddressValue, NetworkPolicyName,
-            OwnerGroupName, ReservedCount, SerialNumber, SoaSeconds, Ttl, ZoneName,
+            OwnerGroupName, ReservedCount, SerialNumber, SoaSeconds, Ttl, UpdateField, VlanId,
+            ZoneName,
         },
         zone::{CreateForwardZone, CreateReverseZone},
     },
     errors::AppError,
     storage::ImportStore,
     storage::import_helpers::{
-        resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec, resolve_u32,
-        resolve_u64, resolve_uuid, stringify_ref_value,
+        resolve_bool, resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec,
+        resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
     },
 };
 
@@ -58,7 +59,9 @@ use super::hosts::assign_ip_in_state;
 use super::labels::create_label_in_state;
 use super::nameservers::create_nameserver_in_state;
 use super::network_policies::create_network_policy_in_state;
-use super::networks::{add_excluded_range_in_state, create_network_in_state};
+use super::networks::{
+    add_excluded_range_in_state, create_network_in_state, update_network_in_state,
+};
 use super::ptr_overrides::create_ptr_override_in_state;
 use super::tasks::create_task_in_state;
 use super::zones::{create_forward_zone_in_state, create_reverse_zone_in_state};
@@ -210,11 +213,20 @@ fn import_network(
     attributes: &Value,
     refs: &BTreeMap<String, String>,
 ) -> Result<Value, AppError> {
+    let _requested_frozen = resolve_bool(attributes, "frozen")?.unwrap_or(false);
     let network = create_network_in_state(
         state,
-        CreateNetwork::new(
+        CreateNetwork::new_full(
             CidrValue::new(resolve_string(attributes, "cidr", refs)?)?,
             resolve_string(attributes, "description", refs)?,
+            resolve_u32(attributes, "vlan")?
+                .map(VlanId::new)
+                .transpose()?,
+            resolve_bool(attributes, "dns_delegated")?.unwrap_or(false),
+            resolve_optional_string(attributes, "category", refs)?.unwrap_or_default(),
+            resolve_optional_string(attributes, "location", refs)?.unwrap_or_default(),
+            // See the PostgreSQL importer: freeze only after the full graph exists.
+            false,
             ReservedCount::new(resolve_u32(attributes, "reserved")?.unwrap_or(3))?,
         )?,
     )?;
@@ -351,11 +363,12 @@ fn import_forward_zone(
                 .map(DnsName::new)
                 .collect::<Result<Vec<_>, _>>()?,
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
-            SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
+            SerialNumber::new(resolve_u32(attributes, "serial_no")?.unwrap_or(1))?,
             SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
             SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
             SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
-            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "soa_record_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "negative_ttl")?.unwrap_or(3_600))?,
             Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         ),
     )?;
@@ -381,13 +394,14 @@ fn import_reverse_zone(
                 .map(DnsName::new)
                 .collect::<Result<Vec<_>, _>>()?,
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
-            SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
+            SerialNumber::new(resolve_u32(attributes, "serial_no")?.unwrap_or(1))?,
             SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
             SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
             SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
-            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "soa_record_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "negative_ttl")?.unwrap_or(3_600))?,
             Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
-        ),
+        )?,
     )?;
     Ok(Value::String(zone.name().as_str().to_string()))
 }
@@ -725,6 +739,27 @@ impl ImportStore for MemoryStorage {
             for item in stored.batch.items() {
                 let applied_ref = apply_import_item(&mut candidate, item, &mut refs)?;
                 applied.push(applied_ref);
+            }
+            for item in stored.batch.items() {
+                if item.kind() != &ImportKind::Network
+                    || !resolve_bool(item.attributes(), "frozen")?.unwrap_or(false)
+                {
+                    continue;
+                }
+                let cidr = CidrValue::new(resolve_string(item.attributes(), "cidr", &refs)?)?;
+                update_network_in_state(
+                    &mut candidate,
+                    &cidr,
+                    UpdateNetwork {
+                        description: None,
+                        vlan: UpdateField::Unchanged,
+                        dns_delegated: None,
+                        category: None,
+                        location: None,
+                        frozen: Some(true),
+                        reserved: None,
+                    },
+                )?;
             }
 
             let commit_summary = json!({

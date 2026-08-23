@@ -122,7 +122,8 @@ diesel::table! {
         refresh -> Int4,
         retry -> Int4,
         expire -> Int4,
-        soa_ttl -> Int4,
+        soa_record_ttl -> Int4,
+        negative_ttl -> Int4,
         default_ttl -> Int4,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
@@ -139,6 +140,12 @@ diesel::table! {
         action -> Text,
         data -> Jsonb,
         created_at -> Timestamptz,
+        delivery_attempts -> Int4,
+        delivery_available_at -> Timestamptz,
+        delivery_lease_id -> Nullable<Uuid>,
+        delivery_lease_until -> Nullable<Timestamptz>,
+        delivered_at -> Nullable<Timestamptz>,
+        delivery_error -> Nullable<Text>,
     }
 }
 
@@ -474,7 +481,8 @@ diesel::table! {
         refresh -> Int4,
         retry -> Int4,
         expire -> Int4,
-        soa_ttl -> Int4,
+        soa_record_ttl -> Int4,
+        negative_ttl -> Int4,
         default_ttl -> Int4,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,

@@ -120,6 +120,11 @@ Supported DHCP identifier kinds:
 The `priority` field determines which identifier is used when multiple are set
 for the same family (lower number = higher priority).
 
+Identifier values are validated at the API boundary: DHCPv4 client IDs and raw
+DUIDs use canonical colon-separated octets, DUID-LL/DUID-LLT enforce their
+fixed headers and link-layer address shape, DUID-EN requires an enterprise
+number plus identifier bytes, and DUID-UUID requires the RFC 6355 UUID form.
+
 **Auto-creation of DHCP identifiers:** By default, DHCP identifiers are NOT
 auto-created when an IP is assigned with a MAC address. You can enable automatic
 creation via two environment variables:
@@ -222,6 +227,23 @@ curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/
 
 Only IPv6 prefixes are allowed, and the reserved prefix must be equal to or
 contained within the attachment network.
+
+Prefix reservations cannot overlap another reservation on the same network,
+even when the reservations belong to different attachments.
+
+Network `reserved` counts leading addresses unavailable to automatic or
+explicit host assignment. Independently of that setting, IPv4 network and
+broadcast identifiers are never assignable on prefixes through `/30`;
+RFC 3021 `/31` endpoints and `/32` host routes remain usable. A network whose
+reserved count leaves no assignable address is rejected.
+
+## Frozen networks
+
+Freezing a network makes its inventory graph immutable. Until it is explicitly
+unfrozen, the API rejects changes to the network, attachments, IP assignments,
+DHCP identifiers, prefix reservations, excluded ranges, communities, and both
+community-assignment models. PostgreSQL triggers enforce the same rule for
+direct database writes and cascading deletes.
 
 ### 5. Assign IPs to an existing attachment
 

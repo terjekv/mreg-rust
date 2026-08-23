@@ -112,10 +112,7 @@ where
     F: FnOnce(&dyn TxStorage) -> Result<T, AppError> + Send + 'static,
     T: Send + 'static,
 {
-    fn run(
-        mut self: Box<Self>,
-        tx: &dyn TxStorage,
-    ) -> Result<Box<dyn Any + Send>, AppError> {
+    fn run(mut self: Box<Self>, tx: &dyn TxStorage) -> Result<Box<dyn Any + Send>, AppError> {
         let work = self
             .work
             .take()

@@ -121,9 +121,10 @@ CI runs on every PR:
 - **Full test suite** against both memory and PostgreSQL backends
 - **Benchmark compilation** to catch build regressions
 
-PR benchmarks run automatically via iai-callgrind and criterion. Regression thresholds:
+PR benchmarks run automatically through `rust-pr-bench`, using Gungraun and
+Criterion. Regression thresholds:
 
-- **iai-callgrind:** 3% (instruction-count based, deterministic)
+- **Gungraun:** 3% (instruction-count based, deterministic)
 - **criterion:** 8% (wall-clock based, noisier)
 
 PRs that exceed these thresholds will fail the benchmark check.

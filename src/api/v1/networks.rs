@@ -65,7 +65,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct ListNetworksQuery {
     // Pagination + sort
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -389,9 +393,7 @@ async fn build_network_response_impl(
             .push(NetworkAttachmentInventoryResponse {
                 attachment_id: attachment.id(),
                 mac_address: attachment.mac_address().map(|value| value.as_str()),
-                mac_address_kind: attachment
-                    .mac_address()
-                    .map(|value| value.kind().into()),
+                mac_address_kind: attachment.mac_address().map(|value| value.kind().into()),
                 ip_addresses: ip_addresses_by_attachment
                     .get(&attachment.id())
                     .cloned()

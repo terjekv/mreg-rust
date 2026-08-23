@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::super::PostgresStorage;
-use super::super::helpers::{map_unique, vec_to_page};
+use super::super::helpers::{map_unique, vec_to_page_by};
 
 impl PostgresStorage {
     pub(in crate::storage::postgres) fn list_forward_zone_delegations_impl(
@@ -76,7 +76,13 @@ impl PostgresStorage {
                 row.into_forward_delegation(ns)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(
+            items,
+            page,
+            "name",
+            &crate::domain::pagination::SortDirection::Asc,
+            |item| item.name().as_str().to_string(),
+        )
     }
 
     pub(in crate::storage::postgres) fn create_forward_zone_delegation_impl(
@@ -227,7 +233,13 @@ impl PostgresStorage {
                 row.into_reverse_delegation(ns)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(
+            items,
+            page,
+            "name",
+            &crate::domain::pagination::SortDirection::Asc,
+            |item| item.name().as_str().to_string(),
+        )
     }
 
     pub(in crate::storage::postgres) fn create_reverse_zone_delegation_impl(

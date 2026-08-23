@@ -92,9 +92,7 @@ pub(super) fn get_host_group_by_name_in_state(
         .host_groups
         .get(name.as_str())
         .cloned()
-        .ok_or_else(|| {
-            AppError::not_found(format!("host group '{}' was not found", name.as_str()))
-        })
+        .ok_or_else(|| AppError::not_found(format!("host group '{}' was not found", name.as_str())))
 }
 
 pub(super) fn list_host_groups_for_hosts_in_state(
@@ -126,9 +124,7 @@ pub(super) fn delete_host_group_in_state(
         .host_groups
         .remove(name.as_str())
         .map(|_| ())
-        .ok_or_else(|| {
-            AppError::not_found(format!("host group '{}' was not found", name.as_str()))
-        })
+        .ok_or_else(|| AppError::not_found(format!("host group '{}' was not found", name.as_str())))
 }
 
 #[async_trait]

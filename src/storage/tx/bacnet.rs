@@ -19,10 +19,7 @@ pub trait TxBacnetStore {
         &self,
         command: CreateBacnetIdAssignment,
     ) -> Result<BacnetIdAssignment, AppError>;
-    fn get_bacnet_id(
-        &self,
-        bacnet_id: BacnetIdentifier,
-    ) -> Result<BacnetIdAssignment, AppError>;
+    fn get_bacnet_id(&self, bacnet_id: BacnetIdentifier) -> Result<BacnetIdAssignment, AppError>;
     fn list_bacnet_ids_for_hosts(
         &self,
         hosts: &[Hostname],

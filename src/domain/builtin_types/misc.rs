@@ -16,7 +16,7 @@ pub(super) fn builtin_loc() -> Result<CreateRecordTypeDefinition, AppError> {
         Some(DnsTypeCode::new(29)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
-            RecordCardinality::Single,
+            RecordCardinality::Multiple,
             false,
             vec![
                 RecordFieldSchema::new(

@@ -82,21 +82,26 @@ macro_rules! seed_host_and_zone {
 #[case::loc("LOC", "host", json!({"latitude": 59.9, "longitude": 10.7, "altitude_m": 50.0}))]
 #[case::caa("CAA", "host", json!({"flags": 0, "tag": "issue", "value": "letsencrypt.org"}))]
 #[case::ds("DS", "forward_zone", json!({"key_tag": 12345, "algorithm": 13, "digest_type": 2, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
-#[case::dnskey("DNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 13, "public_key": "dGVzdGtleQ=="}))]
-#[case::tlsa("TLSA", "host", json!({"usage": 3, "selector": 1, "matching_type": 1, "certificate_data": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
+#[case::dnskey("DNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 13, "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="}))]
+#[case::dnskey_ml_dsa_44("DNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 18, "public_key": "dGVzdA=="}))]
+#[case::tlsa("TLSA", "tlsa", json!({"usage": 3, "selector": 1, "matching_type": 1, "certificate_data": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
+#[case::tlsa_c509("TLSA", "tlsa", json!({"usage": 3, "selector": 2, "matching_type": 0, "certificate_data": "abcd"}))]
 #[case::sshfp_sha1("SSHFP", "host", json!({"algorithm": 1, "fp_type": 1, "fingerprint": "abcdef0123456789abcdef0123456789abcdef01"}))]
 #[case::sshfp_sha256("SSHFP", "host", json!({"algorithm": 2, "fp_type": 2, "fingerprint": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
 #[case::naptr("NAPTR", "host", json!({"order": 100, "preference": 10, "flags": "s", "services": "SIP+D2U", "regexp": "", "replacement": "sip.rr.org"}))]
 #[case::dname("DNAME", "unanchored", json!({"target": "other.example.org"}))]
 #[case::cds("CDS", "forward_zone", json!({"key_tag": 12345, "algorithm": 13, "digest_type": 2, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
-#[case::cdnskey("CDNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 13, "public_key": "dGVzdGtleQ=="}))]
+#[case::cds_delete("CDS", "forward_zone", json!({"key_tag": 0, "algorithm": 0, "digest_type": 0, "digest": "00"}))]
+#[case::cdnskey("CDNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 13, "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="}))]
+#[case::cdnskey_delete("CDNSKEY", "forward_zone", json!({"flags": 0, "protocol": 3, "algorithm": 0, "public_key": "AA=="}))]
 #[case::csync("CSYNC", "forward_zone", json!({"soa_serial": 2024010100, "flags": 3, "type_bitmap": "A AAAA NS"}))]
-#[case::uri("URI", "host", json!({"priority": 10, "weight": 1, "target": "https://example.org/"}))]
-#[case::openpgpkey("OPENPGPKEY", "host", json!({"public_key": "mQENBF..."}))]
-#[case::smimea("SMIMEA", "host", json!({"usage": 3, "selector": 1, "matching_type": 1, "certificate_data": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
+#[case::uri("URI", "uri", json!({"priority": 10, "weight": 1, "target": "https://example.org/"}))]
+#[case::openpgpkey("OPENPGPKEY", "openpgpkey", json!({"public_key": "dGVzdA=="}))]
+#[case::smimea("SMIMEA", "smimea", json!({"usage": 3, "selector": 1, "matching_type": 1, "certificate_data": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}))]
 #[case::null_mx("MX", "forward_zone", json!({"preference": 0, "exchange": "."}))]
 #[case::svcb("SVCB", "host", json!({"priority": 1, "target": "svc.rr.org"}))]
 #[case::https("HTTPS", "host", json!({"priority": 1, "target": "cdn.rr.org"}))]
+#[case::svcb_current_registered_keys("SVCB", "host", json!({"priority": 1, "target": "svc.rr.org", "params": [{"key": "dohpath", "value": "/dns-query{?dns}"}, {"key": "ohttp"}, {"key": "pvd"}, {"key": "docpath", "value": ""}]}))]
 #[actix_web::test]
 async fn valid_record_is_accepted(
     #[case] type_name: &str,
@@ -173,6 +178,26 @@ async fn valid_record_is_accepted(
                 "data": data,
             })
         }
+        "tlsa" => json!({
+            "type_name": type_name,
+            "owner_name": "_443._tcp.test.rr.org",
+            "data": data,
+        }),
+        "uri" => json!({
+            "type_name": type_name,
+            "owner_name": "_https._tcp.rr.org",
+            "data": data,
+        }),
+        "openpgpkey" => json!({
+            "type_name": type_name,
+            "owner_name": format!("{}._openpgpkey.rr.org", "a".repeat(56)),
+            "data": data,
+        }),
+        "smimea" => json!({
+            "type_name": type_name,
+            "owner_name": format!("{}._smimecert.rr.org", "a".repeat(56)),
+            "data": data,
+        }),
         _ => panic!("unknown owner_kind: {owner_kind}"),
     };
 
@@ -210,24 +235,32 @@ async fn valid_record_is_accepted(
 #[case::naptr_both_regexp_and_replacement("NAPTR", "host", json!({"order": 100, "preference": 10, "flags": "s", "services": "SIP+D2U", "regexp": "!^.*$!sip:info@rr.org!", "replacement": "sip.rr.org"}), "exactly one")]
 #[case::naptr_neither_regexp_nor_replacement("NAPTR", "host", json!({"order": 100, "preference": 10, "flags": "s", "services": "SIP+D2U", "regexp": "", "replacement": "."}), "exactly one")]
 #[case::ds_bad_algorithm("DS", "forward_zone", json!({"key_tag": 1, "algorithm": 99, "digest_type": 2, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}), "algorithm")]
+#[case::ds_non_signing_algorithm("DS", "forward_zone", json!({"key_tag": 1, "algorithm": 1, "digest_type": 2, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}), "zone signing")]
 #[case::ds_bad_digest_type("DS", "forward_zone", json!({"key_tag": 1, "algorithm": 13, "digest_type": 99, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}), "digest_type")]
 #[case::dnskey_bad_protocol("DNSKEY", "forward_zone", json!({"flags": 257, "protocol": 1, "algorithm": 13, "public_key": "dGVzdA=="}), "protocol must be 3")]
 #[case::dnskey_bad_algorithm("DNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 99, "public_key": "dGVzdA=="}), "algorithm")]
 #[case::dnskey_empty_key("DNSKEY", "forward_zone", json!({"flags": 257, "protocol": 3, "algorithm": 13, "public_key": ""}), "empty")]
-#[case::caa_bad_tag("CAA", "host", json!({"flags": 0, "tag": "UPPER", "value": "letsencrypt.org"}), "lowercase")]
+#[case::caa_bad_tag("CAA", "host", json!({"flags": 0, "tag": "bad-tag", "value": "letsencrypt.org"}), "alphanumeric")]
 #[case::caa_empty_tag("CAA", "host", json!({"flags": 0, "tag": "", "value": "letsencrypt.org"}), "non-empty")]
-#[case::caa_flags_too_large("CAA", "host", json!({"flags": 999, "tag": "issue", "value": "letsencrypt.org"}), "0-255")]
+#[case::caa_flags_too_large("CAA", "host", json!({"flags": 999, "tag": "issue", "value": "letsencrypt.org"}), "issuer-critical")]
 #[case::tlsa_bad_usage("TLSA", "host", json!({"usage": 9, "selector": 1, "matching_type": 1, "certificate_data": "abcd"}), "usage")]
 #[case::tlsa_bad_selector("TLSA", "host", json!({"usage": 3, "selector": 9, "matching_type": 1, "certificate_data": "abcd"}), "selector")]
 #[case::tlsa_bad_matching_type("TLSA", "host", json!({"usage": 3, "selector": 1, "matching_type": 9, "certificate_data": "abcd"}), "matching_type")]
 #[case::smimea_bad_usage("SMIMEA", "host", json!({"usage": 9, "selector": 1, "matching_type": 1, "certificate_data": "abcd"}), "usage")]
 #[case::cds_bad_algorithm("CDS", "forward_zone", json!({"key_tag": 1, "algorithm": 99, "digest_type": 2, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}), "algorithm")]
+#[case::cds_malformed_delete("CDS", "forward_zone", json!({"key_tag": 0, "algorithm": 0, "digest_type": 0, "digest": "01"}), "exactly")]
 #[case::cdnskey_bad_protocol("CDNSKEY", "forward_zone", json!({"flags": 257, "protocol": 1, "algorithm": 13, "public_key": "dGVzdA=="}), "protocol must be 3")]
+#[case::cdnskey_malformed_delete("CDNSKEY", "forward_zone", json!({"flags": 0, "protocol": 3, "algorithm": 0, "public_key": "AQ=="}), "exactly")]
+#[case::csync_unknown_flag("CSYNC", "forward_zone", json!({"soa_serial": 1, "flags": 4, "type_bitmap": "NS"}), "flags")]
+#[case::csync_bad_type_bitmap("CSYNC", "forward_zone", json!({"soa_serial": 1, "flags": 0, "type_bitmap": "TYPE65535"}), "type_bitmap")]
+#[case::uri_empty_target("URI", "host", json!({"priority": 1, "weight": 1, "target": ""}), "empty")]
+#[case::openpgpkey_bad_base64("OPENPGPKEY", "host", json!({"public_key": "not base64"}), "base64")]
 #[case::loc_bad_latitude("LOC", "host", json!({"latitude": 999.0, "longitude": 10.7, "altitude_m": 50.0}), "latitude")]
 #[case::loc_bad_longitude("LOC", "host", json!({"latitude": 59.9, "longitude": 999.0, "altitude_m": 50.0}), "longitude")]
 #[case::txt_missing_value("TXT", "host", json!({}), "required")]
 #[case::srv_missing_port("SRV", "host", json!({"priority": 10, "weight": 5, "target": "sip.rr.org"}), "port")]
 #[case::cname_missing_target("CNAME", "host", json!({}), "required")]
+#[case::svcb_invalid_key("SVCB", "host", json!({"priority": 1, "target": "svc.rr.org", "params": [{"key": "key65535", "value": "invalid"}]}), "invalid key")]
 #[actix_web::test]
 async fn invalid_record_is_rejected(
     #[case] type_name: &str,
@@ -243,26 +276,27 @@ async fn invalid_record_is_rejected(
     .await;
     seed_host_and_zone!(app);
 
-    // SRV needs special owner name with _service._proto prefix
-    let body = if type_name == "SRV" {
-        json!({
-            "type_name": type_name,
-            "owner_name": "_sip._tcp.rr.org",
-            "data": data,
-        })
-    } else {
-        let owner = if owner_kind == "forward_zone" {
-            "rr.org"
-        } else {
-            "test.rr.org"
-        };
-        json!({
-            "type_name": type_name,
-            "owner_kind": owner_kind,
-            "owner_name": owner,
-            "data": data,
-        })
+    let specialized_owner = match type_name {
+        "SRV" => Some("_sip._tcp.rr.org".to_string()),
+        "TLSA" => Some("_443._tcp.test.rr.org".to_string()),
+        "URI" => Some("_https._tcp.rr.org".to_string()),
+        "OPENPGPKEY" => Some(format!("{}._openpgpkey.rr.org", "a".repeat(56))),
+        "SMIMEA" => Some(format!("{}._smimecert.rr.org", "a".repeat(56))),
+        _ => None,
     };
+    let has_specialized_owner = specialized_owner.is_some();
+    let mut body = json!({
+        "type_name": type_name,
+        "owner_name": specialized_owner.unwrap_or_else(|| if owner_kind == "forward_zone" {
+            "rr.org".to_string()
+        } else {
+            "test.rr.org".to_string()
+        }),
+        "data": data,
+    });
+    if !has_specialized_owner {
+        body["owner_kind"] = Value::String(owner_kind.to_string());
+    }
 
     let resp = test::call_service(
         &app,
@@ -340,4 +374,56 @@ async fn record_with_empty_data_is_rejected(
         StatusCode::BAD_REQUEST,
         "{type_name} with empty data should be rejected"
     );
+}
+
+#[rstest]
+#[case::cds(
+    "CDS",
+    json!({"key_tag": 0, "algorithm": 0, "digest_type": 0, "digest": "00"}),
+    json!({"key_tag": 12345, "algorithm": 13, "digest_type": 2, "digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"})
+)]
+#[case::cdnskey(
+    "CDNSKEY",
+    json!({"flags": 0, "protocol": 3, "algorithm": 0, "public_key": "AA=="}),
+    json!({"flags": 257, "protocol": 3, "algorithm": 13, "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="})
+)]
+#[actix_web::test]
+async fn child_ds_delete_signal_must_be_singleton(
+    #[case] type_name: &str,
+    #[case] delete_data: Value,
+    #[case] regular_data: Value,
+) {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(app_state()))
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+    )
+    .await;
+    seed_host_and_zone!(app);
+
+    let record = |data| {
+        json!({
+            "type_name": type_name,
+            "owner_kind": "forward_zone",
+            "owner_name": "rr.org",
+            "data": data,
+        })
+    };
+    test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/dns/records")
+            .set_json(record(delete_data))
+            .to_request(),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/dns/records")
+            .set_json(record(regular_data))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }

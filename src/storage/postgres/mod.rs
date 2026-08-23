@@ -176,6 +176,10 @@ impl Storage for PostgresStorage {
         self
     }
 
+    fn outbox(&self) -> &(dyn crate::storage::OutboxStore + Send + Sync) {
+        self
+    }
+
     fn auth_sessions(&self) -> &(dyn AuthSessionStore + Send + Sync) {
         self
     }

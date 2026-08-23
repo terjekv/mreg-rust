@@ -44,6 +44,7 @@ impl Network {
         if description.is_empty() {
             return Err(AppError::validation("network description cannot be empty"));
         }
+        network_usable_bounds(&cidr, reserved)?;
 
         Ok(Self {
             id,
@@ -136,6 +137,7 @@ impl CreateNetwork {
         if description.is_empty() {
             return Err(AppError::validation("network description cannot be empty"));
         }
+        network_usable_bounds(&cidr, reserved)?;
 
         Ok(Self {
             cidr,
@@ -164,6 +166,7 @@ impl CreateNetwork {
         if description.is_empty() {
             return Err(AppError::validation("network description cannot be empty"));
         }
+        network_usable_bounds(&cidr, reserved)?;
 
         Ok(Self {
             cidr,
@@ -390,8 +393,20 @@ pub fn network_usable_bounds(
         IpNet::V4(v4) => {
             let network = u32::from(v4.network()) as u128;
             let broadcast = u32::from(v4.broadcast()) as u128;
-            let first = network.saturating_add(reserved.as_u32() as u128);
-            let last = broadcast.saturating_sub(1);
+            // RFC 3021 makes both addresses usable on /31 point-to-point
+            // networks. A /32 represents one host route. Only prefixes up to
+            // /30 have network and broadcast addresses that must be excluded.
+            let reserved = reserved.as_u32() as u128;
+            let first = network.saturating_add(if v4.prefix_len() <= 30 {
+                reserved.max(1)
+            } else {
+                reserved
+            });
+            let last = if v4.prefix_len() <= 30 {
+                broadcast.saturating_sub(1)
+            } else {
+                broadcast
+            };
             if first > last {
                 return Err(AppError::validation(
                     "network has no allocatable IPv4 addresses after reserved space",
@@ -403,15 +418,12 @@ pub fn network_usable_bounds(
             let network = u128::from(v6.network());
             let first = network.saturating_add(reserved.as_u32() as u128);
             let host_bits = 128u32.saturating_sub(v6.prefix_len() as u32);
-            if host_bits > 20 {
-                return Err(AppError::validation(
-                    "automatic IPv6 allocation is only supported for relatively small prefixes",
-                ));
-            }
-            let size = 1u128
-                .checked_shl(host_bits)
-                .ok_or_else(|| AppError::validation("unsupported IPv6 allocation size"))?;
-            let last = network + size - 1;
+            let host_mask = if host_bits == 128 {
+                u128::MAX
+            } else {
+                (1u128 << host_bits) - 1
+            };
+            let last = network | host_mask;
             if first > last {
                 return Err(AppError::validation(
                     "network has no allocatable IPv6 addresses after reserved space",
@@ -424,8 +436,8 @@ pub fn network_usable_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateExcludedRange, CreateNetwork, ip_to_u128};
-    use crate::domain::types::{CidrValue, IpAddressValue};
+    use super::{CreateExcludedRange, CreateNetwork, ip_to_u128, network_usable_bounds};
+    use crate::domain::types::{CidrValue, IpAddressValue, ReservedCount};
 
     #[test]
     fn excluded_range_rejects_reversed_addresses() {
@@ -455,5 +467,19 @@ mod tests {
                 .as_inner(),
         );
         assert_eq!(value, 167_772_170);
+    }
+
+    #[test]
+    fn ipv4_network_identifier_is_never_allocatable() {
+        let network = CidrValue::new("192.0.2.0/24").expect("valid network");
+        let (first, _) = network_usable_bounds(
+            &network,
+            ReservedCount::new(0).expect("valid reserved count"),
+        )
+        .expect("usable network");
+        assert_eq!(
+            first,
+            u32::from(std::net::Ipv4Addr::new(192, 0, 2, 1)) as u128
+        );
     }
 }

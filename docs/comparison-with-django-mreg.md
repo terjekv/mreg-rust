@@ -97,7 +97,7 @@ Django mreg, by contrast, trusts whatever the ORM loads from the database. If a 
 
 Django mreg has a separate model, serializer, view, and URL route for each record type (`/cnames/`, `/txts/`, `/mxs/`, `/srvs/`, ...). Adding a new type means touching all four layers.
 
-mreg-rust has a single `POST /dns/records` endpoint that accepts a `type_name` field. 18 built-in types ship with RFC-aware validation schemas. Custom types can be registered at runtime and use RFC 3597 raw RDATA encoding.
+mreg-rust has a single `POST /dns/records` endpoint that accepts a `type_name` field. 25 built-in types ship with RFC-aware validation schemas. Custom types can be registered at runtime and use RFC 3597 raw RDATA encoding.
 
 ### Hosts, networks, and IPs are inventory, not DNS
 
@@ -134,7 +134,7 @@ Django mreg used concatenated or inconsistent paths. mreg-rust uses kebab-case t
 
 ### Pagination
 
-Django mreg uses offset-based pagination (`?page=2&page_size=50`). mreg-rust uses cursor-based pagination with UUID cursors (`?limit=50&after=<cursor>`). Responses always include `{ items, total, next_cursor }`.
+Django mreg uses offset-based pagination (`?page=2&page_size=50`). mreg-rust uses keyset pagination with opaque cursors (`?limit=50&after=<cursor>`). Responses always include `{ items, total, next_cursor }`.
 
 ### Filtering and sorting
 
@@ -208,7 +208,7 @@ Authorization is still delegated to Treetop for policy evaluation, same as in Dj
 Django mreg uses Django signals for side-effects. mreg-rust has:
 
 - **Audit trail** -- immutable history events recorded in the service layer for every mutation, queryable via `GET /system/history`
-- **Domain events** -- fire-and-forget delivery to webhook URLs, AMQP topic exchanges, or Redis streams (AMQP and Redis behind feature flags)
+- **Domain events** -- transactional-outbox, at-least-once delivery to webhook URLs, AMQP topic exchanges, or Redis streams (AMQP and Redis behind feature flags)
 
 ## What Django mreg has that mreg-rust does not
 

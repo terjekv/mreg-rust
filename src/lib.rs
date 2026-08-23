@@ -79,7 +79,7 @@ pub async fn run() -> io::Result<()> {
     let storage_backend = storage.backend_kind();
     let authn = AuthnClient::from_config(&config, storage.clone()).map_err(to_io_error)?;
     let authz = AuthorizerClient::from_config(&config).map_err(to_io_error)?;
-    let events = EventSinkClient::from_config(&config);
+    let events = EventSinkClient::from_config(&config, storage.clone());
     let reader = ReadableStorage::new(storage.clone());
 
     // Background task: prune expired revoked_tokens rows hourly.

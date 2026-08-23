@@ -143,7 +143,13 @@ pub struct ZoneName(DnsName);
 
 impl ZoneName {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        Ok(Self(DnsName::new(value)?))
+        let name = DnsName::new(value)?;
+        validate_hostname(name.as_str()).map_err(|_| {
+            AppError::validation(
+                "zone names must use LDH labels and cannot contain wildcards or underscores",
+            )
+        })?;
+        Ok(Self(name))
     }
 
     pub fn as_dns_name(&self) -> &DnsName {
@@ -186,7 +192,16 @@ fn normalize_dns_name(value: &str) -> Result<String, AppError> {
         return Err(AppError::validation("dns name cannot be empty"));
     }
 
-    let normalized = trimmed.trim_end_matches('.').to_ascii_lowercase();
+    if trimmed.ends_with("..") {
+        return Err(AppError::validation(
+            "dns name must contain at most one trailing root label",
+        ));
+    }
+
+    let normalized = trimmed
+        .strip_suffix('.')
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
     if normalized.is_empty() {
         return Err(AppError::validation("dns name cannot be root"));
     }

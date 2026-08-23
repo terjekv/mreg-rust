@@ -42,7 +42,12 @@ impl PostgresStorage {
                     .ok_or_else(|| {
                         AppError::not_found(format!("host '{}' was not found", anchor_name))
                     })?;
-                Ok((Some(row.0), Some(row.1), row.2))
+                ensure_owner_within_anchor(owner_name.as_str(), &row.1, "host")?;
+                let zone_id = match row.2 {
+                    Some(zone_id) => Some(zone_id),
+                    None => Self::best_matching_zone_for_owner_name(connection, owner_name)?,
+                };
+                Ok((Some(row.0), Some(row.1), zone_id))
             }
             RecordOwnerKind::ForwardZone => {
                 let row = forward_zones::table
@@ -53,6 +58,7 @@ impl PostgresStorage {
                     .ok_or_else(|| {
                         AppError::not_found(format!("forward zone '{}' was not found", anchor_name))
                     })?;
+                ensure_owner_within_anchor(owner_name.as_str(), &row.1, "forward zone")?;
                 Ok((Some(row.0), Some(row.1), Some(row.0)))
             }
             RecordOwnerKind::ReverseZone => {
@@ -64,6 +70,7 @@ impl PostgresStorage {
                     .ok_or_else(|| {
                         AppError::not_found(format!("reverse zone '{}' was not found", anchor_name))
                     })?;
+                ensure_owner_within_anchor(owner_name.as_str(), &row.1, "reverse zone")?;
                 Ok((Some(row.0), Some(row.1), Some(row.0)))
             }
             RecordOwnerKind::NameServer => {
@@ -75,7 +82,13 @@ impl PostgresStorage {
                     .ok_or_else(|| {
                         AppError::not_found(format!("nameserver '{}' was not found", anchor_name))
                     })?;
-                Ok((Some(row.0), Some(row.1), None))
+                if owner_name.as_str() != row.1 {
+                    return Err(AppError::validation(
+                        "nameserver-owned records must use the nameserver name as owner",
+                    ));
+                }
+                let zone_id = Self::best_matching_zone_for_owner_name(connection, owner_name)?;
+                Ok((Some(row.0), Some(row.1), zone_id))
             }
             RecordOwnerKind::ForwardZoneDelegation => {
                 let row = forward_zone_delegations::table
@@ -151,4 +164,17 @@ impl PostgresStorage {
 
         Ok(rows.into_iter().next().map(|row| row.id))
     }
+}
+
+fn ensure_owner_within_anchor(owner: &str, anchor: &str, label: &str) -> Result<(), AppError> {
+    let within = owner == anchor
+        || owner
+            .strip_suffix(anchor)
+            .is_some_and(|prefix| prefix.ends_with('.'));
+    if !within {
+        return Err(AppError::validation(format!(
+            "record owner '{owner}' is not within its {label} anchor '{anchor}'"
+        )));
+    }
+    Ok(())
 }

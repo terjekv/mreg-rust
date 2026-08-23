@@ -26,7 +26,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, vec_to_page};
+use super::helpers::{map_unique, vec_to_page_by};
 
 fn dhcp_identifier_kind_name(kind: crate::domain::attachment::DhcpIdentifierKind) -> &'static str {
     match kind {
@@ -79,11 +79,13 @@ impl PostgresStorage {
                 "primary_ns": zone.primary_ns().as_str(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "soa_rname": crate::domain::resource_records::soa_rname(zone.email().as_str())?,
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "updated": zone.updated(),
             });
@@ -96,11 +98,13 @@ impl PostgresStorage {
                 "primary_ns": zone.primary_ns().as_str(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "soa_rname": crate::domain::resource_records::soa_rname(zone.email().as_str())?,
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "updated": zone.updated(),
             });
@@ -384,11 +388,12 @@ impl PostgresStorage {
                 "name": zone.name().as_str(),
                 "primary_ns": zone.primary_ns().as_str(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
@@ -398,11 +403,12 @@ impl PostgresStorage {
                 "network": zone.network().map(|value| value.as_str()),
                 "primary_ns": zone.primary_ns().as_str(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
@@ -737,7 +743,13 @@ impl ExportStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_export_templates(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "name",
+                    &crate::domain::pagination::SortDirection::Asc,
+                    |item| item.name().to_string(),
+                )
             })
             .await
     }
@@ -747,7 +759,13 @@ impl ExportStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_export_runs(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "created_at",
+                    &crate::domain::pagination::SortDirection::Desc,
+                    |item| item.created_at().to_rfc3339(),
+                )
             })
             .await
     }

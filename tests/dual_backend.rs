@@ -345,10 +345,13 @@ async fn ip_assign_scenario(ctx: &TestCtx) {
 
 async fn ip_creates_a_record_scenario(ctx: &TestCtx) {
     let cidr = ctx.cidr(1);
-    let host = ctx.host("arec");
+    let zone = ctx.zone("arec");
+    let nameserver = ctx.nameserver("ns1", &zone);
+    let host = ctx.host_in_zone("arec", &zone);
     let address = ctx.ip_in_cidr(&cidr, 10);
     ctx.seed_network(&cidr).await;
-    ctx.seed_host(&host).await;
+    ctx.seed_zone(&zone, &nameserver).await;
+    ctx.seed_host_in_zone(&host, &zone).await;
 
     let status = ctx
         .post(
@@ -849,6 +852,83 @@ async fn import_batch_is_atomic_scenario(ctx: &TestCtx) {
     assert_eq!(stored["status"], "failed");
 }
 
+async fn import_batch_freezes_network_after_building_graph_scenario(ctx: &TestCtx) {
+    let _guard = task_queue_mutex().lock().await;
+    drain_task_queue(ctx).await;
+
+    let cidr = ctx.cidr(8);
+    let host = ctx.host("frozen-import-host");
+    let (create_status, _) = ctx
+        .post_json(
+            "/workflows/imports",
+            json!({
+                "requested_by": "tester",
+                "items": [
+                    {
+                        "ref": "network-1",
+                        "kind": "network",
+                        "operation": "create",
+                        "attributes": {
+                            "cidr": cidr,
+                            "description": "Frozen imported network",
+                            "vlan": 42,
+                            "dns_delegated": true,
+                            "category": "prod",
+                            "location": "dc1",
+                            "frozen": true,
+                            "reserved": 5
+                        }
+                    },
+                    {
+                        "ref": "host-1",
+                        "kind": "host",
+                        "operation": "create",
+                        "attributes": { "name": host }
+                    },
+                    {
+                        "ref": "attachment-1",
+                        "kind": "host_attachment",
+                        "operation": "create",
+                        "attributes": {
+                            "host_name": host,
+                            "network": cidr,
+                            "mac_address": "aa:bb:cc:dd:ee:08"
+                        }
+                    }
+                ]
+            }),
+        )
+        .await;
+    let run_status = ctx.post("/workflows/tasks/run-next", json!({})).await;
+    let network = ctx.get_json(&format!("/inventory/networks/{cidr}")).await;
+    let attachments = ctx
+        .get_json(&format!("/inventory/hosts/{host}/attachments"))
+        .await;
+
+    assert_eq!(
+        (
+            create_status,
+            run_status,
+            network["vlan"].as_u64(),
+            network["dns_delegated"].as_bool(),
+            network["category"].as_str(),
+            network["location"].as_str(),
+            network["frozen"].as_bool(),
+            attachments.as_array().map(Vec::len),
+        ),
+        (
+            StatusCode::CREATED,
+            StatusCode::OK,
+            Some(42),
+            Some(true),
+            Some("prod"),
+            Some("dc1"),
+            Some(true),
+            Some(1),
+        ),
+    );
+}
+
 async fn import_batch_rejects_out_of_network_attachment_prefix_scenario(ctx: &TestCtx) {
     let _guard = task_queue_mutex().lock().await;
     drain_task_queue(ctx).await;
@@ -1239,6 +1319,12 @@ async fn zone_delete_scenario(ctx: &TestCtx) {
     assert_eq!(status, StatusCode::CREATED);
 
     let status = ctx.delete(&format!("/dns/forward-zones/{zone}")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let status = ctx.delete(&format!("/inventory/hosts/{host}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let status = ctx.delete(&format!("/dns/forward-zones/{zone}")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let status = ctx.get_status(&format!("/dns/forward-zones/{zone}")).await;
@@ -1510,6 +1596,10 @@ dual_backend_test!(policy_atom_in_use_reject_delete, |ctx| {
 
 dual_backend_test!(import_batch_is_atomic, |ctx| {
     import_batch_is_atomic_scenario(&ctx).await;
+});
+
+dual_backend_test!(import_batch_freezes_network_after_building_graph, |ctx| {
+    import_batch_freezes_network_after_building_graph_scenario(&ctx).await;
 });
 
 dual_backend_test!(
@@ -2617,4 +2707,233 @@ async fn pagination_limit_scenario(ctx: &TestCtx) {
 
 dual_backend_test!(pagination_limit, |ctx| {
     pagination_limit_scenario(&ctx).await;
+});
+
+async fn pagination_cursor_survives_boundary_deletion_scenario(ctx: &TestCtx) {
+    for index in 0..3 {
+        ctx.post(
+            "/inventory/labels",
+            json!({
+                "name": ctx.name(&format!("cursor-delete-{index}")),
+                "description": "same sort key",
+            }),
+        )
+        .await;
+    }
+    let first = ctx
+        .get_json(&format!(
+            "/inventory/labels?limit=1&sort_by=description&name__contains={}",
+            ctx.namespace()
+        ))
+        .await;
+    let cursor = first["next_cursor"].as_str().expect("next cursor");
+    let boundary = first["items"][0]["name"].as_str().expect("label name");
+    ctx.delete(&format!("/inventory/labels/{boundary}")).await;
+    let second = ctx
+        .get_json(&format!(
+            "/inventory/labels?limit=2&sort_by=description&name__contains={}&after={cursor}",
+            ctx.namespace()
+        ))
+        .await;
+    assert_eq!(second["items"].as_array().expect("items").len(), 2);
+}
+
+dual_backend_test!(pagination_cursor_survives_boundary_deletion, |ctx| {
+    pagination_cursor_survives_boundary_deletion_scenario(&ctx).await;
+});
+
+async fn malformed_pagination_cursor_is_rejected_scenario(ctx: &TestCtx) {
+    let status = ctx.get_status("/inventory/labels?after=not-a-cursor").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+dual_backend_test!(malformed_pagination_cursor_is_rejected, |ctx| {
+    malformed_pagination_cursor_is_rejected_scenario(&ctx).await;
+});
+
+async fn zero_pagination_limit_is_rejected_scenario(ctx: &TestCtx) {
+    let status = ctx.get_status("/inventory/labels?limit=0").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+dual_backend_test!(zero_pagination_limit_is_rejected, |ctx| {
+    zero_pagination_limit_is_rejected_scenario(&ctx).await;
+});
+
+async fn nameserver_sorting_is_backend_consistent_scenario(ctx: &TestCtx) {
+    let first = ctx.nameserver("sort-a", &ctx.zone("sort-ns"));
+    let second = ctx.nameserver("sort-z", &ctx.zone("sort-ns"));
+    ctx.post("/dns/nameservers", json!({ "name": first })).await;
+    ctx.post("/dns/nameservers", json!({ "name": second }))
+        .await;
+
+    let body = ctx
+        .get_json("/dns/nameservers?sort_by=name&sort_dir=desc&limit=1000")
+        .await;
+    let actual = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .filter(|name| name.contains(ctx.namespace()))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(actual, vec![second, first]);
+}
+
+dual_backend_test!(nameserver_sorting_is_backend_consistent, |ctx| {
+    nameserver_sorting_is_backend_consistent_scenario(&ctx).await;
+});
+
+async fn bacnet_cursor_paginates_natural_identifiers_scenario(ctx: &TestCtx) {
+    for slot in 1..=3 {
+        let host = ctx.host(&format!("bacnet-page-{slot}"));
+        ctx.seed_host(&host).await;
+        ctx.post(
+            "/inventory/bacnet-ids",
+            json!({ "bacnet_id": ctx.bacnet_id(slot), "host_name": host }),
+        )
+        .await;
+    }
+    let first = ctx
+        .get_json(&format!(
+            "/inventory/bacnet-ids?limit=2&host__contains={}",
+            ctx.namespace()
+        ))
+        .await;
+    let cursor = first["next_cursor"].as_str().expect("next cursor");
+    let second = ctx
+        .get_json(&format!(
+            "/inventory/bacnet-ids?limit=2&host__contains={}&after={cursor}",
+            ctx.namespace()
+        ))
+        .await;
+    assert_eq!(second["items"].as_array().expect("items").len(), 1);
+}
+
+dual_backend_test!(bacnet_cursor_paginates_natural_identifiers, |ctx| {
+    bacnet_cursor_paginates_natural_identifiers_scenario(&ctx).await;
+});
+
+async fn frozen_network_rejects_inventory_mutation_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(29);
+    let host = ctx.host("frozen-mutation");
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+    ctx.patch(
+        &format!("/inventory/networks/{cidr}"),
+        json!({ "frozen": true }),
+    )
+    .await;
+    let status = ctx
+        .post(
+            &format!("/inventory/hosts/{host}/attachments"),
+            json!({ "network": cidr }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+dual_backend_test!(frozen_network_rejects_inventory_mutation, |ctx| {
+    frozen_network_rejects_inventory_mutation_scenario(&ctx).await;
+});
+
+async fn excessive_reserved_space_is_rejected_scenario(ctx: &TestCtx) {
+    let status = ctx
+        .post(
+            "/inventory/networks",
+            json!({
+                "cidr": ctx.cidr(30),
+                "description": "invalid capacity",
+                "reserved": 255,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+dual_backend_test!(excessive_reserved_space_is_rejected, |ctx| {
+    excessive_reserved_space_is_rejected_scenario(&ctx).await;
+});
+
+async fn forward_zone_creation_backfills_managed_address_record_scenario(ctx: &TestCtx) {
+    let zone = ctx.zone("late-forward");
+    let host = ctx.host_in_zone("late-host", &zone);
+    let nameserver = ctx.nameserver("ns", &zone);
+    let cidr = ctx.cidr(31);
+    let address = ctx.ip_in_cidr(&cidr, 40);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+    ctx.post(
+        "/inventory/ip-addresses",
+        json!({ "host_name": host, "address": address }),
+    )
+    .await;
+    ctx.post("/dns/nameservers", json!({ "name": nameserver }))
+        .await;
+    ctx.post(
+        "/dns/forward-zones",
+        json!({
+            "name": zone,
+            "primary_ns": nameserver,
+            "nameservers": [nameserver],
+            "email": format!("hostmaster@{zone}"),
+        }),
+    )
+    .await;
+    let records = ctx
+        .get_json(&format!("/dns/records?type_name=A&owner_name={host}"))
+        .await;
+    assert_eq!(records["items"][0]["data"]["address"], address);
+}
+
+dual_backend_test!(
+    forward_zone_creation_backfills_managed_address_record,
+    |ctx| {
+        forward_zone_creation_backfills_managed_address_record_scenario(&ctx).await;
+    }
+);
+
+async fn reverse_zone_creation_backfills_managed_ptr_record_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(32);
+    let host = ctx.host("late-ptr");
+    let address = ctx.ip_in_cidr(&cidr, 41);
+    let octets = cidr
+        .strip_suffix(".0/24")
+        .expect("/24 network")
+        .split('.')
+        .collect::<Vec<_>>();
+    let zone = format!("{}.{}.{}.in-addr.arpa", octets[2], octets[1], octets[0]);
+    let nameserver = format!("{}.example.test", ctx.name("ns-late-ptr"));
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+    ctx.post(
+        "/inventory/ip-addresses",
+        json!({ "host_name": host, "address": address }),
+    )
+    .await;
+    ctx.post("/dns/nameservers", json!({ "name": nameserver }))
+        .await;
+    ctx.post(
+        "/dns/reverse-zones",
+        json!({
+            "name": zone,
+            "network": cidr,
+            "primary_ns": nameserver,
+            "nameservers": [nameserver],
+            "email": "hostmaster@example.test",
+        }),
+    )
+    .await;
+    let owner = mreg_rust::domain::types::ip_to_ptr_name(
+        &mreg_rust::domain::types::IpAddressValue::new(&address).expect("IP"),
+    );
+    let records = ctx
+        .get_json(&format!("/dns/records?type_name=PTR&owner_name={owner}"))
+        .await;
+    assert_eq!(records["items"][0]["data"]["ptrdname"], host);
+}
+
+dual_backend_test!(reverse_zone_creation_backfills_managed_ptr_record, |ctx| {
+    reverse_zone_creation_backfills_managed_ptr_record_scenario(&ctx).await;
 });

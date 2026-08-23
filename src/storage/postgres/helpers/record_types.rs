@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     domain::resource_records::{
         ExistingRecordSummary, RawRdataValue, RecordCardinality, RecordOwnerKind, RecordTypeSchema,
+        render_record_data as render_rdata,
     },
     domain::types::{DnsName, RecordTypeName, Ttl},
     errors::AppError,
@@ -122,7 +123,17 @@ impl PostgresStorage {
                     record_types::built_in.eq(true),
                 ))
                 .on_conflict(record_types::name)
-                .do_nothing()
+                .do_update()
+                .set((
+                    record_types::dns_type.eq(command.dns_type().map(|v| v.as_i32())),
+                    record_types::owner_kind.eq(&owner_kind),
+                    record_types::cardinality.eq(&cardinality),
+                    record_types::validation_schema.eq(&validation_schema),
+                    record_types::rendering_schema.eq(&rendering_schema),
+                    record_types::behavior_flags.eq(&behavior_flags),
+                    record_types::built_in.eq(true),
+                    record_types::updated_at.eq(diesel::dsl::now),
+                ))
                 .execute(connection)?;
         }
         Self::ensure_builtin_export_templates(connection)?;
@@ -147,33 +158,33 @@ impl PostgresStorage {
                     export_templates::built_in.eq(true),
                 ))
                 .on_conflict(export_templates::name)
-                .do_nothing()
+                .do_update()
+                .set((
+                    export_templates::description.eq(command.description()),
+                    export_templates::engine.eq(command.engine()),
+                    export_templates::scope.eq(command.scope()),
+                    export_templates::body.eq(command.body()),
+                    export_templates::metadata.eq(command.metadata()),
+                    export_templates::built_in.eq(true),
+                    export_templates::updated_at.eq(diesel::dsl::now),
+                ))
                 .execute(connection)?;
         }
         Ok(())
     }
 
     pub(in crate::storage::postgres) fn render_record_data(
+        type_name: &RecordTypeName,
         template: Option<&str>,
         data: &Value,
     ) -> Result<Option<String>, AppError> {
-        let Some(template) = template else {
-            return Ok(None);
-        };
-        let mut env = minijinja::Environment::new();
-        env.add_template("record", template)
-            .map_err(AppError::internal)?;
-        Ok(Some(
-            env.get_template("record")
-                .map_err(AppError::internal)?
-                .render(minijinja::value::Value::from_serialize(data))
-                .map_err(AppError::internal)?,
-        ))
+        render_rdata(type_name, template, data)
     }
 
     pub(in crate::storage::postgres) fn query_existing_owner_records(
         connection: &mut PgConnection,
         owner_name: &DnsName,
+        zone_id: Option<Uuid>,
     ) -> Result<Vec<ExistingRecordSummary>, AppError> {
         let rows = sql_query(
             "SELECT rt.name::text AS type_name, rs.ttl, r.data, r.raw_rdata
@@ -181,9 +192,11 @@ impl PostgresStorage {
              JOIN rrsets rs ON rs.id = r.rrset_id
              JOIN record_types rt ON rt.id = rs.type_id
              WHERE rs.owner_name = $1
+               AND rs.zone_id IS NOT DISTINCT FROM $2
              ORDER BY r.created_at",
         )
         .bind::<Text, _>(owner_name.as_str())
+        .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(zone_id)
         .load::<ExistingRecordRow>(connection)?;
 
         rows.into_iter()
@@ -222,8 +235,10 @@ impl PostgresStorage {
                  FROM records r
                  JOIN rrsets rs ON rs.id = r.rrset_id
                  JOIN record_types rt ON rt.id = rs.type_id
-                 WHERE rt.name = 'CNAME'
-                   AND rs.owner_name = $1
+                 WHERE (rt.name = 'CNAME' AND rs.owner_name = $1)
+                    OR (rt.name = 'DNAME'
+                        AND length($1) > length(rs.owner_name)
+                        AND right($1, length(rs.owner_name) + 1) = '.' || rs.owner_name)
                  LIMIT 1",
             )
             .bind::<Text, _>(name)
@@ -233,5 +248,73 @@ impl PostgresStorage {
             result.insert(name.clone(), alias);
         }
         Ok(result)
+    }
+
+    pub(in crate::storage::postgres) fn validate_alias_graph_in_conn(
+        connection: &mut PgConnection,
+        type_name: &RecordTypeName,
+        owner_name: &DnsName,
+        zone_id: Option<Uuid>,
+    ) -> Result<(), AppError> {
+        // Serialize graph transitions for the same owner. Database uniqueness
+        // protects the RRset itself; this lock protects cross-owner edges.
+        sql_query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
+            .bind::<Text, _>(owner_name.as_str())
+            .bind::<Text, _>(zone_id.map_or_else(|| "unassigned".to_string(), |id| id.to_string()))
+            .execute(connection)?;
+
+        let has_inbound_reference = type_name.as_str() == "CNAME"
+            && sql_query(
+                "SELECT 1 AS value
+                 FROM records r
+                 JOIN record_types rt ON rt.id = r.type_id
+                 WHERE (rt.name = 'MX' AND r.data ->> 'exchange' = $1)
+                    OR (rt.name = 'NS' AND r.data ->> 'nsdname' = $1)
+                    OR (rt.name = 'PTR' AND r.data ->> 'ptrdname' = $1)
+                    OR (rt.name = 'SRV' AND r.data ->> 'target' = $1)
+                    OR (rt.name = 'NAPTR' AND r.data ->> 'replacement' = $1)
+                 LIMIT 1",
+            )
+            .bind::<Text, _>(owner_name.as_str())
+            .get_result::<IntSentinelRow>(connection)
+            .optional()?
+            .is_some();
+
+        let has_descendant_data = type_name.as_str() == "DNAME"
+            && sql_query(
+                "SELECT 1 AS value FROM rrsets
+                 WHERE length(owner_name) > length($1)
+                   AND right(owner_name, length($1) + 1) = '.' || $1
+                   AND zone_id IS NOT DISTINCT FROM $2
+                 LIMIT 1",
+            )
+            .bind::<Text, _>(owner_name.as_str())
+            .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(zone_id)
+            .get_result::<IntSentinelRow>(connection)
+            .optional()?
+            .is_some();
+
+        let is_below_dname = sql_query(
+            "SELECT 1 AS value
+             FROM rrsets rs JOIN record_types rt ON rt.id = rs.type_id
+             WHERE rt.name = 'DNAME'
+               AND length($1) > length(rs.owner_name)
+               AND right($1, length(rs.owner_name) + 1) = '.' || rs.owner_name
+               AND rs.zone_id IS NOT DISTINCT FROM $2
+             LIMIT 1",
+        )
+        .bind::<Text, _>(owner_name.as_str())
+        .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(zone_id)
+        .get_result::<IntSentinelRow>(connection)
+        .optional()?
+        .is_some();
+
+        crate::domain::resource_records::validate_alias_graph(
+            type_name,
+            owner_name,
+            has_inbound_reference,
+            has_descendant_data,
+            is_below_dname,
+        )
     }
 }

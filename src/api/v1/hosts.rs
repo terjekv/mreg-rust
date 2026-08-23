@@ -57,7 +57,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct ListHostsQuery {
     // Pagination + sort
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -144,17 +148,31 @@ pub struct AssignIpAddressRequest {
     host_name: String,
     address: Option<String>,
     network: Option<String>,
+    #[serde(default)]
+    allocation: Option<String>,
     mac_address: Option<String>,
 }
 
 impl AssignIpAddressRequest {
     fn into_command(self) -> Result<AssignIpAddress, AppError> {
-        AssignIpAddress::new(
+        let allocation = parse_allocation_policy(self.allocation.as_deref())?;
+        Ok(AssignIpAddress::new(
             Hostname::new(self.host_name)?,
             self.address.map(IpAddressValue::new).transpose()?,
             self.network.map(CidrValue::new).transpose()?,
             self.mac_address.map(MacAddressValue::new).transpose()?,
-        )
+        )?
+        .with_allocation(allocation))
+    }
+}
+
+fn parse_allocation_policy(value: Option<&str>) -> Result<AllocationPolicy, AppError> {
+    match value {
+        Some("random") => Ok(AllocationPolicy::Random),
+        Some("first_free") | None => Ok(AllocationPolicy::FirstFree),
+        Some(other) => Err(AppError::validation(format!(
+            "unknown allocation policy: {other}"
+        ))),
     }
 }
 
@@ -354,9 +372,7 @@ impl IpAddressResponse {
             family: assignment.family(),
             network_id: assignment.network_id(),
             mac_address: assignment.mac_address().map(|value| value.as_str()),
-            mac_address_kind: assignment
-                .mac_address()
-                .map(|value| value.kind().into()),
+            mac_address_kind: assignment.mac_address().map(|value| value.kind().into()),
             created_at: assignment.created_at(),
             updated_at: assignment.updated_at(),
         }
@@ -421,32 +437,83 @@ pub(crate) async fn create_host(
     payload: web::Json<CreateHostRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
+    let auto_v4 = state.config.dhcp_auto_v4_client_id;
+    let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
+    let command = request.into_command(auto_v4, auto_v6)?;
+    let mut addresses = Vec::new();
+    let mut networks = Vec::new();
+    let mut requirements = Vec::with_capacity(command.ip_assignments().len() + 1);
+    for assignment in command.ip_assignments() {
+        let (action, resource_kind, resource_id, network) =
+            if let Some(address) = assignment.address() {
+                let network = resolve_network_for_address(state.get_ref(), address).await?;
+                addresses.push(address.as_str());
+                (
+                    authz::actions::host::ip::ASSIGN_MANUAL,
+                    authz::actions::resource_kinds::IP_ADDRESS,
+                    address.as_str(),
+                    network,
+                )
+            } else {
+                let network = assignment
+                    .network()
+                    .expect("IpAssignmentSpec guarantees one selector")
+                    .clone();
+                (
+                    authz::actions::host::ip::ASSIGN_AUTO,
+                    authz::actions::resource_kinds::NETWORK,
+                    network.as_str(),
+                    network,
+                )
+            };
+        networks.push(network.as_str());
+        let mut requirement = authz_request(&req, action, resource_kind, resource_id)
+            .attr(
+                "host_name",
+                AttrValue::String(command.name().as_str().to_string()),
+            )
+            .attr("network", AttrValue::Ip(network.as_str()));
+        if let Some(address) = assignment.address() {
+            requirement = requirement.attr("address", AttrValue::Ip(address.as_str()));
+        }
+        if let Some(mac_address) = assignment.mac_address() {
+            requirement = requirement.attr(
+                "mac_address",
+                AttrValue::String(mac_address.as_str().to_string()),
+            );
+        }
+        requirements.push(requirement.build());
+    }
     let mut authz = authz_request(
         &req,
         authz::actions::host::CREATE,
         authz::actions::resource_kinds::HOST,
-        request.name.clone(),
+        command.name().as_str(),
     )
-    .attr("name", AttrValue::String(request.name.clone()))
+    .attr(
+        "name",
+        AttrValue::String(command.name().as_str().to_string()),
+    )
     .attr("labels", AttrValue::Set(Vec::new()))
     .attr("host_groups", AttrValue::Set(Vec::new()))
-    .attr("addresses", AttrValue::Set(Vec::new()))
-    .attr("networks", AttrValue::Set(Vec::new()));
-    if let Some(zone) = &request.zone {
-        authz = authz.attr("zone", AttrValue::String(zone.clone()));
+    .attr(
+        "addresses",
+        AttrValue::Set(addresses.into_iter().map(AttrValue::Ip).collect()),
+    )
+    .attr(
+        "networks",
+        AttrValue::Set(networks.into_iter().map(AttrValue::Ip).collect()),
+    );
+    if let Some(zone) = command.zone() {
+        authz = authz.attr("zone", AttrValue::String(zone.as_str().to_string()));
     }
-    if let Some(ttl) = request.ttl {
-        authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
+    if let Some(ttl) = command.ttl() {
+        authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl.as_u32())));
     }
-    require(&state, authz).await?;
+    requirements.insert(0, authz.build());
+    require_all(&state, requirements).await?;
 
-    let auto_v4 = state.config.dhcp_auto_v4_client_id;
-    let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
-    let host = state
-        .services
-        .hosts()
-        .create(request.into_command(auto_v4, auto_v6)?)
-        .await?;
+    let host = state.services.hosts().create(command).await?;
     let view = state
         .services
         .host_views()
@@ -691,44 +758,73 @@ pub(crate) async fn assign_ip_address(
     payload: web::Json<AssignIpAddressRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request = payload.into_inner();
-    let (action, resource_kind, resource_id) = match (&request.address, &request.network) {
-        (Some(address), _) => (
+    let auto_v4 = state.config.dhcp_auto_v4_client_id;
+    let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
+    let command = request.into_command()?.with_auto_dhcp(auto_v4, auto_v6);
+    let (action, resource_kind, resource_id, network) = if let Some(address) = command.address() {
+        let network = resolve_network_for_address(state.get_ref(), address).await?;
+        (
             authz::actions::host::ip::ASSIGN_MANUAL,
             authz::actions::resource_kinds::IP_ADDRESS,
-            address.clone(),
-        ),
-        (None, Some(network)) => (
+            address.as_str(),
+            network,
+        )
+    } else {
+        let network = command
+            .network()
+            .expect("AssignIpAddress guarantees one selector")
+            .clone();
+        (
             authz::actions::host::ip::ASSIGN_AUTO,
             authz::actions::resource_kinds::NETWORK,
-            network.clone(),
-        ),
-        (None, None) => (
-            authz::actions::host::ip::ASSIGN_AUTO,
-            authz::actions::resource_kinds::HOST,
-            request.host_name.clone(),
-        ),
+            network.as_str(),
+            network,
+        )
     };
     let mut authz = authz_request(&req, action, resource_kind, resource_id)
-        .attr("host_name", AttrValue::String(request.host_name.clone()));
-    if let Some(address) = &request.address {
-        authz = authz.attr("address", AttrValue::Ip(address.clone()));
+        .attr(
+            "host_name",
+            AttrValue::String(command.host_name().as_str().to_string()),
+        )
+        .attr("network", AttrValue::Ip(network.as_str()));
+    if let Some(address) = command.address() {
+        authz = authz.attr("address", AttrValue::Ip(address.as_str()));
     }
-    if let Some(network) = &request.network {
-        authz = authz.attr("network", AttrValue::Ip(network.clone()));
-    }
-    if let Some(mac_address) = &request.mac_address {
-        authz = authz.attr("mac_address", AttrValue::String(mac_address.clone()));
+    if let Some(mac_address) = command.mac_address() {
+        authz = authz.attr(
+            "mac_address",
+            AttrValue::String(mac_address.as_str().to_string()),
+        );
     }
     require(&state, authz).await?;
 
-    let auto_v4 = state.config.dhcp_auto_v4_client_id;
-    let auto_v6 = state.config.dhcp_auto_v6_duid_ll;
-    let assignment = state
-        .services
-        .hosts()
-        .assign_ip_address(request.into_command()?.with_auto_dhcp(auto_v4, auto_v6))
-        .await?;
+    let assignment = state.services.hosts().assign_ip_address(command).await?;
     Ok(HttpResponse::Created().json(IpAddressResponse::from_domain(&assignment)))
+}
+
+async fn resolve_network_for_address(
+    state: &AppState,
+    address: &IpAddressValue,
+) -> Result<CidrValue, AppError> {
+    let network_filter = crate::domain::filters::NetworkFilter {
+        contains_ip: Some(*address),
+        ..Default::default()
+    };
+    state
+        .services
+        .networks()
+        .list(&PageRequest::all(), &network_filter)
+        .await?
+        .items
+        .into_iter()
+        .max_by_key(|network| network.prefix_len())
+        .map(|network| network.cidr().clone())
+        .ok_or_else(|| {
+            AppError::validation(format!(
+                "IP address '{}' is not contained in any known network",
+                address.as_str()
+            ))
+        })
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -759,11 +855,27 @@ pub(crate) async fn update_ip_address(
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
     let request = payload.into_inner();
+    let assignment = state.services.hosts().get_ip_address(&address).await?;
+    let attachment = state
+        .services
+        .attachments()
+        .get_attachment(assignment.attachment_id())
+        .await?;
     let mut authz = authz_request(
         &req,
         authz::actions::host::ip::UPDATE_MAC,
         authz::actions::resource_kinds::IP_ADDRESS,
         address.as_str(),
+    )
+    .attr("address", AttrValue::Ip(address.as_str()))
+    .attr(
+        "host_name",
+        AttrValue::String(attachment.host_name().as_str().to_string()),
+    )
+    .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+    .attr(
+        "attachment_id",
+        AttrValue::String(attachment.id().to_string()),
     );
     if let UpdateField::Set(ref mac_address) = request.mac_address {
         authz = authz.attr("new_mac_address", AttrValue::String(mac_address.clone()));
@@ -797,6 +909,12 @@ pub(crate) async fn unassign_ip_address(
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let address = IpAddressValue::new(path.into_inner())?;
+    let assignment = state.services.hosts().get_ip_address(&address).await?;
+    let attachment = state
+        .services
+        .attachments()
+        .get_attachment(assignment.attachment_id())
+        .await?;
     require(
         &state,
         authz_request(
@@ -804,6 +922,16 @@ pub(crate) async fn unassign_ip_address(
             authz::actions::host::ip::UNASSIGN,
             authz::actions::resource_kinds::IP_ADDRESS,
             address.as_str(),
+        )
+        .attr("address", AttrValue::Ip(address.as_str()))
+        .attr(
+            "host_name",
+            AttrValue::String(attachment.host_name().as_str().to_string()),
+        )
+        .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+        .attr(
+            "attachment_id",
+            AttrValue::String(attachment.id().to_string()),
         ),
     )
     .await?;
@@ -916,7 +1044,7 @@ mod tests {
                     "refresh": 10800,
                     "retry": 3600,
                     "expire": 1814400,
-                    "soa_ttl": 43200,
+                    "negative_ttl": 43200,
                     "default_ttl": 43200
                 }))
                 .to_request(),
@@ -988,15 +1116,32 @@ mod tests {
         )
         .await;
 
-        // Create network and host
+        // Create an authoritative zone, network, and host.
         for request in [
+            test::TestRequest::post()
+                .uri("/dns/nameservers")
+                .set_json(serde_json::json!({"name":"ns1.auto.org"}))
+                .to_request(),
+            test::TestRequest::post()
+                .uri("/dns/forward-zones")
+                .set_json(serde_json::json!({
+                    "name":"auto.org",
+                    "primary_ns":"ns1.auto.org",
+                    "nameservers":["ns1.auto.org"],
+                    "email":"hostmaster@auto.org"
+                }))
+                .to_request(),
             test::TestRequest::post()
                 .uri("/inventory/networks")
                 .set_json(serde_json::json!({"cidr":"192.168.1.0/24","description":"Test"}))
                 .to_request(),
             test::TestRequest::post()
                 .uri("/inventory/hosts")
-                .set_json(serde_json::json!({"name":"web.auto.org","comment":"auto test"}))
+                .set_json(serde_json::json!({
+                    "name":"web.auto.org",
+                    "zone":"auto.org",
+                    "comment":"auto test"
+                }))
                 .to_request(),
         ] {
             let response = test::call_service(&app, request).await;

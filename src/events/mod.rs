@@ -6,8 +6,8 @@ pub mod amqp;
 #[cfg(feature = "redis")]
 pub mod redis;
 
-use std::sync::Arc;
-use tokio::sync::Semaphore;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Notify;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -19,6 +19,9 @@ use uuid::Uuid;
 
 use crate::audit::HistoryEvent;
 use crate::config::Config;
+use crate::storage::DynStorage;
+
+pub type EventSinkResult = Result<(), String>;
 
 /// Domain event emitted to external sinks after a successful mutation.
 #[derive(Clone, Debug, Serialize)]
@@ -50,11 +53,11 @@ impl From<&HistoryEvent> for DomainEvent {
 
 /// Async trait for emitting domain events to external systems.
 ///
-/// Implementations must be fire-and-forget: errors are logged internally
-/// and never propagated to callers. A sink failure must not block a mutation.
+/// Implementations report delivery failure so the transactional outbox can
+/// retry it without coupling external availability to a mutation transaction.
 #[async_trait]
 pub trait EventSink: Send + Sync {
-    async fn emit(&self, event: &DomainEvent);
+    async fn emit(&self, event: &DomainEvent) -> EventSinkResult;
 }
 
 /// Sink that discards all events. Used when no sinks are configured.
@@ -62,7 +65,9 @@ pub struct NoopSink;
 
 #[async_trait]
 impl EventSink for NoopSink {
-    async fn emit(&self, _event: &DomainEvent) {}
+    async fn emit(&self, _event: &DomainEvent) -> EventSinkResult {
+        Ok(())
+    }
 }
 
 /// Fans out events to multiple sinks concurrently.
@@ -78,18 +83,17 @@ impl CompositeSink {
 
 #[async_trait]
 impl EventSink for CompositeSink {
-    async fn emit(&self, event: &DomainEvent) {
-        let mut tasks = Vec::with_capacity(self.sinks.len());
+    async fn emit(&self, event: &DomainEvent) -> EventSinkResult {
+        let mut failures = Vec::new();
         for sink in &self.sinks {
-            let sink = Arc::clone(sink);
-            let event = event.clone();
-            tasks.push(tokio::spawn(async move {
-                sink.emit(&event).await;
-            }));
+            if let Err(error) = sink.emit(event).await {
+                failures.push(error);
+            }
         }
-
-        for task in tasks {
-            let _ = task.await;
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
         }
     }
 }
@@ -100,7 +104,8 @@ impl EventSink for CompositeSink {
 #[derive(Clone)]
 pub struct EventSinkClient {
     inner: Arc<dyn EventSink>,
-    delivery_slots: Arc<Semaphore>,
+    outbox: Option<DynStorage>,
+    notify: Arc<Notify>,
 }
 
 impl EventSinkClient {
@@ -108,7 +113,8 @@ impl EventSinkClient {
     pub fn noop() -> Self {
         Self {
             inner: Arc::new(NoopSink),
-            delivery_slots: Arc::new(Semaphore::new(64)),
+            outbox: None,
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -117,7 +123,8 @@ impl EventSinkClient {
     pub fn with_sink(inner: Arc<dyn EventSink>) -> Self {
         Self {
             inner,
-            delivery_slots: Arc::new(Semaphore::new(64)),
+            outbox: None,
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -126,7 +133,7 @@ impl EventSinkClient {
     /// Inspects `MREG_EVENT_*` env vars to determine which sinks to activate.
     /// If multiple are configured, wraps them in a `CompositeSink`.
     /// Falls back to `NoopSink` when nothing is configured.
-    pub fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &Config, storage: DynStorage) -> Self {
         let mut sinks: Vec<Arc<dyn EventSink>> = Vec::new();
 
         if let Some(ref url) = config.event_webhook_url {
@@ -161,29 +168,80 @@ impl EventSinkClient {
             _ => Arc::new(CompositeSink::new(sinks)),
         };
 
-        Self {
+        let client = Self {
             inner,
-            delivery_slots: Arc::new(Semaphore::new(64)),
+            outbox: Some(storage),
+            notify: Arc::new(Notify::new()),
+        };
+        let worker = client.clone();
+        tokio::spawn(async move { worker.run_outbox_worker().await });
+        client
+    }
+
+    /// Wake the durable worker after the mutation commits. Test-only clients
+    /// without storage deliver synchronously so assertions stay deterministic.
+    pub async fn emit(&self, event: &DomainEvent) {
+        if self.outbox.is_some() {
+            self.notify.notify_one();
+            return;
+        }
+        if let Err(error) = self.inner.emit(event).await {
+            warn!(event_id = %event.id, %error, "direct event delivery failed");
         }
     }
 
-    /// Schedule background delivery of a domain event. Never fails callers.
-    pub async fn emit(&self, event: &DomainEvent) {
-        let Ok(permit) = Arc::clone(&self.delivery_slots).try_acquire_owned() else {
-            warn!(
-                event_id = %event.id,
-                resource_kind = %event.resource_kind,
-                action = %event.action,
-                "event delivery capacity exhausted; event remains available in audit history"
-            );
+    async fn run_outbox_worker(self) {
+        let Some(storage) = self.outbox.clone() else {
             return;
         };
-        let sink = Arc::clone(&self.inner);
-        let event = event.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            sink.emit(&event).await;
-        });
+        loop {
+            match storage.outbox().claim_events(16).await {
+                Ok(claims) if claims.is_empty() => {
+                    tokio::select! {
+                        () = self.notify.notified() => {},
+                        () = tokio::time::sleep(Duration::from_secs(5)) => {},
+                    }
+                }
+                Ok(claims) => {
+                    let deliveries = claims.into_iter().map(|claim| {
+                        let sink = Arc::clone(&self.inner);
+                        let storage = storage.clone();
+                        async move {
+                            let event = DomainEvent::from(claim.event());
+                            match sink.emit(&event).await {
+                                Ok(()) => {
+                                    if let Err(error) = storage
+                                        .outbox()
+                                        .complete_event(event.id, claim.lease_id())
+                                        .await
+                                    {
+                                        warn!(event_id = %event.id, %error, "failed to complete event delivery lease");
+                                    }
+                                }
+                                Err(error) => {
+                                    let exponent = claim.attempt().saturating_sub(1).min(8);
+                                    let delay = 1_u32 << exponent;
+                                    if let Err(store_error) = storage
+                                        .outbox()
+                                        .retry_event(event.id, claim.lease_id(), &error, delay)
+                                        .await
+                                    {
+                                        warn!(event_id = %event.id, error = %store_error, "failed to reschedule event delivery");
+                                    } else {
+                                        warn!(event_id = %event.id, attempt = claim.attempt(), retry_seconds = delay, %error, "event delivery failed; retry scheduled");
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    futures::future::join_all(deliveries).await;
+                }
+                Err(error) => {
+                    warn!(%error, "failed to claim pending event deliveries");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
     }
 }
 
@@ -202,14 +260,7 @@ pub(crate) fn safe_url_for_log(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        sync::{
-            Mutex,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::{Duration, Instant},
-    };
-    use tokio::sync::Notify;
+    use std::sync::Mutex;
 
     /// Test sink that collects emitted events for assertions.
     struct CollectorSink {
@@ -230,8 +281,9 @@ mod tests {
 
     #[async_trait]
     impl EventSink for CollectorSink {
-        async fn emit(&self, event: &DomainEvent) {
+        async fn emit(&self, event: &DomainEvent) -> EventSinkResult {
             self.events.lock().unwrap().push(event.clone());
+            Ok(())
         }
     }
 
@@ -248,7 +300,7 @@ mod tests {
             data: serde_json::json!({}),
             timestamp: Utc::now(),
         };
-        sink.emit(&event).await;
+        sink.emit(&event).await.unwrap();
     }
 
     #[tokio::test]
@@ -267,7 +319,7 @@ mod tests {
             data: serde_json::json!({"name": "web.example.org"}),
             timestamp: Utc::now(),
         };
-        composite.emit(&event).await;
+        composite.emit(&event).await.unwrap();
 
         assert_eq!(events_a.lock().unwrap().len(), 1);
         assert_eq!(events_b.lock().unwrap().len(), 1);
@@ -288,53 +340,6 @@ mod tests {
             timestamp: Utc::now(),
         };
         client.emit(&event).await;
-    }
-
-    struct SlowSink {
-        delivered: Arc<AtomicBool>,
-        notify: Arc<Notify>,
-    }
-
-    #[async_trait]
-    impl EventSink for SlowSink {
-        async fn emit(&self, _event: &DomainEvent) {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            self.delivered.store(true, Ordering::SeqCst);
-            self.notify.notify_one();
-        }
-    }
-
-    #[tokio::test]
-    async fn event_sink_client_returns_before_delivery_finishes() {
-        let delivered = Arc::new(AtomicBool::new(false));
-        let notify = Arc::new(Notify::new());
-        let client = EventSinkClient {
-            inner: Arc::new(SlowSink {
-                delivered: Arc::clone(&delivered),
-                notify: Arc::clone(&notify),
-            }),
-            delivery_slots: Arc::new(Semaphore::new(64)),
-        };
-        let event = DomainEvent {
-            id: Uuid::new_v4(),
-            actor: "test".to_string(),
-            resource_kind: "zone".to_string(),
-            resource_id: None,
-            resource_name: "example.org".to_string(),
-            action: "update".to_string(),
-            data: serde_json::json!({}),
-            timestamp: Utc::now(),
-        };
-
-        let started = Instant::now();
-        client.emit(&event).await;
-
-        assert!(started.elapsed() < Duration::from_millis(20));
-        assert!(!delivered.load(Ordering::SeqCst));
-        tokio::time::timeout(Duration::from_millis(250), notify.notified())
-            .await
-            .expect("background delivery should complete");
-        assert!(delivered.load(Ordering::SeqCst));
     }
 
     #[test]

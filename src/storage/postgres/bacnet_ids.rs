@@ -10,11 +10,11 @@ use crate::{
     domain::{
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
         filters::BacnetIdFilter,
-        pagination::{Page, PageRequest},
+        pagination::{Page, PageRequest, SortDirection, paginate_by_key},
         types::{BacnetIdentifier, Hostname},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, paginate_simple, run_dynamic_query},
+    storage::postgres::helpers::{map_unique, run_dynamic_query},
     storage::{BacnetStore, postgres::PostgresStorage},
 };
 
@@ -49,7 +49,23 @@ pub(super) fn list(
         query.push_str(" WHERE ");
         query.push_str(&clauses.join(" AND "));
     }
-    query.push_str(" ORDER BY b.id");
+    let sort_by = page.sort_by().unwrap_or("bacnet_id");
+    let order_col = match sort_by {
+        "bacnet_id" => "b.id",
+        "host_name" => "h.name::text",
+        "created_at" => "b.created_at",
+        "updated_at" => "b.updated_at",
+        other => {
+            return Err(AppError::validation(format!(
+                "unsupported sort_by field for BACnet IDs: {other}"
+            )));
+        }
+    };
+    let order_dir = match page.sort_direction() {
+        SortDirection::Asc => "ASC",
+        SortDirection::Desc => "DESC",
+    };
+    query.push_str(&format!(" ORDER BY {order_col} {order_dir}, b.id"));
     let rows = run_dynamic_query::<BacnetIdRow>(connection, &query, &values)?;
 
     let all: Vec<BacnetIdAssignment> = rows
@@ -66,7 +82,19 @@ pub(super) fn list(
         })
         .collect::<Result<Vec<_>, AppError>>()?;
 
-    Ok(paginate_simple(all, page))
+    paginate_by_key(
+        all,
+        page,
+        sort_by,
+        page.sort_direction(),
+        |item| match sort_by {
+            "host_name" => item.host_name().as_str().to_string(),
+            "created_at" => item.created_at().to_rfc3339(),
+            "updated_at" => item.updated_at().to_rfc3339(),
+            _ => format!("{:010}", item.bacnet_id().as_u32()),
+        },
+        |item| Uuid::from_u128(u128::from(item.bacnet_id().as_u32())),
+    )
 }
 
 pub(in crate::storage::postgres) fn create(

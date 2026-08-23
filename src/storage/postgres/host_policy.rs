@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::vec_to_page;
+use super::helpers::vec_to_page_by;
 
 #[derive(QueryableByName)]
 struct AtomRow {
@@ -104,7 +104,13 @@ impl PostgresStorage {
         )
         .load::<AtomRow>(c)?;
         let items: Result<Vec<_>, _> = rows.into_iter().map(AtomRow::into_domain).collect();
-        Ok(vec_to_page(items?, page))
+        vec_to_page_by(
+            items?,
+            page,
+            "name",
+            &crate::domain::pagination::SortDirection::Asc,
+            |item| item.name().as_str().to_string(),
+        )
     }
 
     pub(in crate::storage::postgres) fn create_atom_in_conn(
@@ -208,7 +214,13 @@ impl PostgresStorage {
              FROM host_policy_roles ORDER BY name ASC",
         )
         .load::<RoleRow>(c)?;
-        Ok(vec_to_page(build_roles_from_rows(c, rows)?, page))
+        vec_to_page_by(
+            build_roles_from_rows(c, rows)?,
+            page,
+            "name",
+            &crate::domain::pagination::SortDirection::Asc,
+            |item| item.name().as_str().to_string(),
+        )
     }
 
     pub(in crate::storage::postgres) fn list_roles_for_host_in_conn(

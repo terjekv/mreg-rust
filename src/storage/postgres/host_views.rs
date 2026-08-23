@@ -30,7 +30,7 @@ use crate::{
     storage::{HostStore, HostViewStore, postgres::PostgresStorage},
 };
 
-use super::helpers::{rows_to_page, run_dynamic_query};
+use super::helpers::{rows_to_page_by, run_dynamic_query};
 
 #[derive(QueryableByName)]
 struct HostViewRow {
@@ -553,7 +553,20 @@ impl PostgresStorage {
             .into_iter()
             .map(|row| row.into_domain(expansions))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows_to_page(items, page, total))
+        let sort_by = page.sort_by().unwrap_or("name");
+        rows_to_page_by(
+            items,
+            page,
+            total,
+            sort_by,
+            page.sort_direction(),
+            |item| match sort_by {
+                "comment" => item.host.comment().to_string(),
+                "created_at" => item.host.created_at().to_rfc3339(),
+                "updated_at" => item.host.updated_at().to_rfc3339(),
+                _ => item.host.name().as_str().to_string(),
+            },
+        )
     }
 }
 

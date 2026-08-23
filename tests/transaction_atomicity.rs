@@ -28,13 +28,13 @@ use mreg_rust::{
         AttachmentCommunityAssignmentStore, AttachmentStore, AuditStore, BacnetStore,
         CommunityStore, DynStorage, ErasedTxWork, ExportStore, HostCommunityAssignmentStore,
         HostContactStore, HostGroupStore, HostPolicyStore, HostStore, HostViewStore, ImportStore,
-        LabelStore, NameServerStore, NetworkPolicyStore, NetworkStore, PtrOverrideStore,
-        RecordStore, Storage, StorageBackendKind, StorageCapabilities, StorageHealthReport,
-        TaskStore, TransactionRunner, TxAttachmentCommunityAssignmentStore, TxAttachmentStore,
-        TxAuditStore, TxBacnetStore, TxCommunityStore, TxHostCommunityAssignmentStore,
-        TxHostContactStore, TxHostGroupStore, TxHostPolicyStore, TxHostStore, TxLabelStore,
-        TxNameServerStore, TxNetworkPolicyStore, TxNetworkStore, TxPtrOverrideStore,
-        TxRecordStore, TxStorage, TxZoneStore, ZoneStore,
+        LabelStore, NameServerStore, NetworkPolicyStore, NetworkStore, OutboxStore,
+        PtrOverrideStore, RecordStore, Storage, StorageBackendKind, StorageCapabilities,
+        StorageHealthReport, TaskStore, TransactionRunner, TxAttachmentCommunityAssignmentStore,
+        TxAttachmentStore, TxAuditStore, TxBacnetStore, TxCommunityStore,
+        TxHostCommunityAssignmentStore, TxHostContactStore, TxHostGroupStore, TxHostPolicyStore,
+        TxHostStore, TxLabelStore, TxNameServerStore, TxNetworkPolicyStore, TxNetworkStore,
+        TxPtrOverrideStore, TxRecordStore, TxStorage, TxZoneStore, ZoneStore,
     },
 };
 
@@ -114,6 +114,9 @@ impl Storage for FailingAuditStorage {
     fn audit(&self) -> &(dyn AuditStore + Send + Sync) {
         self.inner.audit()
     }
+    fn outbox(&self) -> &(dyn OutboxStore + Send + Sync) {
+        self.inner.outbox()
+    }
     fn auth_sessions(&self) -> &(dyn mreg_rust::storage::AuthSessionStore + Send + Sync) {
         self.inner.auth_sessions()
     }
@@ -150,10 +153,7 @@ struct WrappedWork {
 }
 
 impl ErasedTxWork for WrappedWork {
-    fn run(
-        self: Box<Self>,
-        tx: &dyn TxStorage,
-    ) -> Result<Box<dyn std::any::Any + Send>, AppError> {
+    fn run(self: Box<Self>, tx: &dyn TxStorage) -> Result<Box<dyn std::any::Any + Send>, AppError> {
         let failing = FailingAuditTxStorage { inner: tx };
         self.inner.run(&failing)
     }

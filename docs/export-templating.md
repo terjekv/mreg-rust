@@ -85,7 +85,7 @@ for each scope. Field names match the JSON keys exactly.
 | `parameters` | object | The parameters passed when creating the run |
 
 **`zone` fields:** `name`, `primary_ns`, `nameservers` (array), `email`,
-`serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl`, `updated`.
+`serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`, `updated`.
 
 **`delegations[]` fields:** `name`, `nameservers` (array), `comment`.
 
@@ -109,7 +109,7 @@ for each scope. Field names match the JSON keys exactly.
 | `parameters` | object | The parameters passed when creating the run |
 
 **`zone` fields:** `name`, `network` (nullable), `primary_ns`, `nameservers` (array),
-`email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl`,
+`email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`,
 `updated`.
 
 **`delegations[]` fields:** `name`, `nameservers` (array), `comment`.
@@ -143,13 +143,13 @@ The inventory scope provides a global view of the entire system.
 **`nameservers[]` fields:** `name`, `ttl` (nullable).
 
 **`forward_zones[]` fields:** `name`, `primary_ns`, `email`, `serial_no`, `refresh`,
-`retry`, `expire`, `soa_ttl`, `default_ttl`, `nameservers` (array).
+`retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`, `nameservers` (array).
 
 **`forward_zone_delegations[]` fields:** `name`, `zone_id`, `comment`,
 `nameservers` (array).
 
 **`reverse_zones[]` fields:** `name`, `network` (nullable), `primary_ns`, `email`,
-`serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl`,
+`serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`,
 `nameservers` (array).
 
 **`reverse_zone_delegations[]` fields:** `name`, `zone_id`, `comment`,
@@ -230,12 +230,12 @@ $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
 
 ; SOA record
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum TTL
+    {{ zone.negative_ttl }}     ; minimum TTL
 )
 
 ; Records
@@ -259,12 +259,12 @@ $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
 
 ; SOA record
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum TTL
+    {{ zone.negative_ttl }}     ; minimum TTL
 )
 
 ; Records

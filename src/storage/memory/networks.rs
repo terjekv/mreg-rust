@@ -61,19 +61,39 @@ pub(super) fn add_excluded_range_in_state(
         .ok_or_else(|| {
             AppError::not_found(format!("network '{}' was not found", network.as_str()))
         })?;
+    if network_value.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     if !network_value.contains(command.start_ip()) || !network_value.contains(command.end_ip()) {
         return Err(AppError::validation(
             "excluded range must be fully contained inside the network",
         ));
     }
 
-    let entry = state.excluded_ranges.entry(network.as_str()).or_default();
-    if entry.iter().any(|existing| {
-        ip_to_u128(existing.start_ip().as_inner()) <= ip_to_u128(command.end_ip().as_inner())
-            && ip_to_u128(command.start_ip().as_inner()) <= ip_to_u128(existing.end_ip().as_inner())
-    }) {
+    if state
+        .excluded_ranges
+        .get(&network.as_str())
+        .into_iter()
+        .flatten()
+        .any(|existing| {
+            ip_to_u128(existing.start_ip().as_inner()) <= ip_to_u128(command.end_ip().as_inner())
+                && ip_to_u128(command.start_ip().as_inner())
+                    <= ip_to_u128(existing.end_ip().as_inner())
+        })
+    {
         return Err(AppError::conflict(
             "excluded range overlaps an existing excluded range",
+        ));
+    }
+    if state.ip_addresses.values().any(|assignment| {
+        assignment.network_id() == network_value.id()
+            && ip_to_u128(command.start_ip().as_inner())
+                <= ip_to_u128(assignment.address().as_inner())
+            && ip_to_u128(assignment.address().as_inner())
+                <= ip_to_u128(command.end_ip().as_inner())
+    }) {
+        return Err(AppError::conflict(
+            "excluded range contains an allocated IP address",
         ));
     }
 
@@ -87,7 +107,11 @@ pub(super) fn add_excluded_range_in_state(
         now,
         now,
     )?;
-    entry.push(range.clone());
+    state
+        .excluded_ranges
+        .entry(network.as_str())
+        .or_default()
+        .push(range.clone());
     Ok(range)
 }
 
@@ -119,9 +143,11 @@ pub(super) fn get_network_by_cidr_in_state(
     state: &MemoryState,
     cidr: &CidrValue,
 ) -> Result<Network, AppError> {
-    state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
-    })
+    state
+        .networks
+        .get(&cidr.as_str())
+        .cloned()
+        .ok_or_else(|| AppError::not_found(format!("network '{}' was not found", cidr.as_str())))
 }
 
 pub(super) fn update_network_in_state(
@@ -135,6 +161,11 @@ pub(super) fn update_network_in_state(
         .get(&key)
         .cloned()
         .ok_or_else(|| AppError::not_found(format!("network '{}' was not found", key)))?;
+    if network.frozen() && command.frozen != Some(false) {
+        return Err(AppError::conflict(
+            "network is frozen; unfreeze it before changing it",
+        ));
+    }
     let now = Utc::now();
     let description = command
         .description
@@ -149,6 +180,17 @@ pub(super) fn update_network_in_state(
         .unwrap_or_else(|| network.location().to_string());
     let frozen = command.frozen.unwrap_or(network.frozen());
     let reserved = command.reserved.unwrap_or(network.reserved());
+    let (first, last) = network_usable_bounds(network.cidr(), reserved)?;
+    if state.ip_addresses.values().any(|assignment| {
+        assignment.network_id() == network.id() && {
+            let address = ip_to_u128(assignment.address().as_inner());
+            address < first || address > last
+        }
+    }) {
+        return Err(AppError::conflict(
+            "reserved space would include an allocated IP address",
+        ));
+    }
     let updated = Network::restore(
         network.id(),
         network.cidr().clone(),
@@ -177,6 +219,10 @@ pub(super) fn delete_network_in_state(
         .cloned()
         .ok_or_else(|| AppError::not_found(format!("network '{}' was not found", key)))?;
 
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+
     if state
         .ip_addresses
         .values()
@@ -185,6 +231,13 @@ pub(super) fn delete_network_in_state(
         return Err(AppError::conflict(
             "network still has allocated IP addresses",
         ));
+    }
+    if state
+        .host_attachments
+        .values()
+        .any(|attachment| attachment.network_id() == network.id())
+    {
+        return Err(AppError::conflict("network still has host attachments"));
     }
 
     state.networks.remove(&key);
@@ -210,9 +263,10 @@ pub(super) fn list_used_addresses_in_state(
     state: &MemoryState,
     cidr: &CidrValue,
 ) -> Result<Vec<IpAddressAssignment>, AppError> {
-    let network = state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
-    })?;
+    let network =
+        state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
+        })?;
     let mut assignments: Vec<IpAddressAssignment> = state
         .ip_addresses
         .values()
@@ -228,9 +282,10 @@ pub(super) fn list_unused_addresses_in_state(
     cidr: &CidrValue,
     limit: Option<u32>,
 ) -> Result<Vec<IpAddressValue>, AppError> {
-    let network = state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
-    })?;
+    let network =
+        state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
+        })?;
     let limit = limit.unwrap_or(100) as usize;
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
     let excluded = state
@@ -254,9 +309,8 @@ pub(super) fn list_unused_addresses_in_state(
                 if used.contains(&candidate) {
                     continue;
                 }
-                let addr = IpAddressValue::new(
-                    std::net::Ipv4Addr::from(candidate as u32).to_string(),
-                )?;
+                let addr =
+                    IpAddressValue::new(std::net::Ipv4Addr::from(candidate as u32).to_string())?;
                 if excluded.iter().any(|r| r.contains(&addr)) {
                     continue;
                 }
@@ -271,8 +325,7 @@ pub(super) fn list_unused_addresses_in_state(
                 if used.contains(&candidate) {
                     continue;
                 }
-                let addr =
-                    IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
+                let addr = IpAddressValue::new(std::net::Ipv6Addr::from(candidate).to_string())?;
                 if excluded.iter().any(|r| r.contains(&addr)) {
                     continue;
                 }
@@ -287,9 +340,10 @@ pub(super) fn count_unused_addresses_in_state(
     state: &MemoryState,
     cidr: &CidrValue,
 ) -> Result<u64, AppError> {
-    let network = state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
-    })?;
+    let network =
+        state.networks.get(&cidr.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("network '{}' was not found", cidr.as_str()))
+        })?;
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
     let excluded = state
         .excluded_ranges
@@ -311,9 +365,10 @@ pub(super) fn count_unused_addresses_in_state(
             if start > end { 0 } else { end - start + 1 }
         })
         .sum::<u128>();
-    Ok(usable_span
+    let unused = usable_span
         .saturating_sub(used.len() as u128)
-        .saturating_sub(excluded_count) as u64)
+        .saturating_sub(excluded_count);
+    Ok(u64::try_from(unused).unwrap_or(u64::MAX))
 }
 
 #[async_trait]

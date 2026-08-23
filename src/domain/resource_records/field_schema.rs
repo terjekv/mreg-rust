@@ -51,6 +51,32 @@ impl RecordFieldSchema {
         if name.is_empty() {
             return Err(AppError::validation("record field name cannot be empty"));
         }
+        if !name
+            .chars()
+            .enumerate()
+            .all(|(index, ch)| ch.is_ascii_alphanumeric() || ch == '_' && index > 0)
+            || name.starts_with(|ch: char| ch.is_ascii_digit())
+        {
+            return Err(AppError::validation(
+                "record field names must be ASCII identifiers",
+            ));
+        }
+        if matches!(kind, RecordFieldKind::Enum) && options.is_empty() {
+            return Err(AppError::validation(
+                "enum record fields must define at least one option",
+            ));
+        }
+        if !matches!(kind, RecordFieldKind::Enum) && !options.is_empty() {
+            return Err(AppError::validation(
+                "only enum record fields may define options",
+            ));
+        }
+        let unique_options = options.iter().collect::<std::collections::BTreeSet<_>>();
+        if unique_options.len() != options.len() || options.iter().any(String::is_empty) {
+            return Err(AppError::validation(
+                "record field options must be non-empty and unique",
+            ));
+        }
 
         Ok(Self {
             name,

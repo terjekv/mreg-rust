@@ -22,10 +22,12 @@ rustls-pemfile = { version = "2", optional = true }
 openssl = { version = "0.10", optional = true }
 async-trait = "0.1.89"
 argon2 = "0.5.3"
+base64 = "0.22"
 chrono = { version = "0.4.42", features = ["serde"] }
 diesel = { version = "2.2.4", features = ["postgres", "r2d2", "chrono", "uuid", "serde_json"] }
 diesel_migrations = "2.2.0"
 email_address = "0.2.9"
+futures = "0.3"
 ipnet = { version = "2.11.0", features = ["serde"] }
 macaddr = "1.0.1"
 minijinja = { version = "2.12.0", features = ["loader", "json"] }
@@ -57,7 +59,7 @@ toml = "0.9"
 actix-http = "3"
 rstest = "0.25"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
-iai-callgrind = "0.16.1"
+gungraun = "0.19.4"
 serde_urlencoded = "0.7"
 # Self-dep activates `bench-helpers` for tests/benches/examples while keeping
 # it off for the library's production build (`cargo build`/`cargo run`).

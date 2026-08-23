@@ -22,10 +22,11 @@ pub(super) fn list_labels_in_state(
     sort_and_paginate(
         items,
         page,
-        &["name", "description", "created_at"],
+        &["name", "description", "created_at", "updated_at"],
         |label, field| match field {
             "description" => label.description().to_string(),
             "created_at" => label.created_at().to_rfc3339(),
+            "updated_at" => label.updated_at().to_rfc3339(),
             _ => label.name().as_str().to_string(),
         },
     )
@@ -70,9 +71,10 @@ pub(super) fn update_label_in_state(
     name: &LabelName,
     command: UpdateLabel,
 ) -> Result<Label, AppError> {
-    let label = state.labels.get(name.as_str()).cloned().ok_or_else(|| {
-        AppError::not_found(format!("label '{}' was not found", name.as_str()))
-    })?;
+    let label =
+        state.labels.get(name.as_str()).cloned().ok_or_else(|| {
+            AppError::not_found(format!("label '{}' was not found", name.as_str()))
+        })?;
     let now = Utc::now();
     let description = command
         .description

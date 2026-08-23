@@ -15,7 +15,7 @@ use crate::{
         types::{EmailAddressValue, Hostname},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page},
+    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page_by},
     storage::{HostContactStore, postgres::PostgresStorage},
 };
 
@@ -151,7 +151,13 @@ pub(super) fn list(
         .filter(|contact| filter.matches(contact))
         .collect();
 
-    Ok(vec_to_page(items, page))
+    vec_to_page_by(
+        items,
+        page,
+        "email",
+        &crate::domain::pagination::SortDirection::Asc,
+        |item| item.email().as_str().to_string(),
+    )
 }
 
 pub(in crate::storage::postgres) fn create(

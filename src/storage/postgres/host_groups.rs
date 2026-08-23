@@ -16,7 +16,7 @@ use crate::{
         types::{HostGroupName, Hostname, OwnerGroupName},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page},
+    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page_by},
     storage::{HostGroupStore, postgres::PostgresStorage},
 };
 
@@ -278,7 +278,13 @@ pub(super) fn list(
         .filter(|group| filter.matches(group))
         .collect();
 
-    Ok(vec_to_page(items, page))
+    vec_to_page_by(
+        items,
+        page,
+        "name",
+        &crate::domain::pagination::SortDirection::Asc,
+        |item| item.name().as_str().to_string(),
+    )
 }
 
 pub(in crate::storage::postgres) fn create(

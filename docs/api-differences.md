@@ -52,7 +52,7 @@ POST /api/v1/dns/records
 }
 ```
 
-This unified model supports all 18 built-in types plus runtime-defined custom types.
+This unified model supports all 25 built-in types plus runtime-defined custom types.
 
 ## Data model differences
 
@@ -102,7 +102,7 @@ POST /api/v1/dns/records
 }
 ```
 
-Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation), `allocation` (`"first_free"` or `"random"`, defaults to `"first_free"`), and optional `mac_address`. MAC addresses may be EUI-48 or EUI-64; responses distinguish them with `mac_address_kind`. The request is atomic — if any IP assignment fails, the host is not created. Omitting `ip_addresses` creates the host without IPs (standalone `POST /api/v1/inventory/ip-addresses` still works for later assignment). IP assignment auto-creates A/AAAA and PTR records.
+Each entry must provide exactly one of `address` (explicit IP; its network is inferred) or `network` (CIDR for auto-allocation). Auto-allocation accepts `allocation` (`"first_free"` or `"random"`, defaulting to `"first_free"`); both forms accept an optional `mac_address`. MAC addresses may be EUI-48 or EUI-64; responses distinguish them with `mac_address_kind`. The request is atomic — if any IP assignment fails, the host is not created. Omitting `ip_addresses` creates the host without IPs (standalone `POST /api/v1/inventory/ip-addresses` still works for later assignment). IP assignment auto-creates A/AAAA and PTR records.
 
 ### Network fields
 
@@ -114,12 +114,12 @@ Each entry accepts `address` (explicit IP), `network` (CIDR for auto-allocation)
 
 **Old mreg**: Offset-based pagination (`?page=2&page_size=50`) with Django REST framework.
 
-**mreg-rust**: Cursor-based pagination with UUID cursors:
+**mreg-rust**: Keyset pagination with opaque cursors:
 ```
 GET /api/v1/inventory/hosts?limit=50
-→ { items: [...], total: 123, next_cursor: "uuid-here" }
+→ { items: [...], total: 123, next_cursor: "opaque-token" }
 
-GET /api/v1/inventory/hosts?limit=50&after=uuid-here
+GET /api/v1/inventory/hosts?limit=50&after=opaque-token
 → next page
 ```
 
@@ -170,7 +170,7 @@ Authorization is still delegated to Treetop or the current development bypass/de
 - **RFC 3597 raw RDATA** for custom/unknown DNS record types
 - **Import/export workflows** for bulk operations
 - **Audit trail** via `GET /api/v1/system/history`
-- **18 built-in DNS record types** (including CAA, TLSA, SVCB, HTTPS)
+- **25 built-in DNS record types** (including CDS, CDNSKEY, CSYNC, DNAME, OPENPGPKEY, SMIMEA, URI, CAA, TLSA, SVCB, and HTTPS)
 - **Operator-based filtering** with negation, substring, comparison operators
 
 ## Features in old mreg not yet in mreg-rust

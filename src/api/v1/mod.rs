@@ -35,7 +35,7 @@ pub struct SystemListResponse {
     #[schema(value_type = Vec<Object>)]
     pub items: Vec<serde_json::Value>,
     pub total: u64,
-    pub next_cursor: Option<uuid::Uuid>,
+    pub next_cursor: Option<String>,
     pub backend: StorageBackendKind,
 }
 

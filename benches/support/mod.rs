@@ -1240,25 +1240,30 @@ pub fn zone_export_storage(runtime: &Runtime) -> (DynStorage, ZoneName, ZoneName
                 SoaSeconds::new(3600).expect("retry"),
                 SoaSeconds::new(604800).expect("expire"),
                 Ttl::new(3600).expect("soa ttl"),
+                Ttl::new(3600).expect("negative ttl"),
                 Ttl::new(3600).expect("default ttl"),
             ))
             .await
             .expect("forward zone create");
         storage
             .zones()
-            .create_reverse_zone(CreateReverseZone::new(
-                reverse.clone(),
-                Some(CidrValue::new("10.0.0.0/24").expect("cidr")),
-                DnsName::new("ns1.export.test").expect("ns"),
-                vec![DnsName::new("ns1.export.test").expect("ns")],
-                EmailAddressValue::new("hostmaster@export.test").expect("email"),
-                SerialNumber::new(2026042001).expect("serial"),
-                SoaSeconds::new(10800).expect("refresh"),
-                SoaSeconds::new(3600).expect("retry"),
-                SoaSeconds::new(604800).expect("expire"),
-                Ttl::new(3600).expect("soa ttl"),
-                Ttl::new(3600).expect("default ttl"),
-            ))
+            .create_reverse_zone(
+                CreateReverseZone::new(
+                    reverse.clone(),
+                    Some(CidrValue::new("10.0.0.0/24").expect("cidr")),
+                    DnsName::new("ns1.export.test").expect("ns"),
+                    vec![DnsName::new("ns1.export.test").expect("ns")],
+                    EmailAddressValue::new("hostmaster@export.test").expect("email"),
+                    SerialNumber::new(2026042001).expect("serial"),
+                    SoaSeconds::new(10800).expect("refresh"),
+                    SoaSeconds::new(3600).expect("retry"),
+                    SoaSeconds::new(604800).expect("expire"),
+                    Ttl::new(3600).expect("soa ttl"),
+                    Ttl::new(3600).expect("negative ttl"),
+                    Ttl::new(3600).expect("default ttl"),
+                )
+                .expect("reverse zone command"),
+            )
             .await
             .expect("reverse zone create");
 

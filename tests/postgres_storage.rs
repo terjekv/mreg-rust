@@ -328,7 +328,6 @@ fn build_extended_import_batch(
             ImportOperation::Create,
             json!({
                 "host_name": host,
-                "network": cidr,
                 "mac_address": "aa:bb:cc:dd:ee:ff",
                 "address": address
             }),
@@ -567,10 +566,10 @@ async fn postgres_task_claiming_uses_skip_locked_under_concurrency()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_assign_ip_rolls_back_when_auto_record_creation_fails()
+async fn postgres_assign_ip_without_authoritative_zone_preserves_unmanaged_dns()
 -> Result<(), Box<dyn std::error::Error>> {
     let Some(ctx) =
-        postgres_ctx("postgres_assign_ip_rolls_back_when_auto_record_creation_fails").await
+        postgres_ctx("postgres_assign_ip_without_authoritative_zone_preserves_unmanaged_dns").await
     else {
         return Ok(());
     };
@@ -610,7 +609,7 @@ async fn postgres_assign_ip_rolls_back_when_auto_record_creation_fails()
         )?)
         .await?;
 
-    let result = storage
+    let assigned = storage
         .hosts()
         .assign_ip_address(AssignIpAddress::new(
             Hostname::new(&host)?,
@@ -618,15 +617,12 @@ async fn postgres_assign_ip_rolls_back_when_auto_record_creation_fails()
             None,
             None,
         )?)
-        .await;
-    assert!(result.is_err());
+        .await?;
 
     let assignments = storage
         .hosts()
         .list_ip_addresses_for_host(&Hostname::new(&host)?, &PageRequest::default())
         .await?;
-    assert!(assignments.items.is_empty());
-
     let records = storage
         .records()
         .list_records(&PageRequest::default(), &RecordFilter::default())
@@ -636,8 +632,17 @@ async fn postgres_assign_ip_rolls_back_when_auto_record_creation_fails()
         .into_iter()
         .filter(|record| record.owner_name() == host.as_str())
         .collect();
-    assert_eq!(matching.len(), 1);
-    assert_eq!(matching[0].type_name().as_str(), "CNAME");
+    assert_eq!(
+        (
+            assigned.address().as_str(),
+            assignments.items.len(),
+            matching
+                .iter()
+                .map(|record| record.type_name().as_str())
+                .collect::<Vec<_>>(),
+        ),
+        (address, 1, vec!["CNAME"]),
+    );
 
     Ok(())
 }
@@ -787,7 +792,7 @@ async fn postgres_dhcp_export_scope_renders_attachment_graph()
         .assign_ip_address(AssignIpAddress::new(
             Hostname::new(&host)?,
             Some(IpAddressValue::new(&address)?),
-            Some(CidrValue::new(&cidr)?),
+            None,
             Some(MacAddressValue::new("aa:bb:cc:dd:ee:ff")?),
         )?)
         .await?;
@@ -957,6 +962,7 @@ async fn postgres_rejects_rrset_ttl_mismatches_and_alias_mx_targets()
             SoaSeconds::new(10800)?,
             SoaSeconds::new(3600)?,
             SoaSeconds::new(604800)?,
+            Ttl::new(43_200)?,
             Ttl::new(43_200)?,
             Ttl::new(43_200)?,
         ))
@@ -1356,6 +1362,7 @@ async fn postgres_supports_unanchored_srv_and_rfc3597_raw_records()
             SoaSeconds::new(10800)?,
             SoaSeconds::new(3600)?,
             SoaSeconds::new(604800)?,
+            Ttl::new(43_200)?,
             Ttl::new(43_200)?,
             Ttl::new(43_200)?,
         ))
@@ -2464,9 +2471,9 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_network_delete_cascades_related_attachment_state()
+async fn postgres_network_delete_rejects_related_attachment_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let Some(ctx) = postgres_ctx("postgres_network_delete_cascades_related_attachment_state").await
+    let Some(ctx) = postgres_ctx("postgres_network_delete_rejects_related_attachment_state").await
     else {
         return Ok(());
     };
@@ -2527,33 +2534,37 @@ async fn postgres_network_delete_cascades_related_attachment_state()
         actix_web::http::StatusCode::CREATED
     );
 
+    let delete_status = ctx
+        .delete(&format!("/inventory/networks/{encoded_cidr}"))
+        .await;
+    let network_status = ctx
+        .get_status(&format!("/inventory/networks/{encoded_cidr}"))
+        .await;
+    let attachment_status = ctx
+        .get_status(&format!("/inventory/attachments/{attachment_id}"))
+        .await;
+    let assignments = storage
+        .attachment_community_assignments()
+        .list_attachment_community_assignments(
+            &PageRequest::all(),
+            &AttachmentCommunityAssignmentFilter::from_query_params(
+                std::collections::HashMap::from([("host".to_string(), host.clone())]),
+            )?,
+        )
+        .await?;
     assert_eq!(
-        ctx.delete(&format!("/inventory/networks/{encoded_cidr}"))
-            .await,
-        actix_web::http::StatusCode::NO_CONTENT
-    );
-    assert_eq!(
-        ctx.get_status(&format!("/inventory/networks/{encoded_cidr}"))
-            .await,
-        actix_web::http::StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        ctx.get_status(&format!("/inventory/attachments/{attachment_id}"))
-            .await,
-        actix_web::http::StatusCode::NOT_FOUND
-    );
-    assert!(
-        storage
-            .attachment_community_assignments()
-            .list_attachment_community_assignments(
-                &PageRequest::all(),
-                &AttachmentCommunityAssignmentFilter::from_query_params(
-                    std::collections::HashMap::from([("host".to_string(), host.clone())]),
-                )?,
-            )
-            .await?
-            .items
-            .is_empty()
+        (
+            delete_status,
+            network_status,
+            attachment_status,
+            assignments.items.len(),
+        ),
+        (
+            actix_web::http::StatusCode::CONFLICT,
+            actix_web::http::StatusCode::OK,
+            actix_web::http::StatusCode::OK,
+            1,
+        ),
     );
 
     Ok(())

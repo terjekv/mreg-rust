@@ -19,7 +19,10 @@ use crate::api::v1::authz::{
     UpdateAuthzBuilder, request as authz_request, require, require_all, string_set,
 };
 
-use super::{default_expire, default_refresh, default_retry, default_serial_no, default_ttl_value};
+use super::{
+    default_expire, default_negative_ttl, default_refresh, default_retry, default_serial_no,
+    default_ttl_value,
+};
 
 crate::page_response!(
     ReverseZonePageResponse,
@@ -44,7 +47,7 @@ pub struct CreateReverseZoneRequest {
     nameservers: Vec<String>,
     email: String,
     #[serde(default = "default_serial_no")]
-    serial_no: u64,
+    serial_no: u32,
     #[serde(default = "default_refresh")]
     refresh: u32,
     #[serde(default = "default_retry")]
@@ -52,7 +55,9 @@ pub struct CreateReverseZoneRequest {
     #[serde(default = "default_expire")]
     expire: u32,
     #[serde(default = "default_ttl_value")]
-    soa_ttl: u32,
+    soa_record_ttl: u32,
+    #[serde(default = "default_negative_ttl")]
+    negative_ttl: u32,
     #[serde(default = "default_ttl_value")]
     default_ttl: u32,
 }
@@ -65,7 +70,7 @@ impl CreateReverseZoneRequest {
             .map(DnsName::new)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(CreateReverseZone::new(
+        CreateReverseZone::new(
             ZoneName::new(self.name)?,
             self.network.map(CidrValue::new).transpose()?,
             DnsName::new(self.primary_ns)?,
@@ -75,9 +80,10 @@ impl CreateReverseZoneRequest {
             SoaSeconds::new(self.refresh)?,
             SoaSeconds::new(self.retry)?,
             SoaSeconds::new(self.expire)?,
-            Ttl::new(self.soa_ttl)?,
+            Ttl::new(self.soa_record_ttl)?,
+            Ttl::new(self.negative_ttl)?,
             Ttl::new(self.default_ttl)?,
-        ))
+        )
     }
 }
 
@@ -90,12 +96,13 @@ pub struct ReverseZoneResponse {
     primary_ns: String,
     nameservers: Vec<String>,
     email: String,
-    serial_no: u64,
+    serial_no: u32,
     serial_no_updated_at: DateTime<Utc>,
     refresh: u32,
     retry: u32,
     expire: u32,
-    soa_ttl: u32,
+    soa_record_ttl: u32,
+    negative_ttl: u32,
     default_ttl: u32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -115,12 +122,13 @@ impl ReverseZoneResponse {
                 .map(|nameserver| nameserver.as_str().to_string())
                 .collect(),
             email: zone.email().as_str().to_string(),
-            serial_no: zone.serial_no().as_u64(),
+            serial_no: zone.serial_no().as_u32(),
             serial_no_updated_at: zone.serial_no_updated_at(),
             refresh: zone.refresh().as_u32(),
             retry: zone.retry().as_u32(),
             expire: zone.expire().as_u32(),
-            soa_ttl: zone.soa_ttl().as_u32(),
+            soa_record_ttl: zone.soa_record_ttl().as_u32(),
+            negative_ttl: zone.negative_ttl().as_u32(),
             default_ttl: zone.default_ttl().as_u32(),
             created_at: zone.created_at(),
             updated_at: zone.updated_at(),
@@ -136,7 +144,8 @@ pub struct UpdateReverseZoneRequest {
     refresh: Option<u32>,
     retry: Option<u32>,
     expire: Option<u32>,
-    soa_ttl: Option<u32>,
+    soa_record_ttl: Option<u32>,
+    negative_ttl: Option<u32>,
     default_ttl: Option<u32>,
 }
 
@@ -167,7 +176,8 @@ fn build_reverse_zone_update_authz(
             ("refresh", request.refresh),
             ("retry", request.retry),
             ("expire", request.expire),
-            ("soa_ttl", request.soa_ttl),
+            ("soa_record_ttl", request.soa_record_ttl),
+            ("negative_ttl", request.negative_ttl),
             ("default_ttl", request.default_ttl),
         ],
     );
@@ -244,7 +254,14 @@ pub(crate) async fn create_reverse_zone(
     .attr("refresh", AttrValue::Long(i64::from(request.refresh)))
     .attr("retry", AttrValue::Long(i64::from(request.retry)))
     .attr("expire", AttrValue::Long(i64::from(request.expire)))
-    .attr("soa_ttl", AttrValue::Long(i64::from(request.soa_ttl)))
+    .attr(
+        "soa_record_ttl",
+        AttrValue::Long(i64::from(request.soa_record_ttl)),
+    )
+    .attr(
+        "negative_ttl",
+        AttrValue::Long(i64::from(request.negative_ttl)),
+    )
     .attr(
         "default_ttl",
         AttrValue::Long(i64::from(request.default_ttl)),
@@ -329,7 +346,8 @@ pub(crate) async fn update_reverse_zone(
     let refresh = request.refresh.map(SoaSeconds::new).transpose()?;
     let retry = request.retry.map(SoaSeconds::new).transpose()?;
     let expire = request.expire.map(SoaSeconds::new).transpose()?;
-    let soa_ttl = request.soa_ttl.map(Ttl::new).transpose()?;
+    let soa_record_ttl = request.soa_record_ttl.map(Ttl::new).transpose()?;
+    let negative_ttl = request.negative_ttl.map(Ttl::new).transpose()?;
     let default_ttl = request.default_ttl.map(Ttl::new).transpose()?;
     let command = UpdateReverseZone {
         primary_ns,
@@ -338,7 +356,8 @@ pub(crate) async fn update_reverse_zone(
         refresh,
         retry,
         expire,
-        soa_ttl,
+        soa_record_ttl,
+        negative_ttl,
         default_ttl,
     };
     let zone = state

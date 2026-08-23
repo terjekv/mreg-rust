@@ -55,7 +55,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, vec_to_page};
+use super::helpers::{map_unique, vec_to_page_by};
 
 use crate::db::models::{ForwardZoneRow, LabelRow, ReverseZoneRow};
 use crate::db::schema::labels;
@@ -197,6 +197,7 @@ impl PostgresStorage {
         refs: &BTreeMap<String, String>,
     ) -> Result<Value, AppError> {
         let cidr = CidrValue::new(resolve_string(attributes, "cidr", refs)?)?;
+        let _requested_frozen = resolve_bool(attributes, "frozen")?.unwrap_or(false);
         let command = CreateNetwork::new_full(
             cidr.clone(),
             resolve_string(attributes, "description", refs)?,
@@ -206,7 +207,10 @@ impl PostgresStorage {
             resolve_bool(attributes, "dns_delegated")?.unwrap_or(false),
             resolve_optional_string(attributes, "category", refs)?.unwrap_or_default(),
             resolve_optional_string(attributes, "location", refs)?.unwrap_or_default(),
-            resolve_bool(attributes, "frozen")?.unwrap_or(false),
+            // A batch describes the final graph. Networks requested as frozen are
+            // frozen after every item has been applied so their attachments,
+            // addresses, and policy relationships can be created atomically.
+            false,
             ReservedCount::new(resolve_u32(attributes, "reserved")?.unwrap_or(3))?,
         )?;
         let policy_name = resolve_one_of_string(attributes, &["policy_name", "policy"], refs)?
@@ -422,11 +426,12 @@ impl PostgresStorage {
             primary_ns,
             nameservers.clone(),
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
-            SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
+            SerialNumber::new(resolve_u32(attributes, "serial_no")?.unwrap_or(1))?,
             SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
             SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
             SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
-            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "soa_record_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "negative_ttl")?.unwrap_or(3_600))?,
             Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         );
         let nameserver_ids = Self::lookup_nameserver_ids(connection, command.nameservers())?;
@@ -440,7 +445,8 @@ impl PostgresStorage {
                 forward_zones::refresh.eq(command.refresh().as_i32()),
                 forward_zones::retry.eq(command.retry().as_i32()),
                 forward_zones::expire.eq(command.expire().as_i32()),
-                forward_zones::soa_ttl.eq(command.soa_ttl().as_i32()),
+                forward_zones::soa_record_ttl.eq(command.soa_record_ttl().as_i32()),
+                forward_zones::negative_ttl.eq(command.negative_ttl().as_i32()),
                 forward_zones::default_ttl.eq(command.default_ttl().as_i32()),
             ))
             .returning(ForwardZoneRow::as_returning())
@@ -477,22 +483,23 @@ impl PostgresStorage {
             primary_ns,
             nameservers.clone(),
             EmailAddressValue::new(resolve_string(attributes, "email", refs)?)?,
-            SerialNumber::new(resolve_u64(attributes, "serial_no")?.unwrap_or(1))?,
+            SerialNumber::new(resolve_u32(attributes, "serial_no")?.unwrap_or(1))?,
             SoaSeconds::new(resolve_u32(attributes, "refresh")?.unwrap_or(10_800))?,
             SoaSeconds::new(resolve_u32(attributes, "retry")?.unwrap_or(3_600))?,
             SoaSeconds::new(resolve_u32(attributes, "expire")?.unwrap_or(1_814_400))?,
-            Ttl::new(resolve_u32(attributes, "soa_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "soa_record_ttl")?.unwrap_or(43_200))?,
+            Ttl::new(resolve_u32(attributes, "negative_ttl")?.unwrap_or(3_600))?,
             Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
-        );
+        )?;
         let nameserver_ids = Self::lookup_nameserver_ids(connection, command.nameservers())?;
         let row = sql_query(
             "INSERT INTO reverse_zones
-                (name, network, primary_ns, email, serial_no, refresh, retry, expire, soa_ttl, default_ttl)
+                (name, network, primary_ns, email, serial_no, refresh, retry, expire, soa_record_ttl, negative_ttl, default_ttl)
              VALUES
-                ($1, $2::cidr, $3, $4, $5, $6, $7, $8, $9, $10)
+                ($1, $2::cidr, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              RETURNING id, name::text AS name, network::text AS network, updated,
                        primary_ns::text AS primary_ns, email::text AS email, serial_no,
-                       serial_no_updated_at, refresh, retry, expire, soa_ttl, default_ttl,
+                       serial_no_updated_at, refresh, retry, expire, soa_record_ttl, negative_ttl, default_ttl,
                        created_at, updated_at",
         )
         .bind::<Text, _>(command.name().as_str())
@@ -503,7 +510,8 @@ impl PostgresStorage {
         .bind::<Integer, _>(command.refresh().as_i32())
         .bind::<Integer, _>(command.retry().as_i32())
         .bind::<Integer, _>(command.expire().as_i32())
-        .bind::<Integer, _>(command.soa_ttl().as_i32())
+        .bind::<Integer, _>(command.soa_record_ttl().as_i32())
+        .bind::<Integer, _>(command.negative_ttl().as_i32())
         .bind::<Integer, _>(command.default_ttl().as_i32())
         .get_result::<ReverseZoneRow>(connection)
         .map_err(map_unique("reverse zone already exists"))?;
@@ -539,7 +547,7 @@ impl PostgresStorage {
                     .into_iter()
                     .map(DnsName::new)
                     .collect::<Result<Vec<_>, _>>()?,
-            ),
+            )?,
         )?;
         Ok(Value::String(delegation.name().as_str().to_string()))
     }
@@ -563,7 +571,7 @@ impl PostgresStorage {
                     .into_iter()
                     .map(DnsName::new)
                     .collect::<Result<Vec<_>, _>>()?,
-            ),
+            )?,
         )?;
         Ok(Value::String(delegation.name().as_str().to_string()))
     }
@@ -865,11 +873,12 @@ impl PostgresStorage {
             command.raw_rdata(),
         )?;
         let same_owner_records =
-            Self::query_existing_owner_records(connection, command.owner_name())?;
+            Self::query_existing_owner_records(connection, command.owner_name(), zone_id)?;
         let existing_rrset = Self::query_rrset_by_type_and_owner(
             connection,
             record_type.id(),
             command.owner_name(),
+            zone_id,
         )?;
         let same_rrset_records = if let Some(rrset) = &existing_rrset {
             Self::query_existing_rrset_records(connection, rrset.id())?
@@ -895,13 +904,23 @@ impl PostgresStorage {
             &same_rrset_records,
             &alias_owner_names,
         )?;
+        Self::validate_alias_graph_in_conn(
+            connection,
+            record_type.name(),
+            command.owner_name(),
+            zone_id,
+        )?;
         let rrset = if let Some(rrset) = existing_rrset {
             rrset
         } else {
             Self::insert_rrset(connection, &record_type, &command, anchor_id, zone_id)?
         };
         let rendered = if let ValidatedRecordContent::Structured(normalized) = &validated {
-            Self::render_record_data(record_type.schema().render_template(), normalized)?
+            Self::render_record_data(
+                record_type.name(),
+                record_type.schema().render_template(),
+                normalized,
+            )?
         } else {
             None
         };
@@ -1072,7 +1091,13 @@ impl ImportStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_import_summaries(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "created_at",
+                    &crate::domain::pagination::SortDirection::Desc,
+                    |item| item.created_at().to_rfc3339(),
+                )
             })
             .await
     }
@@ -1203,6 +1228,21 @@ impl ImportStore for PostgresStorage {
                                 )),
                             })?;
                         applied.push(applied_item);
+                    }
+                    for item in batch.items() {
+                        if item.kind() != &ImportKind::Network
+                            || !resolve_bool(item.attributes(), "frozen")?.unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let cidr =
+                            CidrValue::new(resolve_string(item.attributes(), "cidr", &refs)?)?;
+                        sql_query(
+                            "UPDATE networks SET frozen = TRUE, updated_at = now() \
+                             WHERE network = $1::cidr",
+                        )
+                        .bind::<Text, _>(cidr.as_str())
+                        .execute(connection)?;
                     }
                     let commit_summary = json!({
                         "applied": applied,

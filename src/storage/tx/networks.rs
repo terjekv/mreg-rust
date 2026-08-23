@@ -18,11 +18,8 @@ pub trait TxNetworkStore {
     ) -> Result<Page<Network>, AppError>;
     fn create_network(&self, command: CreateNetwork) -> Result<Network, AppError>;
     fn get_network_by_cidr(&self, cidr: &CidrValue) -> Result<Network, AppError>;
-    fn update_network(
-        &self,
-        cidr: &CidrValue,
-        command: UpdateNetwork,
-    ) -> Result<Network, AppError>;
+    fn update_network(&self, cidr: &CidrValue, command: UpdateNetwork)
+    -> Result<Network, AppError>;
     fn delete_network(&self, cidr: &CidrValue) -> Result<(), AppError>;
     fn list_excluded_ranges(
         &self,
@@ -34,10 +31,7 @@ pub trait TxNetworkStore {
         network: &CidrValue,
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError>;
-    fn list_used_addresses(
-        &self,
-        cidr: &CidrValue,
-    ) -> Result<Vec<IpAddressAssignment>, AppError>;
+    fn list_used_addresses(&self, cidr: &CidrValue) -> Result<Vec<IpAddressAssignment>, AppError>;
     fn list_unused_addresses(
         &self,
         cidr: &CidrValue,

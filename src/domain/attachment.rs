@@ -38,6 +38,87 @@ pub enum DhcpIdentifierKind {
     DuidRaw,
 }
 
+/// Canonical byte-string representation of a DHCP client identifier or DUID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DhcpIdentifierValue(String);
+
+impl DhcpIdentifierValue {
+    pub fn new(
+        family: DhcpIdentifierFamily,
+        kind: DhcpIdentifierKind,
+        value: impl AsRef<str>,
+    ) -> Result<Self, AppError> {
+        kind.validate_for_family(family)?;
+        let input = value.as_ref().trim();
+        let parts = input.split(':').collect::<Vec<_>>();
+        if parts.is_empty()
+            || parts
+                .iter()
+                .any(|part| part.len() != 2 || !part.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(AppError::validation(
+                "DHCP identifier must be colon-separated hexadecimal octets",
+            ));
+        }
+        let bytes = parts
+            .iter()
+            .map(|part| u8::from_str_radix(part, 16).map_err(AppError::internal))
+            .collect::<Result<Vec<_>, _>>()?;
+        match kind {
+            DhcpIdentifierKind::ClientId if !(2..=255).contains(&bytes.len()) => {
+                return Err(AppError::validation(
+                    "DHCPv4 client-id must contain between 2 and 255 octets",
+                ));
+            }
+            DhcpIdentifierKind::DuidLlt => validate_duid(&bytes, 1, 9, None)?,
+            DhcpIdentifierKind::DuidEn => validate_duid(&bytes, 2, 7, None)?,
+            DhcpIdentifierKind::DuidLl => validate_duid(&bytes, 3, 5, None)?,
+            DhcpIdentifierKind::DuidUuid => validate_duid(&bytes, 4, 18, Some(18))?,
+            DhcpIdentifierKind::DuidRaw => {
+                if !(3..=128).contains(&bytes.len()) || bytes[..2] == [0, 0] {
+                    return Err(AppError::validation(
+                        "raw DUID must contain 3 to 128 octets and a non-zero type",
+                    ));
+                }
+            }
+            DhcpIdentifierKind::ClientId => {}
+        }
+        Ok(Self(
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(":"),
+        ))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn validate_duid(
+    bytes: &[u8],
+    expected_type: u16,
+    minimum_len: usize,
+    exact_len: Option<usize>,
+) -> Result<(), AppError> {
+    if bytes.len() < minimum_len
+        || bytes.len() > 128
+        || exact_len.is_some_and(|len| bytes.len() != len)
+    {
+        return Err(AppError::validation(format!(
+            "DUID type {expected_type} has an invalid length"
+        )));
+    }
+    if u16::from_be_bytes([bytes[0], bytes[1]]) != expected_type {
+        return Err(AppError::validation(format!(
+            "DUID kind requires type {expected_type} in the first two octets"
+        )));
+    }
+    Ok(())
+}
+
 impl DhcpIdentifierKind {
     fn validate_for_family(self, family: DhcpIdentifierFamily) -> Result<(), AppError> {
         match (family, self) {
@@ -186,7 +267,7 @@ pub struct AttachmentDhcpIdentifier {
     attachment_id: Uuid,
     family: DhcpIdentifierFamily,
     kind: DhcpIdentifierKind,
-    value: String,
+    value: DhcpIdentifierValue,
     priority: DhcpPriority,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -205,13 +286,13 @@ impl AttachmentDhcpIdentifier {
         updated_at: DateTime<Utc>,
     ) -> Result<Self, AppError> {
         kind.validate_for_family(family)?;
-        let value = normalize_required_text(value.into(), "dhcp identifier value")?;
+        let value = DhcpIdentifierValue::new(family, kind, value.into())?;
         Ok(Self {
             id,
             attachment_id,
             family,
             kind,
-            value: normalize_identifier_value(&value),
+            value,
             priority,
             created_at,
             updated_at,
@@ -235,7 +316,7 @@ impl AttachmentDhcpIdentifier {
     }
 
     pub fn value(&self) -> &str {
-        &self.value
+        self.value.as_str()
     }
 
     pub fn priority(&self) -> DhcpPriority {
@@ -256,7 +337,7 @@ pub struct CreateAttachmentDhcpIdentifier {
     attachment_id: Uuid,
     family: DhcpIdentifierFamily,
     kind: DhcpIdentifierKind,
-    value: String,
+    value: DhcpIdentifierValue,
     priority: DhcpPriority,
 }
 
@@ -269,12 +350,12 @@ impl CreateAttachmentDhcpIdentifier {
         priority: DhcpPriority,
     ) -> Result<Self, AppError> {
         kind.validate_for_family(family)?;
-        let value = normalize_required_text(value.into(), "dhcp identifier value")?;
+        let value = DhcpIdentifierValue::new(family, kind, value.into())?;
         Ok(Self {
             attachment_id,
             family,
             kind,
-            value: normalize_identifier_value(&value),
+            value,
             priority,
         })
     }
@@ -292,7 +373,7 @@ impl CreateAttachmentDhcpIdentifier {
     }
 
     pub fn value(&self) -> &str {
-        &self.value
+        self.value.as_str()
     }
 
     pub fn priority(&self) -> DhcpPriority {
@@ -529,10 +610,6 @@ impl CreateAttachmentCommunityAssignment {
     }
 }
 
-fn normalize_identifier_value(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
 fn normalize_optional_text(value: Option<String>) -> Option<String> {
     value.and_then(|text| {
         let normalized = text.trim().to_string();
@@ -542,14 +619,6 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
             Some(normalized)
         }
     })
-}
-
-fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
-    let normalized = value.trim().to_string();
-    if normalized.is_empty() {
-        return Err(AppError::validation(format!("{label} cannot be empty")));
-    }
-    Ok(normalized)
 }
 
 #[cfg(test)]

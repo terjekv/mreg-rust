@@ -163,7 +163,7 @@ pub(super) fn builtin_hinfo() -> Result<CreateRecordTypeDefinition, AppError> {
         Some(DnsTypeCode::new(13)?),
         RecordTypeSchema::new(
             RecordOwnerKind::Host,
-            RecordCardinality::Single,
+            RecordCardinality::Multiple,
             false,
             vec![
                 RecordFieldSchema::new(

@@ -42,56 +42,49 @@ impl<'de> Deserialize<'de> for Ttl {
     }
 }
 
-/// DNS SOA serial number with RFC 1912 YYYYMMDDNNNN increment support.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SerialNumber(u64);
+/// DNS SOA serial number with RFC 1982 arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SerialNumber(u32);
 
 impl SerialNumber {
-    pub fn new(value: u64) -> Result<Self, AppError> {
-        if value > i64::MAX as u64 {
-            return Err(AppError::validation(
-                "serial number exceeds supported range",
-            ));
-        }
+    pub fn new(value: u32) -> Result<Self, AppError> {
         Ok(Self(value))
     }
 
-    pub fn as_u64(&self) -> u64 {
+    pub fn as_u32(self) -> u32 {
         self.0
     }
 
-    pub fn as_i64(&self) -> i64 {
-        self.0 as i64
+    pub fn as_i64(self) -> i64 {
+        i64::from(self.0)
     }
 
-    /// Compute the next serial using YYYYMMDDNNNN format.
-    ///
-    /// Uses 4 digits for the daily counter (0000–9999), allowing up to 10,000
-    /// zone changes per day. This extends the common RFC 1912 YYYYMMDDNN
-    /// convention while staying well within the 32-bit serial range.
-    ///
-    /// If the current serial starts with today's YYYYMMDD prefix and NNNN < 9999,
-    /// increments NNNN. Otherwise, starts at YYYYMMDD0000. If the result would be
-    /// less than or equal to the current serial (e.g. clock skew), adds 1 to
-    /// the current serial instead.
-    pub fn next_rfc1912(&self, today: chrono::NaiveDate) -> Result<Self, AppError> {
+    /// Return the next serial, wrapping as required by RFC 1982.
+    pub fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+
+    /// Compare two serials using RFC 1982's half-range rule.
+    pub fn is_newer_than(self, other: Self) -> bool {
+        let distance = self.0.wrapping_sub(other.0);
+        distance != 0 && distance < (1 << 31)
+    }
+
+    /// Compute the next serial using the conventional YYYYMMDDnn format.
+    pub fn next_rfc1912(self, today: chrono::NaiveDate) -> Result<Self, AppError> {
         let prefix = today
             .format("%Y%m%d")
             .to_string()
-            .parse::<u64>()
-            .map_err(|e| {
-                AppError::internal(format!("failed to parse date as serial prefix: {e}"))
-            })?
-            * 10_000;
-        let next = if self.0 >= prefix && self.0 < prefix + 9999 {
-            self.0 + 1
-        } else if prefix > self.0 {
-            prefix
+            .parse::<u32>()
+            .map_err(|e| AppError::internal(format!("failed to parse date as serial prefix: {e}")))?
+            .checked_mul(100)
+            .ok_or_else(|| AppError::internal("date serial exceeds the DNS 32-bit range"))?;
+        let candidate = Self(prefix);
+        if candidate.is_newer_than(self) {
+            Ok(candidate)
         } else {
-            // Clock skew or daily counter exhausted: just increment
-            self.0 + 1
-        };
-        Self::new(next)
+            Ok(self.next())
+        }
     }
 }
 
@@ -100,7 +93,7 @@ impl Serialize for SerialNumber {
     where
         S: Serializer,
     {
-        serializer.serialize_u64(self.0)
+        serializer.serialize_u32(self.0)
     }
 }
 
@@ -109,8 +102,7 @@ impl<'de> Deserialize<'de> for SerialNumber {
     where
         D: Deserializer<'de>,
     {
-        let raw = u64::deserialize(deserializer)?;
-        SerialNumber::new(raw).map_err(serde::de::Error::custom)
+        SerialNumber::new(u32::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -157,14 +149,14 @@ impl<'de> Deserialize<'de> for SoaSeconds {
     }
 }
 
-/// IEEE 802.1Q VLAN identifier (0-4094).
+/// IEEE 802.1Q VLAN identifier (1-4094). VID 0 is priority-tagged traffic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VlanId(u32);
 
 impl VlanId {
     pub fn new(value: u32) -> Result<Self, AppError> {
-        if value > 4094 {
-            return Err(AppError::validation("VLAN ID must be between 0 and 4094"));
+        if !(1..=4094).contains(&value) {
+            return Err(AppError::validation("VLAN ID must be between 1 and 4094"));
         }
         Ok(Self(value))
     }
@@ -197,18 +189,15 @@ impl<'de> Deserialize<'de> for VlanId {
     }
 }
 
-/// BACnet device identifier (positive u32).
+/// BACnet device object instance number (0-4,194,302).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BacnetIdentifier(u32);
 
 impl BacnetIdentifier {
     pub fn new(value: u32) -> Result<Self, AppError> {
-        if value == 0 {
-            return Err(AppError::validation("bacnet identifier must be positive"));
-        }
-        if value > i32::MAX as u32 {
+        if value > 4_194_302 {
             return Err(AppError::validation(
-                "bacnet identifier exceeds maximum (must fit in i32)",
+                "BACnet identifier must be between 0 and 4194302",
             ));
         }
         Ok(Self(value))
@@ -292,9 +281,9 @@ pub struct DnsTypeCode(u16);
 
 impl DnsTypeCode {
     pub fn new(value: i32) -> Result<Self, AppError> {
-        if !(0..=65535).contains(&value) {
+        if !(1..=65534).contains(&value) {
             return Err(AppError::validation(
-                "DNS type code must be between 0 and 65535",
+                "DNS type code must be between 1 and 65534; 0 and 65535 are reserved",
             ));
         }
         Ok(Self(value as u16))

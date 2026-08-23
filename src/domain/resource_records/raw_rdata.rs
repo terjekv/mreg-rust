@@ -16,6 +16,8 @@ pub struct RawRdataValue {
 }
 
 impl RawRdataValue {
+    const MAX_RDATA_LEN: usize = u16::MAX as usize;
+
     /// Parse from RFC 3597 presentation format: `\# <length> <hex>`.
     pub fn from_presentation(value: impl AsRef<str>) -> Result<Self, AppError> {
         let value = value.as_ref().trim();
@@ -35,6 +37,9 @@ impl RawRdataValue {
         let declared_len = parts[0].parse::<usize>().map_err(|error| {
             AppError::validation(format!("raw RDATA length is invalid: {error}"))
         })?;
+        if declared_len > Self::MAX_RDATA_LEN {
+            return Err(AppError::validation("raw RDATA cannot exceed 65535 octets"));
+        }
         let hex = HexEncodedValue::new(parts[1])?;
         let wire_bytes = decode_hex_bytes(hex.as_str())?;
         if wire_bytes.len() != declared_len {
@@ -50,6 +55,9 @@ impl RawRdataValue {
 
     /// Construct directly from wire-format bytes.
     pub fn from_wire_bytes(wire_bytes: Vec<u8>) -> Result<Self, AppError> {
+        if wire_bytes.len() > Self::MAX_RDATA_LEN {
+            return Err(AppError::validation("raw RDATA cannot exceed 65535 octets"));
+        }
         Ok(Self { wire_bytes })
     }
 

@@ -16,7 +16,7 @@ use crate::{
     },
     domain::{
         filters::RecordFilter,
-        pagination::{Page, PageRequest, SortDirection},
+        pagination::{Page, PageRequest, SortDirection, decode_cursor},
         resource_records::{
             CreateRecordInstance, CreateRecordTypeDefinition, RecordInstance, RecordRrset,
             RecordTypeDefinition, UpdateRecord, ValidatedRecordContent, alias_target_names,
@@ -30,8 +30,8 @@ use crate::{
 
 use super::PostgresStorage;
 use super::helpers::{
-    IntSentinelRow, limited_rows_to_page, map_unique, record_type_storage_parts, run_count_query,
-    run_dynamic_query, vec_to_page,
+    IntSentinelRow, limited_rows_to_page_by, map_unique, record_type_storage_parts,
+    run_count_query, run_dynamic_query, vec_to_page_by,
 };
 
 impl PostgresStorage {
@@ -122,6 +122,7 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         type_id: Uuid,
         owner_name: &DnsName,
+        zone_id: Option<Uuid>,
     ) -> Result<Option<RecordRrset>, AppError> {
         sql_query(
             "SELECT rs.id, rs.type_id, rt.name::text AS type_name, rs.dns_class,
@@ -131,10 +132,12 @@ impl PostgresStorage {
              FROM rrsets rs
              JOIN record_types rt ON rt.id = rs.type_id
              WHERE rs.type_id = $1 AND rs.owner_name = $2 AND rs.dns_class = 'IN'
+               AND rs.zone_id IS NOT DISTINCT FROM $3
              LIMIT 1",
         )
         .bind::<SqlUuid, _>(type_id)
         .bind::<Text, _>(owner_name.as_str())
+        .bind::<Nullable<SqlUuid>, _>(zone_id)
         .get_result::<RrsetRow>(connection)
         .optional()?
         .map(RrsetRow::into_domain)
@@ -219,7 +222,9 @@ impl PostgresStorage {
         page: &PageRequest,
     ) -> Result<Page<RecordTypeDefinition>, AppError> {
         let items = Self::query_record_types(connection)?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(items, page, "name", &SortDirection::Asc, |item| {
+            item.name().as_str().to_string()
+        })
     }
 
     pub(in crate::storage::postgres) fn list_rrsets_in_conn(
@@ -227,7 +232,13 @@ impl PostgresStorage {
         page: &PageRequest,
     ) -> Result<Page<RecordRrset>, AppError> {
         let items = Self::query_rrsets(connection)?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(items, page, "owner_type", &SortDirection::Asc, |item| {
+            format!(
+                "{}\0{}",
+                item.owner_name().as_str(),
+                item.type_name().as_str()
+            )
+        })
     }
 
     pub(in crate::storage::postgres) fn list_records_in_conn(
@@ -251,15 +262,16 @@ impl PostgresStorage {
         } else {
             format!(" WHERE {}", clauses.join(" AND "))
         };
-        let order_col = match page.sort_by() {
-            Some("owner_name") => "rs.owner_name",
-            Some("type_name") => "rt.name",
-            Some("updated_at") => "r.updated_at",
-            Some("created_at") | None => "r.created_at",
+        let sort_by = page.sort_by().unwrap_or("created_at");
+        let (order_col, cursor_cast) = match page.sort_by() {
+            Some("owner_name") => ("rs.owner_name", "text"),
+            Some("type_name") => ("rt.name", "text"),
+            Some("updated_at") => ("r.updated_at", "timestamptz"),
+            Some("created_at") | None => ("r.created_at", "timestamptz"),
             Some(other) => {
                 return Err(AppError::validation(format!(
                     "unsupported sort_by field for records: {other}"
-                )))
+                )));
             }
         };
         let order_dir = match page.sort_direction() {
@@ -268,11 +280,19 @@ impl PostgresStorage {
         };
         let count_sql = format!("SELECT COUNT(*) AS count FROM ({base}{where_str}) AS _c");
         let total = run_count_query(connection, &count_sql, &values)?;
-        let cursor_clause = if let Some(cursor) = page.after() {
-            let idx = values.len() + 1;
-            values.push(cursor.to_string());
+        let cursor_clause = if let Some(value) = page.after() {
+            let cursor = decode_cursor(value, sort_by, page.sort_direction())?;
+            let key_idx = values.len() + 1;
+            values.push(cursor.key().to_string());
+            let id_idx = values.len() + 1;
+            values.push(cursor.id().to_string());
+            let operator = match page.sort_direction() {
+                SortDirection::Asc => ">",
+                SortDirection::Desc => "<",
+            };
             format!(
-                " WHERE _ord > COALESCE((SELECT _ord FROM ranked WHERE id = ${idx}::uuid), 9223372036854775807)"
+                " WHERE (_sort_key {operator} ${key_idx}::{cursor_cast}
+                         OR (_sort_key = ${key_idx}::{cursor_cast} AND id > ${id_idx}::uuid))"
             )
         } else {
             String::new()
@@ -288,7 +308,7 @@ impl PostgresStorage {
                         rs.anchor_kind, rs.anchor_id, rs.owner_name::text AS owner_name,
                         rs.zone_id, rs.ttl, r.data, r.raw_rdata, r.rendered,
                         r.created_at, r.updated_at,
-                        ROW_NUMBER() OVER (ORDER BY {order_col} {order_dir}, r.id) AS _ord
+                        {order_col} AS _sort_key
                  FROM records r
                  JOIN rrsets rs ON rs.id = r.rrset_id
                  JOIN record_types rt ON rt.id = rs.type_id
@@ -296,7 +316,7 @@ impl PostgresStorage {
              )
              SELECT id, rrset_id, type_id, type_name, anchor_kind, anchor_id,
                     owner_name, zone_id, ttl, data, raw_rdata, rendered, created_at, updated_at
-             FROM ranked{cursor_clause} ORDER BY _ord{limit_clause}"
+             FROM ranked{cursor_clause} ORDER BY _sort_key {order_dir}, id{limit_clause}"
         );
 
         let rows = run_dynamic_query::<RecordRow>(connection, &query_str, &values)?;
@@ -304,7 +324,19 @@ impl PostgresStorage {
             .into_iter()
             .map(RecordRow::into_domain)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(limited_rows_to_page(items, page, total))
+        limited_rows_to_page_by(
+            items,
+            page,
+            total,
+            sort_by,
+            page.sort_direction(),
+            |record| match sort_by {
+                "owner_name" => record.owner_name().to_string(),
+                "type_name" => record.type_name().as_str().to_string(),
+                "updated_at" => record.updated_at().to_rfc3339(),
+                _ => record.created_at().to_rfc3339(),
+            },
+        )
     }
 
     pub(in crate::storage::postgres) fn create_record_type_in_conn(
@@ -416,17 +448,24 @@ impl PostgresStorage {
                 command.anchor_name(),
                 command.owner_name(),
             )?;
+            if record_type.schema().zone_bound() && zone_id.is_none() {
+                return Err(AppError::validation(format!(
+                    "record type '{}' must belong to an existing zone",
+                    record_type.name().as_str()
+                )));
+            }
             let validated = record_type.validate_record_input(
                 command.owner_name(),
                 command.data(),
                 command.raw_rdata(),
             )?;
             let same_owner_records =
-                Self::query_existing_owner_records(connection, command.owner_name())?;
+                Self::query_existing_owner_records(connection, command.owner_name(), zone_id)?;
             let existing_rrset = Self::query_rrset_by_type_and_owner(
                 connection,
                 record_type.id(),
                 command.owner_name(),
+                zone_id,
             )?;
             let same_rrset_records = if let Some(rrset) = &existing_rrset {
                 Self::query_existing_rrset_records(connection, rrset.id())?
@@ -452,13 +491,23 @@ impl PostgresStorage {
                 &same_rrset_records,
                 &alias_owner_names,
             )?;
+            Self::validate_alias_graph_in_conn(
+                connection,
+                record_type.name(),
+                command.owner_name(),
+                zone_id,
+            )?;
             let rrset = if let Some(rrset) = existing_rrset {
                 rrset
             } else {
                 Self::insert_rrset(connection, &record_type, &command, anchor_id, zone_id)?
             };
             let rendered = if let ValidatedRecordContent::Structured(normalized) = &validated {
-                Self::render_record_data(record_type.schema().render_template(), normalized)?
+                Self::render_record_data(
+                    record_type.name(),
+                    record_type.schema().render_template(),
+                    normalized,
+                )?
             } else {
                 None
             };
@@ -476,9 +525,9 @@ impl PostgresStorage {
         command: UpdateRecord,
     ) -> Result<RecordInstance, AppError> {
         connection.transaction::<RecordInstance, AppError, _>(|connection| {
-                    // Fetch existing record
-                    let existing = sql_query(
-                        "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
+            // Fetch existing record
+            let existing = sql_query(
+                "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
                                 rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
                                 r.data, r.raw_rdata, r.rendered,
                                 r.created_at, r.updated_at
@@ -486,108 +535,130 @@ impl PostgresStorage {
                          JOIN rrsets rs ON rs.id = r.rrset_id
                          JOIN record_types rt ON rt.id = rs.type_id
                          WHERE r.id = $1",
-                    )
-                    .bind::<SqlUuid, _>(record_id)
-                    .get_result::<RecordRow>(connection)
-                    .optional()?
-                    .ok_or_else(|| AppError::not_found("record not found"))?
-                    .into_domain()?;
+            )
+            .bind::<SqlUuid, _>(record_id)
+            .get_result::<RecordRow>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found("record not found"))?
+            .into_domain()?;
 
-                    let record_type = Self::query_record_type_by_name(connection, existing.type_name())?;
-                    let owner_name = DnsName::new(existing.owner_name())?;
+            let record_type = Self::query_record_type_by_name(connection, existing.type_name())?;
+            let owner_name = DnsName::new(existing.owner_name())?;
 
-                    let new_ttl = command.ttl().resolve(existing.ttl());
+            let new_ttl = command.ttl().resolve(existing.ttl());
 
-                    let data_changed = command.data().is_some() || command.raw_rdata().is_some();
+            let data_changed = command.data().is_some() || command.raw_rdata().is_some();
 
-                    let (new_data, new_raw_rdata, new_rendered) = if data_changed {
-                        let validated = record_type.validate_record_input(
-                            &owner_name,
-                            command.data(),
-                            command.raw_rdata(),
-                        )?;
+            let (new_data, new_raw_rdata, new_rendered) = if data_changed {
+                let validated = record_type.validate_record_input(
+                    &owner_name,
+                    command.data(),
+                    command.raw_rdata(),
+                )?;
 
-                        let same_owner_records = {
-                            let mut all = Self::query_existing_owner_records(connection, &owner_name)?;
-                            // Exclude self: remove the record that matches our existing data
-                            all.retain(|r| {
-                                !(r.type_name() == existing.type_name()
-                                    && r.data() == existing.data()
-                                    && r.raw_rdata() == existing.raw_rdata())
-                            });
-                            all
-                        };
+                let same_owner_records = {
+                    let mut all = Self::query_existing_owner_records(
+                        connection,
+                        &owner_name,
+                        existing.zone_id(),
+                    )?;
+                    // Exclude self: remove the record that matches our existing data
+                    all.retain(|r| {
+                        !(r.type_name() == existing.type_name()
+                            && r.data() == existing.data()
+                            && r.raw_rdata() == existing.raw_rdata())
+                    });
+                    all
+                };
 
-                        let same_rrset_records = {
-                            let mut all = Self::query_existing_rrset_records(connection, existing.rrset_id())?;
-                            all.retain(|r| {
-                                !(r.type_name() == existing.type_name()
-                                    && r.data() == existing.data()
-                                    && r.raw_rdata() == existing.raw_rdata())
-                            });
-                            all
-                        };
+                let same_rrset_records = {
+                    let mut all =
+                        Self::query_existing_rrset_records(connection, existing.rrset_id())?;
+                    all.retain(|r| {
+                        !(r.type_name() == existing.type_name()
+                            && r.data() == existing.data()
+                            && r.raw_rdata() == existing.raw_rdata())
+                    });
+                    all
+                };
 
-                        let alias_lookup = match &validated {
-                            ValidatedRecordContent::Structured(normalized) => {
-                                Self::query_alias_owner_names(
-                                    connection,
-                                    &alias_target_names(normalized, record_type.name()),
-                                )?
-                            }
-                            ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
-                        };
-                        let alias_owner_names = alias_lookup
-                            .into_iter()
-                            .filter_map(|(name, is_alias)| is_alias.then_some(name))
-                            .collect();
-
-                        validate_record_relationships(
-                            &record_type,
-                            new_ttl,
-                            &validated,
-                            &same_owner_records,
-                            &same_rrset_records,
-                            &alias_owner_names,
-                        )?;
-
-                        let rendered = if let ValidatedRecordContent::Structured(normalized) = &validated {
-                            Self::render_record_data(
-                                record_type.schema().render_template(),
-                                normalized,
-                            )?
-                        } else {
-                            None
-                        };
-
-                        match validated {
-                            ValidatedRecordContent::Structured(data) => (data, None::<Vec<u8>>, rendered),
-                            ValidatedRecordContent::RawRdata(raw) => (Value::Null, Some(raw.wire_bytes().to_vec()), None),
-                        }
-                    } else {
-                        (
-                            existing.data().clone(),
-                            existing.raw_rdata().map(|r| r.wire_bytes().to_vec()),
-                            existing.rendered().map(|s| s.to_string()),
-                        )
-                    };
-
-                    {
-                        use crate::db::schema::records;
-                        diesel::update(records::table.filter(records::id.eq(record_id)))
-                            .set((
-                                records::ttl.eq(new_ttl.map(|t| t.as_i32())),
-                                records::data.eq(&new_data),
-                                records::raw_rdata.eq(&new_raw_rdata),
-                                records::rendered.eq(&new_rendered),
-                                records::updated_at.eq(diesel::dsl::now),
-                            ))
-                            .execute(connection)?;
+                let alias_lookup = match &validated {
+                    ValidatedRecordContent::Structured(normalized) => {
+                        Self::query_alias_owner_names(
+                            connection,
+                            &alias_target_names(normalized, record_type.name()),
+                        )?
                     }
+                    ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
+                };
+                let alias_owner_names = alias_lookup
+                    .into_iter()
+                    .filter_map(|(name, is_alias)| is_alias.then_some(name))
+                    .collect();
 
-                    // Re-fetch the updated record
-                    let record = sql_query(
-                        "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
+                validate_record_relationships(
+                    &record_type,
+                    existing.ttl(),
+                    &validated,
+                    &same_owner_records,
+                    &same_rrset_records,
+                    &alias_owner_names,
+                )?;
+                Self::validate_alias_graph_in_conn(
+                    connection,
+                    record_type.name(),
+                    &owner_name,
+                    existing.zone_id(),
+                )?;
+
+                let rendered = if let ValidatedRecordContent::Structured(normalized) = &validated {
+                    Self::render_record_data(
+                        record_type.name(),
+                        record_type.schema().render_template(),
+                        normalized,
+                    )?
+                } else {
+                    None
+                };
+
+                match validated {
+                    ValidatedRecordContent::Structured(data) => (data, None::<Vec<u8>>, rendered),
+                    ValidatedRecordContent::RawRdata(raw) => {
+                        (Value::Null, Some(raw.wire_bytes().to_vec()), None)
+                    }
+                }
+            } else {
+                (
+                    existing.data().clone(),
+                    existing.raw_rdata().map(|r| r.wire_bytes().to_vec()),
+                    existing.rendered().map(|s| s.to_string()),
+                )
+            };
+
+            {
+                use crate::db::schema::{records, rrsets};
+                diesel::update(rrsets::table.filter(rrsets::id.eq(existing.rrset_id())))
+                    .set((
+                        rrsets::ttl.eq(new_ttl.map(|ttl| ttl.as_i32())),
+                        rrsets::updated_at.eq(diesel::dsl::now),
+                    ))
+                    .execute(connection)?;
+                diesel::update(records::table.filter(records::rrset_id.eq(existing.rrset_id())))
+                    .set(records::ttl.eq(new_ttl.map(|ttl| ttl.as_i32())))
+                    .execute(connection)?;
+                diesel::update(records::table.filter(records::id.eq(record_id)))
+                    .set((
+                        records::data.eq(&new_data),
+                        records::raw_rdata.eq(&new_raw_rdata),
+                        records::rendered.eq(&new_rendered),
+                        records::updated_at.eq(diesel::dsl::now),
+                    ))
+                    .execute(connection)?;
+            }
+
+            // Re-fetch the updated record
+            let record = sql_query(
+                "SELECT r.id, r.rrset_id, rs.type_id, rt.name::text AS type_name, rs.anchor_kind,
                                 rs.anchor_id, rs.owner_name::text AS owner_name, rs.zone_id, rs.ttl,
                                 r.data, r.raw_rdata, r.rendered,
                                 r.created_at, r.updated_at
@@ -595,16 +666,16 @@ impl PostgresStorage {
                          JOIN rrsets rs ON rs.id = r.rrset_id
                          JOIN record_types rt ON rt.id = rs.type_id
                          WHERE r.id = $1",
-                    )
-                    .bind::<SqlUuid, _>(record_id)
-                    .get_result::<RecordRow>(connection)?
-                    .into_domain()?;
+            )
+            .bind::<SqlUuid, _>(record_id)
+            .get_result::<RecordRow>(connection)?
+            .into_domain()?;
 
-                    // Cascade: bump zone serial
-                    if let Some(zone_id) = record.zone_id() {
-                        Self::bump_zone_serial_tx(connection, zone_id)?;
-                    }
-                    Ok(record)
+            // Cascade: bump zone serial
+            if let Some(zone_id) = record.zone_id() {
+                Self::bump_zone_serial_tx(connection, zone_id)?;
+            }
+            Ok(record)
         })
     }
 
@@ -625,8 +696,7 @@ impl PostgresStorage {
             let (rrset_id, zone_id) =
                 record_info.ok_or_else(|| AppError::not_found("record not found"))?;
 
-            diesel::delete(records::table.filter(records::id.eq(record_id)))
-                .execute(connection)?;
+            diesel::delete(records::table.filter(records::id.eq(record_id))).execute(connection)?;
 
             sql_query(
                 "DELETE FROM rrsets WHERE id = $1
@@ -795,10 +865,9 @@ impl PostgresStorage {
                     rrsets::anchor_name.eq(&new_name_str),
                 ))
                 .execute(connection)?;
-            let updated =
-                diesel::update(records::table.filter(records::owner_id.eq(owner_id)))
-                    .set(records::owner_name.eq(&new_name_str))
-                    .execute(connection)?;
+            let updated = diesel::update(records::table.filter(records::owner_id.eq(owner_id)))
+                .set(records::owner_name.eq(&new_name_str))
+                .execute(connection)?;
             Ok(updated as u64)
         })
     }

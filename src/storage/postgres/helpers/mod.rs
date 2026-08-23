@@ -28,7 +28,9 @@ use crate::errors::AppError;
 // ---------------------------------------------------------------------------
 
 pub(super) use dynamic_query::{run_count_query, run_dynamic_query};
-pub(super) use pagination::{limited_rows_to_page, paginate_simple, rows_to_page, vec_to_page};
+pub(super) use pagination::{
+    limited_rows_to_page_by, rows_to_page_by, sort_and_vec_to_page_by, vec_to_page_by,
+};
 pub(super) use record_types::{IntSentinelRow, record_owner_kind_value, record_type_storage_parts};
 
 // ---------------------------------------------------------------------------

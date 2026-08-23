@@ -7,7 +7,7 @@ use crate::{
     domain::{
         pagination::{Page, PageRequest},
         resource_records::{CreateRecordInstance, RecordOwnerKind},
-        types::{ZoneName, record_type_names},
+        types::{DnsName, ZoneName, ip_to_ptr_name, record_type_names},
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
             CreateReverseZoneDelegation, ForwardZone, ForwardZoneDelegation, ReverseZone,
@@ -23,6 +23,13 @@ use super::{
     delete_records_by_name_and_type_in_state, paginate_by_cursor, records::create_record_in_state,
     sort_and_paginate,
 };
+use super::{
+    hosts::{
+        create_managed_forward_record_in_state, create_managed_ptr_record_in_state,
+        delete_managed_forward_records_in_state, delete_managed_ptr_records_in_state,
+    },
+    records::best_matching_zone_for_owner_name,
+};
 
 pub(super) fn create_forward_zone_record_in_state(
     state: &mut MemoryState,
@@ -32,6 +39,12 @@ pub(super) fn create_forward_zone_record_in_state(
     if state.forward_zones.contains_key(&key) {
         return Err(AppError::conflict(format!(
             "forward zone '{}' already exists",
+            key
+        )));
+    }
+    if state.reverse_zones.contains_key(&key) {
+        return Err(AppError::conflict(format!(
+            "zone '{}' already exists as a reverse zone",
             key
         )));
     }
@@ -56,7 +69,8 @@ pub(super) fn create_forward_zone_record_in_state(
         command.refresh(),
         command.retry(),
         command.expire(),
-        command.soa_ttl(),
+        command.soa_record_ttl(),
+        command.negative_ttl(),
         command.default_ttl(),
         now,
         now,
@@ -73,6 +87,12 @@ pub(super) fn create_reverse_zone_record_in_state(
     if state.reverse_zones.contains_key(&key) {
         return Err(AppError::conflict(format!(
             "reverse zone '{}' already exists",
+            key
+        )));
+    }
+    if state.forward_zones.contains_key(&key) {
+        return Err(AppError::conflict(format!(
+            "zone '{}' already exists as a forward zone",
             key
         )));
     }
@@ -98,7 +118,8 @@ pub(super) fn create_reverse_zone_record_in_state(
         command.refresh(),
         command.retry(),
         command.expire(),
-        command.soa_ttl(),
+        command.soa_record_ttl(),
+        command.negative_ttl(),
         command.default_ttl(),
         now,
         now,
@@ -112,37 +133,56 @@ pub(super) fn list_forward_zones_in_state(
     page: &PageRequest,
 ) -> Result<Page<ForwardZone>, AppError> {
     let items: Vec<ForwardZone> = state.forward_zones.values().cloned().collect();
-    sort_and_paginate(items, page, &["created_at"], |zone, field| match field {
-        "created_at" => zone.created_at().to_rfc3339(),
-        _ => zone.name().as_str().to_string(),
-    })
+    sort_and_paginate(
+        items,
+        page,
+        &["name", "created_at", "updated_at"],
+        |zone, field| match field {
+            "created_at" => zone.created_at().to_rfc3339(),
+            "updated_at" => zone.updated_at().to_rfc3339(),
+            _ => zone.name().as_str().to_string(),
+        },
+    )
 }
 
 pub(super) fn create_forward_zone_in_state(
     state: &mut MemoryState,
     command: CreateForwardZone,
 ) -> Result<ForwardZone, AppError> {
-    let zone = create_forward_zone_record_in_state(state, command)?;
-    for ns in zone.nameservers() {
-        let cmd = CreateRecordInstance::new(
-            record_type_names::ns(),
-            RecordOwnerKind::ForwardZone,
-            zone.name().as_str(),
-            None,
-            json!({ "nsdname": ns.as_str() }),
-        );
-        match cmd {
-            Ok(cmd) => {
-                if let Err(err) = create_record_in_state(state, cmd) {
-                    tracing::warn!(error = %err, "failed to auto-create cascading NS record");
-                }
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to construct cascading NS record command");
+    let original = state.clone();
+    let result = (|| {
+        let zone = create_forward_zone_record_in_state(state, command)?;
+        for ns in zone.nameservers() {
+            let cmd = CreateRecordInstance::new(
+                record_type_names::ns(),
+                RecordOwnerKind::ForwardZone,
+                zone.name().as_str(),
+                None,
+                json!({ "nsdname": ns.as_str() }),
+            )?;
+            create_record_in_state(state, cmd)?;
+        }
+        let assignments = state.ip_addresses.values().cloned().collect::<Vec<_>>();
+        for assignment in assignments {
+            let Some(host) = state
+                .hosts
+                .values()
+                .find(|host| host.id() == assignment.host_id())
+            else {
+                continue;
+            };
+            let owner = DnsName::new(host.name().as_str())?;
+            if best_matching_zone_for_owner_name(state, &owner) == Some(zone.id()) {
+                delete_managed_forward_records_in_state(state, assignment.id())?;
+                create_managed_forward_record_in_state(state, &assignment)?;
             }
         }
+        Ok(zone)
+    })();
+    if result.is_err() {
+        *state = original;
     }
-    Ok(zone)
+    result
 }
 
 pub(super) fn get_forward_zone_by_name_in_state(
@@ -182,7 +222,10 @@ pub(super) fn update_forward_zone_in_state(
     let refresh = command.refresh.unwrap_or_else(|| zone.refresh());
     let retry = command.retry.unwrap_or_else(|| zone.retry());
     let expire = command.expire.unwrap_or_else(|| zone.expire());
-    let soa_ttl = command.soa_ttl.unwrap_or_else(|| zone.soa_ttl());
+    let soa_record_ttl = command
+        .soa_record_ttl
+        .unwrap_or_else(|| zone.soa_record_ttl());
+    let negative_ttl = command.negative_ttl.unwrap_or_else(|| zone.negative_ttl());
     let default_ttl = command.default_ttl.unwrap_or_else(|| zone.default_ttl());
     let next_serial = zone.serial_no().next_rfc1912(now.date_naive())?;
     let updated = ForwardZone::restore(
@@ -197,7 +240,8 @@ pub(super) fn update_forward_zone_in_state(
         refresh,
         retry,
         expire,
-        soa_ttl,
+        soa_record_ttl,
+        negative_ttl,
         default_ttl,
         zone.created_at(),
         now,
@@ -205,7 +249,7 @@ pub(super) fn update_forward_zone_in_state(
     state
         .forward_zones
         .insert(name.as_str().to_string(), updated.clone());
-    if old_nameservers != nameservers {
+    if old_nameservers != updated.nameservers() {
         delete_records_by_name_and_type_in_state(state, updated.name().as_str(), "NS");
         for ns in updated.nameservers() {
             let cmd = CreateRecordInstance::new(
@@ -234,13 +278,26 @@ pub(super) fn delete_forward_zone_in_state(
     state: &mut MemoryState,
     name: &ZoneName,
 ) -> Result<(), AppError> {
-    match state.forward_zones.remove(name.as_str()) {
-        Some(_removed) => Ok(()),
-        None => Err(AppError::not_found(format!(
-            "forward zone '{}' was not found",
-            name.as_str()
-        ))),
+    let zone = state
+        .forward_zones
+        .get(name.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("forward zone '{}' was not found", name.as_str()))
+        })?;
+    if state
+        .hosts
+        .values()
+        .any(|host| host.zone().is_some_and(|host_zone| host_zone == name))
+    {
+        return Err(AppError::conflict("forward zone still contains hosts"));
     }
+    delete_zone_inventory_in_state(state, zone.id());
+    state
+        .forward_zone_delegations
+        .retain(|_, delegation| delegation.zone_id() != zone.id());
+    state.forward_zones.remove(name.as_str());
+    Ok(())
 }
 
 pub(super) fn list_forward_zone_delegations_in_state(
@@ -279,6 +336,14 @@ pub(super) fn create_forward_zone_delegation_in_state(
             ))
         })?;
     let zone_id = zone.id();
+    for nameserver in command.nameservers() {
+        if !state.nameservers.contains_key(nameserver.as_str()) {
+            return Err(AppError::not_found(format!(
+                "nameserver '{}' does not exist",
+                nameserver.as_str()
+            )));
+        }
+    }
     let now = Utc::now();
     let id = Uuid::new_v4();
     let delegation = ForwardZoneDelegation::restore(
@@ -300,17 +365,8 @@ pub(super) fn create_forward_zone_delegation_in_state(
             delegation.name().as_str(),
             None,
             json!({"nsdname": ns.as_str()}),
-        );
-        match cmd {
-            Ok(cmd) => {
-                if let Err(err) = create_record_in_state(state, cmd) {
-                    tracing::warn!(error = %err, "failed to auto-create cascading NS record");
-                }
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to construct cascading NS record command");
-            }
-        }
+        )?;
+        create_record_in_state(state, cmd)?;
     }
     bump_zone_serial_in_state(state, delegation.zone_id());
     Ok(delegation)
@@ -337,37 +393,49 @@ pub(super) fn list_reverse_zones_in_state(
     page: &PageRequest,
 ) -> Result<Page<ReverseZone>, AppError> {
     let items: Vec<ReverseZone> = state.reverse_zones.values().cloned().collect();
-    sort_and_paginate(items, page, &["created_at"], |zone, field| match field {
-        "created_at" => zone.created_at().to_rfc3339(),
-        _ => zone.name().as_str().to_string(),
-    })
+    sort_and_paginate(
+        items,
+        page,
+        &["name", "created_at", "updated_at"],
+        |zone, field| match field {
+            "created_at" => zone.created_at().to_rfc3339(),
+            "updated_at" => zone.updated_at().to_rfc3339(),
+            _ => zone.name().as_str().to_string(),
+        },
+    )
 }
 
 pub(super) fn create_reverse_zone_in_state(
     state: &mut MemoryState,
     command: CreateReverseZone,
 ) -> Result<ReverseZone, AppError> {
-    let zone = create_reverse_zone_record_in_state(state, command)?;
-    for ns in zone.nameservers() {
-        let cmd = CreateRecordInstance::new(
-            record_type_names::ns(),
-            RecordOwnerKind::ReverseZone,
-            zone.name().as_str(),
-            None,
-            json!({ "nsdname": ns.as_str() }),
-        );
-        match cmd {
-            Ok(cmd) => {
-                if let Err(err) = create_record_in_state(state, cmd) {
-                    tracing::warn!(error = %err, "failed to auto-create cascading NS record");
-                }
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to construct cascading NS record command");
+    let original = state.clone();
+    let result = (|| {
+        let zone = create_reverse_zone_record_in_state(state, command)?;
+        for ns in zone.nameservers() {
+            let cmd = CreateRecordInstance::new(
+                record_type_names::ns(),
+                RecordOwnerKind::ReverseZone,
+                zone.name().as_str(),
+                None,
+                json!({ "nsdname": ns.as_str() }),
+            )?;
+            create_record_in_state(state, cmd)?;
+        }
+        let assignments = state.ip_addresses.values().cloned().collect::<Vec<_>>();
+        for assignment in assignments {
+            let ptr_owner = DnsName::new(ip_to_ptr_name(assignment.address()))?;
+            if best_matching_zone_for_owner_name(state, &ptr_owner) == Some(zone.id()) {
+                delete_managed_ptr_records_in_state(state, assignment.id())?;
+                create_managed_ptr_record_in_state(state, &assignment)?;
             }
         }
+        Ok(zone)
+    })();
+    if result.is_err() {
+        *state = original;
     }
-    Ok(zone)
+    result
 }
 
 pub(super) fn get_reverse_zone_by_name_in_state(
@@ -407,7 +475,10 @@ pub(super) fn update_reverse_zone_in_state(
     let refresh = command.refresh.unwrap_or_else(|| zone.refresh());
     let retry = command.retry.unwrap_or_else(|| zone.retry());
     let expire = command.expire.unwrap_or_else(|| zone.expire());
-    let soa_ttl = command.soa_ttl.unwrap_or_else(|| zone.soa_ttl());
+    let soa_record_ttl = command
+        .soa_record_ttl
+        .unwrap_or_else(|| zone.soa_record_ttl());
+    let negative_ttl = command.negative_ttl.unwrap_or_else(|| zone.negative_ttl());
     let default_ttl = command.default_ttl.unwrap_or_else(|| zone.default_ttl());
     let next_serial = zone.serial_no().next_rfc1912(now.date_naive())?;
     let updated = ReverseZone::restore(
@@ -423,7 +494,8 @@ pub(super) fn update_reverse_zone_in_state(
         refresh,
         retry,
         expire,
-        soa_ttl,
+        soa_record_ttl,
+        negative_ttl,
         default_ttl,
         zone.created_at(),
         now,
@@ -431,7 +503,7 @@ pub(super) fn update_reverse_zone_in_state(
     state
         .reverse_zones
         .insert(name.as_str().to_string(), updated.clone());
-    if old_nameservers != nameservers {
+    if old_nameservers != updated.nameservers() {
         delete_records_by_name_and_type_in_state(state, updated.name().as_str(), "NS");
         for ns in updated.nameservers() {
             let cmd = CreateRecordInstance::new(
@@ -460,13 +532,37 @@ pub(super) fn delete_reverse_zone_in_state(
     state: &mut MemoryState,
     name: &ZoneName,
 ) -> Result<(), AppError> {
-    match state.reverse_zones.remove(name.as_str()) {
-        Some(_removed) => Ok(()),
-        None => Err(AppError::not_found(format!(
-            "reverse zone '{}' was not found",
-            name.as_str()
-        ))),
-    }
+    let zone = state
+        .reverse_zones
+        .get(name.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("reverse zone '{}' was not found", name.as_str()))
+        })?;
+    delete_zone_inventory_in_state(state, zone.id());
+    state
+        .reverse_zone_delegations
+        .retain(|_, delegation| delegation.zone_id() != zone.id());
+    state.reverse_zones.remove(name.as_str());
+    Ok(())
+}
+
+fn delete_zone_inventory_in_state(state: &mut MemoryState, zone_id: Uuid) {
+    let record_ids = state
+        .records
+        .iter()
+        .filter(|record| record.zone_id() == Some(zone_id))
+        .map(|record| record.id())
+        .collect::<std::collections::HashSet<_>>();
+    state
+        .managed_ip_records
+        .retain(|record_id, _| !record_ids.contains(record_id));
+    state
+        .records
+        .retain(|record| !record_ids.contains(&record.id()));
+    state
+        .rrsets
+        .retain(|_, rrset| rrset.zone_id() != Some(zone_id));
 }
 
 pub(super) fn list_reverse_zone_delegations_in_state(
@@ -505,6 +601,14 @@ pub(super) fn create_reverse_zone_delegation_in_state(
             ))
         })?;
     let zone_id = zone.id();
+    for nameserver in command.nameservers() {
+        if !state.nameservers.contains_key(nameserver.as_str()) {
+            return Err(AppError::not_found(format!(
+                "nameserver '{}' does not exist",
+                nameserver.as_str()
+            )));
+        }
+    }
     let now = Utc::now();
     let id = Uuid::new_v4();
     let delegation = ReverseZoneDelegation::restore(
@@ -526,17 +630,8 @@ pub(super) fn create_reverse_zone_delegation_in_state(
             delegation.name().as_str(),
             None,
             json!({"nsdname": ns.as_str()}),
-        );
-        match cmd {
-            Ok(cmd) => {
-                if let Err(err) = create_record_in_state(state, cmd) {
-                    tracing::warn!(error = %err, "failed to auto-create cascading NS record");
-                }
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to construct cascading NS record command");
-            }
-        }
+        )?;
+        create_record_in_state(state, cmd)?;
     }
     bump_zone_serial_in_state(state, delegation.zone_id());
     Ok(delegation)
@@ -581,7 +676,8 @@ pub(super) fn bump_forward_zone_serial_in_state(
         zone.refresh(),
         zone.retry(),
         zone.expire(),
-        zone.soa_ttl(),
+        zone.soa_record_ttl(),
+        zone.negative_ttl(),
         zone.default_ttl(),
         zone.created_at(),
         now,
@@ -614,7 +710,8 @@ pub(super) fn bump_reverse_zone_serial_in_state(
         zone.refresh(),
         zone.retry(),
         zone.expire(),
-        zone.soa_ttl(),
+        zone.soa_record_ttl(),
+        zone.negative_ttl(),
         zone.default_ttl(),
         zone.created_at(),
         now,
