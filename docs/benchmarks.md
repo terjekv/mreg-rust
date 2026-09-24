@@ -22,6 +22,14 @@ before the importer fix. Rust PR Bench reports that target as new when it does
 not exist on the base revision; it cannot provide a meaningful timing comparison
 against an implementation that rejects the workload.
 
+## Profiler compatibility
+
+Benchmark builds and measurements use `ubuntu-26.04` through Rust PR Bench's
+`runs_on` input. Ubuntu 24.04's Valgrind 3.22 can miss symbols in Rust executables,
+causing Callgrind to report zero instructions for a workload that executed.
+Replaying the affected CI binary with Valgrind 3.26 restored instruction collection.
+Treat an unexpected zero count as an invalid measurement, not an improvement.
+
 ## Matching the harness across revisions
 
 `.github/scripts/benchmark_matrix.py` discovers targets from `Cargo.toml`. For

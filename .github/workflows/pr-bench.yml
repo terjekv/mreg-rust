@@ -32,9 +32,10 @@ jobs:
 
   bench:
     needs: prepare-benchmarks
-    uses: terjekv/rust-pr-bench/.github/workflows/rust-pr-bench.yml@0343a98c94e04d326c5fbfea753fad9934eee7be # v1.0.0
+    uses: terjekv/rust-pr-bench/.github/workflows/rust-pr-bench.yml@55dff7c6889e575e9b8c459bf5deb089c0a9bb52 # runner image selection
     with:
-      action_ref: 0343a98c94e04d326c5fbfea753fad9934eee7be
+      runs_on: ubuntu-26.04
+      action_ref: 55dff7c6889e575e9b8c459bf5deb089c0a9bb52
       backend: all
       benchmarks_json: ${{ needs.prepare-benchmarks.outputs.benchmarks }}
       auto_discover: false
