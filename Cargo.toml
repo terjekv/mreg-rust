@@ -198,6 +198,10 @@ name = "import_batch_run_criterion"
 harness = false
 
 [[bench]]
+name = "import_attachment_ip_criterion"
+harness = false
+
+[[bench]]
 name = "host_detail_assembly_criterion"
 harness = false
 

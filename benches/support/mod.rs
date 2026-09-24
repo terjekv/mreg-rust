@@ -668,6 +668,29 @@ pub fn record_listing_storage(runtime: &Runtime, count: usize) -> (DynStorage, P
     let storage = memory_storage();
 
     runtime.block_on(async {
+        let nameserver = DnsName::new("ns1.bench.test").expect("nameserver");
+        storage
+            .nameservers()
+            .create_nameserver(CreateNameServer::new(nameserver.clone(), None))
+            .await
+            .expect("nameserver create");
+        storage
+            .zones()
+            .create_forward_zone(CreateForwardZone::new(
+                ZoneName::new("bench.test").expect("zone"),
+                nameserver.clone(),
+                vec![nameserver],
+                EmailAddressValue::new("hostmaster@bench.test").expect("email"),
+                SerialNumber::new(1).expect("serial"),
+                SoaSeconds::new(10800).expect("refresh"),
+                SoaSeconds::new(3600).expect("retry"),
+                SoaSeconds::new(604800).expect("expire"),
+                Ttl::new(3600).expect("soa ttl"),
+                Ttl::new(3600).expect("negative ttl"),
+                Ttl::new(3600).expect("default ttl"),
+            ))
+            .await
+            .expect("zone create");
         for index in 0..count {
             let owner = format!("rec-{index:04}.bench.test");
             let cmd = CreateRecordInstance::new_unanchored(
@@ -1548,6 +1571,99 @@ pub fn import_batch() -> ImportBatch {
 
 pub fn import_batch_command() -> CreateImportBatch {
     CreateImportBatch::new(import_batch(), Some("bench-user".to_string()))
+}
+
+#[derive(Clone, Copy)]
+pub enum IpImportScenario {
+    DirectManual,
+    DirectAutomatic,
+    AttachmentManual,
+    AttachmentAutomatic,
+}
+
+impl IpImportScenario {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DirectManual => "direct_manual",
+            Self::DirectAutomatic => "direct_automatic",
+            Self::AttachmentManual => "attachment_manual",
+            Self::AttachmentAutomatic => "attachment_automatic",
+        }
+    }
+
+    /// Mixed IPv4/IPv6 inventory imports. Attachment cases deliberately omit
+    /// host_name on IP items, matching the portable snapshot contract.
+    pub fn command(self, host_count: usize) -> CreateImportBatch {
+        assert!((1..=128).contains(&host_count));
+        let attached = matches!(self, Self::AttachmentManual | Self::AttachmentAutomatic);
+        let automatic = matches!(self, Self::DirectAutomatic | Self::AttachmentAutomatic);
+        let mut items = Vec::new();
+        for (index, cidr) in ["10.111.0.0/24", "2001:db8:111::/64"].iter().enumerate() {
+            items.push(
+                ImportItem::new(
+                    format!("network-{index}"),
+                    ImportKind::Network,
+                    ImportOperation::Create,
+                    json!({"cidr": cidr, "description": "IP import benchmark", "reserved": 1}),
+                )
+                .expect("network item"),
+            );
+        }
+        for index in 0..host_count {
+            let host_ref = format!("host-{index}");
+            let network_ref = format!("network-{}", index % 2);
+            let attachment_ref = format!("attachment-{index}");
+            items.push(
+                ImportItem::new(
+                    &host_ref,
+                    ImportKind::Host,
+                    ImportOperation::Create,
+                    json!({"name": format!("ip-{index:03}.bench.test")}),
+                )
+                .expect("host item"),
+            );
+            let mut attributes = if attached {
+                items.push(
+                    ImportItem::new(
+                        &attachment_ref,
+                        ImportKind::HostAttachment,
+                        ImportOperation::Create,
+                        json!({
+                            "host_name_ref": host_ref,
+                            "network_ref": network_ref,
+                            "mac_address": format!("aa:bb:cc:dd:ee:{index:02x}")
+                        }),
+                    )
+                    .expect("attachment item"),
+                );
+                json!({"attachment_id_ref": attachment_ref})
+            } else {
+                json!({"host_name_ref": host_ref})
+            };
+            if !automatic {
+                attributes["address"] = json!(if index % 2 == 0 {
+                    format!("10.111.0.{}", index + 1)
+                } else {
+                    format!("2001:db8:111::{:x}", index + 1)
+                });
+            } else if !attached {
+                attributes["network_ref"] = json!(network_ref);
+            }
+            items.push(
+                ImportItem::new(
+                    format!("ip-{index}"),
+                    ImportKind::IpAddress,
+                    ImportOperation::Create,
+                    attributes,
+                )
+                .expect("IP item"),
+            );
+        }
+        CreateImportBatch::new(
+            ImportBatch::new(items).expect("IP import batch"),
+            Some("bench-user".to_string()),
+        )
+    }
 }
 
 /// Pre-create a nameserver so that downstream zone-create calls satisfy the

@@ -12,13 +12,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare-benchmarks:
+    runs-on: ubuntu-latest
+    outputs:
+      benchmarks: ${{ steps.matrix.outputs.benchmarks }}
+      criterion_args: ${{ steps.matrix.outputs.criterion_args }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Use matching benchmark harnesses for base and head
+        id: matrix
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CRITERION_ARGS: "--noplot --sample-size 80 --measurement-time 6"
+        run: |
+          BENCHMARKS=$(python3 .github/scripts/benchmark_matrix.py "$HEAD_SHA" --criterion-args "$CRITERION_ARGS")
+          printf 'benchmarks=%s\ncriterion_args=%s\n' "$BENCHMARKS" "$CRITERION_ARGS" >> "$GITHUB_OUTPUT"
+
   bench:
+    needs: prepare-benchmarks
     uses: terjekv/rust-pr-bench/.github/workflows/rust-pr-bench.yml@0343a98c94e04d326c5fbfea753fad9934eee7be # v1.0.0
     with:
       action_ref: 0343a98c94e04d326c5fbfea753fad9934eee7be
       backend: all
-      auto_discover: true
-      criterion_cli_args: "--noplot --sample-size 80 --measurement-time 6"
+      benchmarks_json: ${{ needs.prepare-benchmarks.outputs.benchmarks }}
+      auto_discover: false
+      criterion_cli_args: ${{ needs.prepare-benchmarks.outputs.criterion_args }}
       criterion_statistic: median
       regression_threshold_pct_gungraun: 3
       regression_threshold_pct_criterion: 8

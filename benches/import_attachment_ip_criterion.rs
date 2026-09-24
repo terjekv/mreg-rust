@@ -6,36 +6,14 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 
 use support::IpImportScenario;
 
-fn import_batch_run(c: &mut Criterion) {
+// These payloads were rejected before the attachment import fix. Keep them in
+// a separate target so CI reports a new benchmark rather than a base failure.
+fn import_attachment_ip(c: &mut Criterion) {
     let runtime = support::runtime();
-
-    c.bench_function("import_batch_run_canonical", |b| {
-        b.iter_batched_ref(
-            || {
-                let storage = support::memory_storage();
-                let summary = runtime
-                    .block_on(
-                        storage
-                            .imports()
-                            .create_import_batch(support::import_batch_command()),
-                    )
-                    .expect("create import batch");
-                (storage, summary.id())
-            },
-            |(storage, id)| {
-                let result = runtime
-                    .block_on(storage.imports().run_import_batch(black_box(*id)))
-                    .expect("import batch runs");
-                black_box(result)
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    let mut group = c.benchmark_group("import_batch_run_ip");
+    let mut group = c.benchmark_group("import_attachment_ip");
     for scenario in [
-        IpImportScenario::DirectManual,
-        IpImportScenario::DirectAutomatic,
+        IpImportScenario::AttachmentManual,
+        IpImportScenario::AttachmentAutomatic,
     ] {
         for count in [2, 32] {
             group.bench_with_input(
@@ -58,7 +36,7 @@ fn import_batch_run(c: &mut Criterion) {
                             black_box(
                                 runtime
                                     .block_on(storage.imports().run_import_batch(black_box(*id)))
-                                    .expect("IP import batch runs"),
+                                    .expect("attachment IP import batch runs"),
                             )
                         },
                         BatchSize::SmallInput,
@@ -70,5 +48,5 @@ fn import_batch_run(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, import_batch_run);
+criterion_group!(benches, import_attachment_ip);
 criterion_main!(benches);
