@@ -35,9 +35,11 @@ def benchmark_specs(manifest: dict, head_sha: str, criterion_args: str) -> list[
                 ["git", "restore", f"--source={head_sha}", "--worktree", "--", *paths]
             )
             args = shlex.join(shlex.split(criterion_args))
+            # The pinned action removes empty quoted arguments while normalizing
+            # commands. Keep the empty default feature set attached to its flag.
             spec["base_command"] = (
                 f"{restore} && cargo bench --bench {shlex.quote(name)} "
-                "--features '{features}' {no_default_features_flag} "
+                "--features='{features}' {no_default_features_flag} "
                 f"-- {args}"
             )
         specs.append(spec)
