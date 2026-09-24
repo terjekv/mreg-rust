@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed attachment-based IP imports in both storage backends: derive the host from the attachment, infer its network only for automatic allocation, and preserve the exact attachment when assigning an address. Direct IP imports also retain MAC addresses consistently across backends.
 - Enforced RFC-correct CNAME/DNAME exclusivity and alias graphs, null MX semantics, RRset-wide TTL updates, authoritative owner containment, strict delegations, and zone serial bumps for generated records.
 - Added canonical DNS master-file rendering for all 25 built-in record types, including absolute domain names, escaped character strings, LOC, DNSSEC records, SVCB/HTTPS parameters, and RFC 3597 raw RDATA.
 - Corrected IPv4 `/31` and `/32` allocation semantics, full-width IPv6 capacity handling, exact attachment selection, overlapping excluded/prefix range checks, and allocation inside reserved or frozen space.

@@ -9,7 +9,14 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::errors::AppError;
+use crate::{
+    domain::{
+        attachment::HostAttachment,
+        host::AssignIpAddress,
+        types::{CidrValue, Hostname, IpAddressValue, MacAddressValue},
+    },
+    errors::AppError,
+};
 
 /// Extract a required string attribute, resolving `{key}_ref` references if present.
 pub fn resolve_string(
@@ -178,6 +185,57 @@ pub fn resolve_i32(attributes: &Value, key: &str) -> Result<Option<i32>, AppErro
             i32::try_from(v).map_err(|_| AppError::validation(format!("'{key}' exceeds i32 range")))
         })
         .transpose()
+}
+
+/// Build an IP assignment, preserving an explicitly referenced attachment.
+pub fn resolve_ip_assignment(
+    attributes: &Value,
+    refs: &BTreeMap<String, String>,
+    attachment: Option<&HostAttachment>,
+) -> Result<AssignIpAddress, AppError> {
+    let address = resolve_optional_string(attributes, "address", refs)?
+        .map(IpAddressValue::new)
+        .transpose()?;
+    let network = resolve_optional_string(attributes, "network", refs)?
+        .map(CidrValue::new)
+        .transpose()?;
+
+    if let Some(attachment) = attachment {
+        if let Some(explicit_network) = &network
+            && explicit_network != attachment.network_cidr()
+        {
+            return Err(AppError::validation(
+                "import ip_address network does not match referenced attachment",
+            ));
+        }
+        if let Some(explicit_host) = resolve_optional_string(attributes, "host_name", refs)?
+            && explicit_host != attachment.host_name().as_str()
+        {
+            return Err(AppError::validation(
+                "import ip_address host_name does not match referenced attachment",
+            ));
+        }
+        // Only automatic allocation needs an inferred network. Explicitly
+        // supplying both address and network still fails domain validation.
+        let network =
+            network.or_else(|| address.is_none().then(|| attachment.network_cidr().clone()));
+        return Ok(AssignIpAddress::new(
+            attachment.host_name().clone(),
+            address,
+            network,
+            attachment.mac_address().cloned(),
+        )?
+        .within_attachment(attachment.id()));
+    }
+
+    AssignIpAddress::new(
+        Hostname::new(resolve_string(attributes, "host_name", refs)?)?,
+        address,
+        network,
+        resolve_optional_string(attributes, "mac_address", refs)?
+            .map(MacAddressValue::new)
+            .transpose()?,
+    )
 }
 
 /// Convert a JSON value to a string suitable for storing as a ref.
