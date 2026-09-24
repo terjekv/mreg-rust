@@ -66,7 +66,7 @@ use crate::{
     },
 };
 
-use super::{PostgresStorage, audit, helpers::vec_to_page, host_contacts as pg_host_contacts};
+use super::{PostgresStorage, audit, helpers::vec_to_page_by, host_contacts as pg_host_contacts};
 
 /// Transaction-scoped view of `PostgresStorage`. The connection lives only
 /// for the duration of the closure passed to
@@ -142,11 +142,7 @@ impl<'c> TxStorage for PgTxStorage<'c> {
 }
 
 impl<'c> TxHostStore for PgTxStorage<'c> {
-    fn list_hosts(
-        &self,
-        page: &PageRequest,
-        filter: &HostFilter,
-    ) -> Result<Page<Host>, AppError> {
+    fn list_hosts(&self, page: &PageRequest, filter: &HostFilter) -> Result<Page<Host>, AppError> {
         PostgresStorage::list_hosts_in_conn(&mut self.conn.borrow_mut(), page, filter)
     }
 
@@ -181,12 +177,15 @@ impl<'c> TxHostStore for PgTxStorage<'c> {
         PostgresStorage::delete_host_in_conn(&mut self.conn.borrow_mut(), name)
     }
 
-    fn list_ip_addresses(
-        &self,
-        page: &PageRequest,
-    ) -> Result<Page<IpAddressAssignment>, AppError> {
+    fn list_ip_addresses(&self, page: &PageRequest) -> Result<Page<IpAddressAssignment>, AppError> {
         let items = PostgresStorage::query_ip_addresses(&mut self.conn.borrow_mut())?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(
+            items,
+            page,
+            "address",
+            &crate::domain::pagination::SortDirection::Asc,
+            super::hosts::assignment_address_key,
+        )
     }
 
     fn list_ip_addresses_for_host(
@@ -196,7 +195,13 @@ impl<'c> TxHostStore for PgTxStorage<'c> {
     ) -> Result<Page<IpAddressAssignment>, AppError> {
         let items =
             PostgresStorage::query_ip_addresses_for_host(&mut self.conn.borrow_mut(), host)?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(
+            items,
+            page,
+            "address",
+            &crate::domain::pagination::SortDirection::Asc,
+            super::hosts::assignment_address_key,
+        )
     }
 
     fn list_ip_addresses_for_hosts(
@@ -209,17 +214,11 @@ impl<'c> TxHostStore for PgTxStorage<'c> {
         PostgresStorage::query_ip_addresses_for_hosts(&mut conn, &ids)
     }
 
-    fn get_ip_address(
-        &self,
-        address: &IpAddressValue,
-    ) -> Result<IpAddressAssignment, AppError> {
+    fn get_ip_address(&self, address: &IpAddressValue) -> Result<IpAddressAssignment, AppError> {
         PostgresStorage::query_ip_address(&mut self.conn.borrow_mut(), address)
     }
 
-    fn assign_ip_address(
-        &self,
-        command: AssignIpAddress,
-    ) -> Result<IpAddressAssignment, AppError> {
+    fn assign_ip_address(&self, command: AssignIpAddress) -> Result<IpAddressAssignment, AppError> {
         PostgresStorage::assign_ip_address_in_conn(&mut self.conn.borrow_mut(), command)
     }
 
@@ -236,11 +235,7 @@ impl<'c> TxHostStore for PgTxStorage<'c> {
         address: &IpAddressValue,
         command: UpdateIpAddress,
     ) -> Result<IpAddressAssignment, AppError> {
-        PostgresStorage::update_ip_address_in_conn(
-            &mut self.conn.borrow_mut(),
-            address,
-            command,
-        )
+        PostgresStorage::update_ip_address_in_conn(&mut self.conn.borrow_mut(), address, command)
     }
 
     fn unassign_ip_address(
@@ -336,10 +331,7 @@ impl<'c> TxZoneStore for PgTxStorage<'c> {
     fn list_forward_zones(&self, page: &PageRequest) -> Result<Page<ForwardZone>, AppError> {
         PostgresStorage::list_forward_zones_impl(&mut self.conn.borrow_mut(), page)
     }
-    fn create_forward_zone(
-        &self,
-        command: CreateForwardZone,
-    ) -> Result<ForwardZone, AppError> {
+    fn create_forward_zone(&self, command: CreateForwardZone) -> Result<ForwardZone, AppError> {
         PostgresStorage::create_forward_zone_impl(&mut self.conn.borrow_mut(), command)
     }
     fn get_forward_zone_by_name(&self, name: &ZoneName) -> Result<ForwardZone, AppError> {
@@ -362,10 +354,7 @@ impl<'c> TxZoneStore for PgTxStorage<'c> {
     fn list_reverse_zones(&self, page: &PageRequest) -> Result<Page<ReverseZone>, AppError> {
         PostgresStorage::list_reverse_zones_impl(&mut self.conn.borrow_mut(), page)
     }
-    fn create_reverse_zone(
-        &self,
-        command: CreateReverseZone,
-    ) -> Result<ReverseZone, AppError> {
+    fn create_reverse_zone(&self, command: CreateReverseZone) -> Result<ReverseZone, AppError> {
         PostgresStorage::create_reverse_zone_impl(&mut self.conn.borrow_mut(), command)
     }
     fn get_reverse_zone_by_name(&self, name: &ZoneName) -> Result<ReverseZone, AppError> {
@@ -479,38 +468,23 @@ impl<'c> TxNetworkStore for PgTxStorage<'c> {
         network: &CidrValue,
         page: &PageRequest,
     ) -> Result<Page<ExcludedRange>, AppError> {
-        PostgresStorage::list_excluded_ranges_in_conn(
-            &mut self.conn.borrow_mut(),
-            network,
-            page,
-        )
+        PostgresStorage::list_excluded_ranges_in_conn(&mut self.conn.borrow_mut(), network, page)
     }
     fn add_excluded_range(
         &self,
         network: &CidrValue,
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError> {
-        PostgresStorage::add_excluded_range_in_conn(
-            &mut self.conn.borrow_mut(),
-            network,
-            command,
-        )
+        PostgresStorage::add_excluded_range_in_conn(&mut self.conn.borrow_mut(), network, command)
     }
-    fn delete_excluded_range(
-        &self,
-        network: &CidrValue,
-        range_id: Uuid,
-    ) -> Result<(), AppError> {
+    fn delete_excluded_range(&self, network: &CidrValue, range_id: Uuid) -> Result<(), AppError> {
         PostgresStorage::delete_excluded_range_in_conn(
             &mut self.conn.borrow_mut(),
             network,
             range_id,
         )
     }
-    fn list_used_addresses(
-        &self,
-        cidr: &CidrValue,
-    ) -> Result<Vec<IpAddressAssignment>, AppError> {
+    fn list_used_addresses(&self, cidr: &CidrValue) -> Result<Vec<IpAddressAssignment>, AppError> {
         PostgresStorage::list_used_addresses_in_conn(&mut self.conn.borrow_mut(), cidr)
     }
     fn list_unused_addresses(
@@ -529,10 +503,7 @@ impl<'c> TxAttachmentStore for PgTxStorage<'c> {
     fn list_attachments(&self, page: &PageRequest) -> Result<Page<HostAttachment>, AppError> {
         PostgresStorage::list_attachments_in_conn(&mut self.conn.borrow_mut(), page)
     }
-    fn list_attachments_for_host(
-        &self,
-        host: &Hostname,
-    ) -> Result<Vec<HostAttachment>, AppError> {
+    fn list_attachments_for_host(&self, host: &Hostname) -> Result<Vec<HostAttachment>, AppError> {
         PostgresStorage::list_attachments_for_host_in_conn(&mut self.conn.borrow_mut(), host)
     }
     fn list_attachments_for_hosts(
@@ -545,15 +516,9 @@ impl<'c> TxAttachmentStore for PgTxStorage<'c> {
         &self,
         network: &CidrValue,
     ) -> Result<Vec<HostAttachment>, AppError> {
-        PostgresStorage::list_attachments_for_network_in_conn(
-            &mut self.conn.borrow_mut(),
-            network,
-        )
+        PostgresStorage::list_attachments_for_network_in_conn(&mut self.conn.borrow_mut(), network)
     }
-    fn create_attachment(
-        &self,
-        command: CreateHostAttachment,
-    ) -> Result<HostAttachment, AppError> {
+    fn create_attachment(&self, command: CreateHostAttachment) -> Result<HostAttachment, AppError> {
         PostgresStorage::create_attachment_tx(&mut self.conn.borrow_mut(), command)
     }
     fn get_attachment(&self, attachment_id: Uuid) -> Result<HostAttachment, AppError> {
@@ -564,11 +529,7 @@ impl<'c> TxAttachmentStore for PgTxStorage<'c> {
         attachment_id: Uuid,
         command: UpdateHostAttachment,
     ) -> Result<HostAttachment, AppError> {
-        PostgresStorage::update_attachment_tx(
-            &mut self.conn.borrow_mut(),
-            attachment_id,
-            command,
-        )
+        PostgresStorage::update_attachment_tx(&mut self.conn.borrow_mut(), attachment_id, command)
     }
     fn delete_attachment(&self, attachment_id: Uuid) -> Result<(), AppError> {
         PostgresStorage::delete_attachment_in_conn(&mut self.conn.borrow_mut(), attachment_id)
@@ -595,10 +556,7 @@ impl<'c> TxAttachmentStore for PgTxStorage<'c> {
         &self,
         command: CreateAttachmentDhcpIdentifier,
     ) -> Result<AttachmentDhcpIdentifier, AppError> {
-        PostgresStorage::create_attachment_dhcp_identifier_tx(
-            &mut self.conn.borrow_mut(),
-            command,
-        )
+        PostgresStorage::create_attachment_dhcp_identifier_tx(&mut self.conn.borrow_mut(), command)
     }
     fn delete_attachment_dhcp_identifier(&self, identifier_id: Uuid) -> Result<(), AppError> {
         PostgresStorage::delete_attachment_dhcp_identifier_in_conn(
@@ -709,10 +667,7 @@ impl<'c> TxHostGroupStore for PgTxStorage<'c> {
     fn get_host_group_by_name(&self, name: &HostGroupName) -> Result<HostGroup, AppError> {
         super::host_groups::get_by_name(&mut self.conn.borrow_mut(), name.as_str())
     }
-    fn list_host_groups_for_hosts(
-        &self,
-        hosts: &[Hostname],
-    ) -> Result<Vec<HostGroup>, AppError> {
+    fn list_host_groups_for_hosts(&self, hosts: &[Hostname]) -> Result<Vec<HostGroup>, AppError> {
         super::host_groups::list_for_hosts(&mut self.conn.borrow_mut(), hosts)
     }
     fn delete_host_group(&self, name: &HostGroupName) -> Result<(), AppError> {
@@ -734,10 +689,7 @@ impl<'c> TxBacnetStore for PgTxStorage<'c> {
     ) -> Result<BacnetIdAssignment, AppError> {
         super::bacnet_ids::create(&mut self.conn.borrow_mut(), command)
     }
-    fn get_bacnet_id(
-        &self,
-        bacnet_id: BacnetIdentifier,
-    ) -> Result<BacnetIdAssignment, AppError> {
+    fn get_bacnet_id(&self, bacnet_id: BacnetIdentifier) -> Result<BacnetIdAssignment, AppError> {
         super::bacnet_ids::get(&mut self.conn.borrow_mut(), bacnet_id)
     }
     fn list_bacnet_ids_for_hosts(
@@ -759,16 +711,10 @@ impl<'c> TxPtrOverrideStore for PgTxStorage<'c> {
     ) -> Result<Page<PtrOverride>, AppError> {
         super::ptr_overrides::list(&mut self.conn.borrow_mut(), page, filter)
     }
-    fn create_ptr_override(
-        &self,
-        command: CreatePtrOverride,
-    ) -> Result<PtrOverride, AppError> {
+    fn create_ptr_override(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
         super::ptr_overrides::create(&mut self.conn.borrow_mut(), command)
     }
-    fn replace_ptr_override(
-        &self,
-        command: CreatePtrOverride,
-    ) -> Result<PtrOverride, AppError> {
+    fn replace_ptr_override(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError> {
         super::ptr_overrides::replace(&mut self.conn.borrow_mut(), command)
     }
     fn get_ptr_override_by_address(
@@ -802,28 +748,55 @@ impl<'c> TxNetworkPolicyStore for PgTxStorage<'c> {
     ) -> Result<NetworkPolicy, AppError> {
         super::network_policies::get_by_name(&mut self.conn.borrow_mut(), name.as_str())
     }
-    fn update_network_policy(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+    fn update_network_policy(
+        &self,
+        name: &NetworkPolicyName,
+        command: UpdateNetworkPolicy,
+    ) -> Result<NetworkPolicy, AppError> {
         super::network_policies::update(&mut self.conn.borrow_mut(), name.as_str(), command)
     }
     fn delete_network_policy(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         super::network_policies::delete(&mut self.conn.borrow_mut(), name.as_str())
     }
-    fn list_network_policy_attribute_values(&self, policy: &NetworkPolicyName) -> Result<Vec<NetworkPolicyAttributeValue>, AppError> {
+    fn list_network_policy_attribute_values(
+        &self,
+        policy: &NetworkPolicyName,
+    ) -> Result<Vec<NetworkPolicyAttributeValue>, AppError> {
         super::network_policies::list_attribute_values(&mut self.conn.borrow_mut(), policy.as_str())
     }
-    fn list_network_policy_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+    fn list_network_policy_attributes(
+        &self,
+        page: &PageRequest,
+    ) -> Result<Page<NetworkPolicyAttribute>, AppError> {
         super::network_policies::list_attributes(&mut self.conn.borrow_mut(), page)
     }
-    fn create_network_policy_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+    fn create_network_policy_attribute(
+        &self,
+        command: CreateNetworkPolicyAttribute,
+    ) -> Result<NetworkPolicyAttribute, AppError> {
         super::network_policies::create_attribute(&mut self.conn.borrow_mut(), command)
     }
-    fn get_network_policy_attribute_by_name(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+    fn get_network_policy_attribute_by_name(
+        &self,
+        name: &NetworkPolicyAttributeName,
+    ) -> Result<NetworkPolicyAttribute, AppError> {
         super::network_policies::get_attribute(&mut self.conn.borrow_mut(), name.as_str())
     }
-    fn update_network_policy_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
-        super::network_policies::update_attribute(&mut self.conn.borrow_mut(), name.as_str(), command)
+    fn update_network_policy_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+        command: UpdateNetworkPolicyAttribute,
+    ) -> Result<NetworkPolicyAttribute, AppError> {
+        super::network_policies::update_attribute(
+            &mut self.conn.borrow_mut(),
+            name.as_str(),
+            command,
+        )
     }
-    fn delete_network_policy_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+    fn delete_network_policy_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+    ) -> Result<(), AppError> {
         super::network_policies::delete_attribute(&mut self.conn.borrow_mut(), name.as_str())
     }
 }
@@ -916,10 +889,7 @@ impl<'c> TxHostPolicyStore for PgTxStorage<'c> {
     fn list_roles_for_host(&self, host_name: &Hostname) -> Result<Vec<HostPolicyRole>, AppError> {
         PostgresStorage::list_roles_for_host_in_conn(&mut self.conn.borrow_mut(), host_name)
     }
-    fn list_roles_for_hosts(
-        &self,
-        hosts: &[Hostname],
-    ) -> Result<Vec<HostPolicyRole>, AppError> {
+    fn list_roles_for_hosts(&self, hosts: &[Hostname]) -> Result<Vec<HostPolicyRole>, AppError> {
         PostgresStorage::list_roles_for_hosts_in_conn(&mut self.conn.borrow_mut(), hosts)
     }
     fn create_role(&self, command: CreateHostPolicyRole) -> Result<HostPolicyRole, AppError> {
@@ -943,11 +913,7 @@ impl<'c> TxHostPolicyStore for PgTxStorage<'c> {
         role_name: &HostPolicyName,
         atom_name: &HostPolicyName,
     ) -> Result<(), AppError> {
-        PostgresStorage::add_atom_to_role_in_conn(
-            &mut self.conn.borrow_mut(),
-            role_name,
-            atom_name,
-        )
+        PostgresStorage::add_atom_to_role_in_conn(&mut self.conn.borrow_mut(), role_name, atom_name)
     }
     fn remove_atom_from_role(
         &self,
@@ -965,11 +931,7 @@ impl<'c> TxHostPolicyStore for PgTxStorage<'c> {
         role_name: &HostPolicyName,
         host_name: &str,
     ) -> Result<(), AppError> {
-        PostgresStorage::add_host_to_role_in_conn(
-            &mut self.conn.borrow_mut(),
-            role_name,
-            host_name,
-        )
+        PostgresStorage::add_host_to_role_in_conn(&mut self.conn.borrow_mut(), role_name, host_name)
     }
     fn remove_host_from_role(
         &self,
@@ -1029,10 +991,7 @@ impl<'c> TxRecordStore for PgTxStorage<'c> {
     fn get_rrset(&self, rrset_id: Uuid) -> Result<RecordRrset, AppError> {
         PostgresStorage::get_rrset_in_conn(&mut self.conn.borrow_mut(), rrset_id)
     }
-    fn list_records_for_hosts(
-        &self,
-        hosts: &[Hostname],
-    ) -> Result<Vec<RecordInstance>, AppError> {
+    fn list_records_for_hosts(&self, hosts: &[Hostname]) -> Result<Vec<RecordInstance>, AppError> {
         PostgresStorage::list_records_for_hosts_in_conn(&mut self.conn.borrow_mut(), hosts)
     }
     fn create_record_type(
@@ -1041,10 +1000,7 @@ impl<'c> TxRecordStore for PgTxStorage<'c> {
     ) -> Result<RecordTypeDefinition, AppError> {
         PostgresStorage::create_record_type_in_conn(&mut self.conn.borrow_mut(), command)
     }
-    fn create_record(
-        &self,
-        command: CreateRecordInstance,
-    ) -> Result<RecordInstance, AppError> {
+    fn create_record(&self, command: CreateRecordInstance) -> Result<RecordInstance, AppError> {
         PostgresStorage::create_record_in_conn(&mut self.conn.borrow_mut(), command)
     }
     fn update_record(
@@ -1063,10 +1019,7 @@ impl<'c> TxRecordStore for PgTxStorage<'c> {
     fn delete_rrset(&self, rrset_id: Uuid) -> Result<(), AppError> {
         PostgresStorage::delete_rrset_in_conn(&mut self.conn.borrow_mut(), rrset_id)
     }
-    fn find_records_by_owner(
-        &self,
-        owner_id: Uuid,
-    ) -> Result<Vec<RecordInstance>, AppError> {
+    fn find_records_by_owner(&self, owner_id: Uuid) -> Result<Vec<RecordInstance>, AppError> {
         PostgresStorage::find_records_by_owner_in_conn(&mut self.conn.borrow_mut(), owner_id)
     }
     fn delete_records_by_owner(&self, owner_id: Uuid) -> Result<u64, AppError> {
@@ -1083,11 +1036,7 @@ impl<'c> TxRecordStore for PgTxStorage<'c> {
             type_name,
         )
     }
-    fn rename_record_owner(
-        &self,
-        owner_id: Uuid,
-        new_name: &DnsName,
-    ) -> Result<u64, AppError> {
+    fn rename_record_owner(&self, owner_id: Uuid, new_name: &DnsName) -> Result<u64, AppError> {
         PostgresStorage::rename_record_owner_in_conn(
             &mut self.conn.borrow_mut(),
             owner_id,

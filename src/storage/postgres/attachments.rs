@@ -33,10 +33,22 @@ use crate::{
 
 use super::{
     PostgresStorage,
-    helpers::{map_unique, rows_to_page, run_count_query, run_dynamic_query, vec_to_page},
+    helpers::{map_unique, rows_to_page_by, run_count_query, run_dynamic_query, vec_to_page_by},
 };
 
 impl PostgresStorage {
+    fn ensure_attachment_network_mutable(
+        connection: &mut PgConnection,
+        attachment_id: Uuid,
+    ) -> Result<HostAttachment, AppError> {
+        let attachment = Self::query_attachment_by_id(connection, attachment_id)?;
+        let network = Self::query_network_by_id(connection, attachment.network_id())?;
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+        Ok(attachment)
+    }
+
     pub(super) fn query_attachments(
         connection: &mut PgConnection,
     ) -> Result<Vec<HostAttachment>, AppError> {
@@ -102,6 +114,9 @@ impl PostgresStorage {
                 AppError::not_found(format!("host '{}' was not found", host_name.as_str()))
             })?;
         let network_obj = Self::query_network_by_cidr(connection, network)?;
+        if network_obj.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
         let maybe_existing = if let Some(mac_address) = mac_address {
             sql_query(
                 "SELECT a.id,
@@ -189,6 +204,9 @@ impl PostgresStorage {
                 ))
             })?;
         let network = Self::query_network_by_cidr(connection, command.network())?;
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
         let existing = if let Some(mac_address) = command.mac_address() {
             sql_query(
                 "SELECT a.id, ''::text AS name
@@ -299,7 +317,7 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         command: CreateAttachmentDhcpIdentifier,
     ) -> Result<AttachmentDhcpIdentifier, AppError> {
-        Self::query_attachment_by_id(connection, command.attachment_id())?;
+        Self::ensure_attachment_network_mutable(connection, command.attachment_id())?;
         sql_query(
             "INSERT INTO attachment_dhcp_identifiers (attachment_id, family, kind, value, priority)
              VALUES ($1, $2, $3, $4, $5)
@@ -412,7 +430,8 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         command: CreateAttachmentPrefixReservation,
     ) -> Result<AttachmentPrefixReservation, AppError> {
-        let attachment = Self::query_attachment_by_id(connection, command.attachment_id())?;
+        let attachment =
+            Self::ensure_attachment_network_mutable(connection, command.attachment_id())?;
         validate_prefix_reservation_for_attachment(&attachment, command.prefix())?;
         sql_query(
             "INSERT INTO attachment_prefix_reservations (attachment_id, prefix)
@@ -430,7 +449,8 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         command: CreateAttachmentCommunityAssignment,
     ) -> Result<AttachmentCommunityAssignment, AppError> {
-        let attachment = Self::query_attachment_by_id(connection, command.attachment_id())?;
+        let attachment =
+            Self::ensure_attachment_network_mutable(connection, command.attachment_id())?;
         let community = super::communities::find_by_names(
             connection,
             command.policy_name().as_str(),
@@ -480,7 +500,22 @@ impl AttachmentStore for PostgresStorage {
         self.database
             .run(move |connection| {
                 let items = Self::query_attachments(connection)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "attachment_order",
+                    &crate::domain::pagination::SortDirection::Asc,
+                    |item| {
+                        format!(
+                            "{}\0{}\0{}",
+                            item.host_name().as_str(),
+                            item.network_cidr().as_str(),
+                            item.mac_address()
+                                .map(|value| value.as_str())
+                                .unwrap_or_default()
+                        )
+                    },
+                )
             })
             .await
     }
@@ -614,25 +649,7 @@ impl AttachmentStore for PostgresStorage {
 
     async fn delete_attachment(&self, attachment_id: Uuid) -> Result<(), AppError> {
         self.database
-            .run(move |connection| {
-                let ip_count = ip_addresses::table
-                    .filter(ip_addresses::attachment_id.eq(attachment_id))
-                    .count()
-                    .get_result::<i64>(connection)?;
-                if ip_count > 0 {
-                    return Err(AppError::conflict(
-                        "host attachment still owns IP address reservations",
-                    ));
-                }
-                let deleted = diesel::delete(
-                    host_attachments::table.filter(host_attachments::id.eq(attachment_id)),
-                )
-                .execute(connection)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found("host attachment was not found"));
-                }
-                Ok(())
-            })
+            .run(move |connection| Self::delete_attachment_in_conn(connection, attachment_id))
             .await
     }
 
@@ -674,17 +691,7 @@ impl AttachmentStore for PostgresStorage {
     async fn delete_attachment_dhcp_identifier(&self, identifier_id: Uuid) -> Result<(), AppError> {
         self.database
             .run(move |connection| {
-                let deleted = diesel::delete(
-                    attachment_dhcp_identifiers::table
-                        .filter(attachment_dhcp_identifiers::id.eq(identifier_id)),
-                )
-                .execute(connection)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found(
-                        "attachment DHCP identifier was not found",
-                    ));
-                }
-                Ok(())
+                Self::delete_attachment_dhcp_identifier_in_conn(connection, identifier_id)
             })
             .await
     }
@@ -732,17 +739,7 @@ impl AttachmentStore for PostgresStorage {
     ) -> Result<(), AppError> {
         self.database
             .run(move |connection| {
-                let deleted = diesel::delete(
-                    attachment_prefix_reservations::table
-                        .filter(attachment_prefix_reservations::id.eq(reservation_id)),
-                )
-                .execute(connection)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found(
-                        "attachment prefix reservation was not found",
-                    ));
-                }
-                Ok(())
+                Self::delete_attachment_prefix_reservation_in_conn(connection, reservation_id)
             })
             .await
     }
@@ -754,7 +751,22 @@ impl PostgresStorage {
         page: &PageRequest,
     ) -> Result<Page<HostAttachment>, AppError> {
         let items = Self::query_attachments(connection)?;
-        Ok(vec_to_page(items, page))
+        vec_to_page_by(
+            items,
+            page,
+            "attachment_order",
+            &crate::domain::pagination::SortDirection::Asc,
+            |item| {
+                format!(
+                    "{}\0{}\0{}",
+                    item.host_name().as_str(),
+                    item.network_cidr().as_str(),
+                    item.mac_address()
+                        .map(|value| value.as_str())
+                        .unwrap_or_default()
+                )
+            },
+        )
     }
 
     pub(in crate::storage::postgres) fn list_attachments_for_host_in_conn(
@@ -849,6 +861,7 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         attachment_id: Uuid,
     ) -> Result<(), AppError> {
+        Self::ensure_attachment_network_mutable(connection, attachment_id)?;
         let ip_count = ip_addresses::table
             .filter(ip_addresses::attachment_id.eq(attachment_id))
             .count()
@@ -858,10 +871,9 @@ impl PostgresStorage {
                 "host attachment still owns IP address reservations",
             ));
         }
-        let deleted = diesel::delete(
-            host_attachments::table.filter(host_attachments::id.eq(attachment_id)),
-        )
-        .execute(connection)?;
+        let deleted =
+            diesel::delete(host_attachments::table.filter(host_attachments::id.eq(attachment_id)))
+                .execute(connection)?;
         if deleted == 0 {
             return Err(AppError::not_found("host attachment was not found"));
         }
@@ -872,6 +884,13 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         identifier_id: Uuid,
     ) -> Result<(), AppError> {
+        let attachment_id = attachment_dhcp_identifiers::table
+            .filter(attachment_dhcp_identifiers::id.eq(identifier_id))
+            .select(attachment_dhcp_identifiers::attachment_id)
+            .first::<Uuid>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found("attachment DHCP identifier was not found"))?;
+        Self::ensure_attachment_network_mutable(connection, attachment_id)?;
         let deleted = diesel::delete(
             attachment_dhcp_identifiers::table
                 .filter(attachment_dhcp_identifiers::id.eq(identifier_id)),
@@ -889,6 +908,13 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         reservation_id: Uuid,
     ) -> Result<(), AppError> {
+        let attachment_id = attachment_prefix_reservations::table
+            .filter(attachment_prefix_reservations::id.eq(reservation_id))
+            .select(attachment_prefix_reservations::attachment_id)
+            .first::<Uuid>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found("attachment prefix reservation was not found"))?;
+        Self::ensure_attachment_network_mutable(connection, attachment_id)?;
         let deleted = diesel::delete(
             attachment_prefix_reservations::table
                 .filter(attachment_prefix_reservations::id.eq(reservation_id)),
@@ -958,14 +984,27 @@ impl PostgresStorage {
             " ORDER BY {order_col} {order_dir}, aca.id{limit_clause}"
         ));
 
-        let rows = run_dynamic_query::<AttachmentCommunityAssignmentRow>(
-            connection, &query, &values,
-        )?;
+        let rows =
+            run_dynamic_query::<AttachmentCommunityAssignmentRow>(connection, &query, &values)?;
         let items = rows
             .into_iter()
             .map(AttachmentCommunityAssignmentRow::into_domain)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows_to_page(items, page, total))
+        let sort_by = page.sort_by().unwrap_or("host_name");
+        let sort_dir = page.sort_direction();
+        rows_to_page_by(
+            items,
+            page,
+            total,
+            sort_by,
+            sort_dir,
+            |item| match sort_by {
+                "network" => item.network_cidr().as_str().to_string(),
+                "policy_name" => item.policy_name().as_str().to_string(),
+                "community_name" => item.community_name().as_str().to_string(),
+                _ => item.host_name().as_str().to_string(),
+            },
+        )
     }
 
     pub(in crate::storage::postgres) fn get_attachment_community_assignment_in_conn(
@@ -1003,6 +1042,13 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         assignment_id: Uuid,
     ) -> Result<(), AppError> {
+        let attachment_id = attachment_community_assignments::table
+            .filter(attachment_community_assignments::id.eq(assignment_id))
+            .select(attachment_community_assignments::attachment_id)
+            .first::<Uuid>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found("attachment community assignment was not found"))?;
+        Self::ensure_attachment_network_mutable(connection, attachment_id)?;
         let deleted = diesel::delete(
             attachment_community_assignments::table
                 .filter(attachment_community_assignments::id.eq(assignment_id)),
@@ -1021,7 +1067,7 @@ impl PostgresStorage {
         attachment_id: Uuid,
         command: UpdateHostAttachment,
     ) -> Result<HostAttachment, AppError> {
-        let old = Self::query_attachment_by_id(connection, attachment_id)?;
+        let old = Self::ensure_attachment_network_mutable(connection, attachment_id)?;
         let mac_address: Option<String> = command
             .mac_address
             .map(|mac| mac.as_str().to_string())
@@ -1121,7 +1167,21 @@ impl AttachmentCommunityAssignmentStore for PostgresStorage {
                     .into_iter()
                     .map(AttachmentCommunityAssignmentRow::into_domain)
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows_to_page(items, &page, total))
+                let sort_by = page.sort_by().unwrap_or("host_name");
+                let sort_dir = page.sort_direction();
+                rows_to_page_by(
+                    items,
+                    &page,
+                    total,
+                    sort_by,
+                    sort_dir,
+                    |item| match sort_by {
+                        "network" => item.network_cidr().as_str().to_string(),
+                        "policy_name" => item.policy_name().as_str().to_string(),
+                        "community_name" => item.community_name().as_str().to_string(),
+                        _ => item.host_name().as_str().to_string(),
+                    },
+                )
             })
             .await
     }
@@ -1195,17 +1255,7 @@ impl AttachmentCommunityAssignmentStore for PostgresStorage {
     ) -> Result<(), AppError> {
         self.database
             .run(move |connection| {
-                let deleted = diesel::delete(
-                    attachment_community_assignments::table
-                        .filter(attachment_community_assignments::id.eq(assignment_id)),
-                )
-                .execute(connection)?;
-                if deleted == 0 {
-                    return Err(AppError::not_found(
-                        "attachment community assignment was not found",
-                    ));
-                }
-                Ok(())
+                Self::delete_attachment_community_assignment_in_conn(connection, assignment_id)
             })
             .await
     }

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use uuid::Uuid;
@@ -71,6 +73,19 @@ pub(super) fn replace_host_group_in_state(
         ));
     }
     let old = get_host_group_by_name_in_state(state, name)?;
+    let mut pending = command.parent_groups().to_vec();
+    let mut visited = HashSet::new();
+    while let Some(parent) = pending.pop() {
+        if &parent == name {
+            return Err(AppError::validation(
+                "host group parents would form a cycle",
+            ));
+        }
+        if visited.insert(parent.clone()) {
+            let group = get_host_group_by_name_in_state(state, &parent)?;
+            pending.extend_from_slice(group.parent_groups());
+        }
+    }
     for host in command.hosts() {
         if !state.hosts.contains_key(host.as_str()) {
             return Err(AppError::not_found(format!(

@@ -35,7 +35,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 pub struct HostGroupQuery {
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,

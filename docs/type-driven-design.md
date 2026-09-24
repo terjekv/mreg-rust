@@ -20,7 +20,7 @@ The `src/domain/types.rs` module currently provides opaque wrappers for:
 - `LabelName`
 - `RecordTypeName`
 - `EmailAddressValue`
-- `MacAddressValue`
+- `MacAddressValue` (distinguishes EUI-48 from EUI-64 and exposes typed accessors for each)
 - `Ipv4AddrValue`
 - `Ipv6AddrValue`
 - `IpAddressValue`
@@ -29,6 +29,16 @@ The `src/domain/types.rs` module currently provides opaque wrappers for:
 - `SerialNumber`
 
 Each type owns its normalization and validation rules.
+
+### MAC address accessors
+
+`MacAddressValue::as_inner()` returns `macaddr::MacAddr`, whose `V6` and `V8`
+variants represent EUI-48 and EUI-64 respectively. Code that only accepts a
+fixed-width address should use `as_eui48()` or `as_eui64()` and handle `None`.
+
+This is a source-breaking change from the earlier EUI-48-only API, where
+`as_inner()` returned `macaddr::MacAddr6`. Downstream Rust callers must migrate
+to a typed accessor or match both `MacAddr` variants.
 
 ## Boundary Rules
 

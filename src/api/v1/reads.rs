@@ -1005,10 +1005,10 @@ pub(super) async fn forward_zone_json(state: &AppState, zone: &ForwardZone) -> V
         "id": super::legacy_id(zone.id()), "name": zone.name().as_str(), "updated": zone.updated(),
         "primary_ns": zone.primary_ns().as_str(),
         "nameservers": nameservers,
-        "email": zone.email().as_str(), "serialno": zone.serial_no().as_u64(),
+        "email": zone.email().as_str(), "serialno": zone.serial_no().as_u32(),
         "serialno_updated_at": zone.serial_no_updated_at(), "refresh": zone.refresh().as_u32(),
         "retry": zone.retry().as_u32(), "expire": zone.expire().as_u32(),
-        "soa_ttl": zone.soa_ttl().as_u32(), "default_ttl": zone.default_ttl().as_u32(),
+        "soa_ttl": zone.negative_ttl().as_u32(), "default_ttl": zone.default_ttl().as_u32(),
         "created_at": zone.created_at(), "updated_at": zone.updated_at(),
     })
 }
@@ -1229,7 +1229,7 @@ async fn create_forward_delegation(
             DnsName::new(payload.name)?,
             payload.comment,
             nameservers,
-        ))
+        )?)
         .await?;
     Ok(HttpResponse::Created().finish())
 }
@@ -1283,7 +1283,7 @@ async fn update_forward_delegation(
         .zones()
         .replace_forward_delegation(
             old.id(),
-            CreateForwardZoneDelegation::new(zone, old.name().clone(), comment, nameservers),
+            CreateForwardZoneDelegation::new(zone, old.name().clone(), comment, nameservers)?,
         )
         .await?;
     Ok(HttpResponse::NoContent().finish())
@@ -1529,11 +1529,11 @@ async fn zone_file(
             (
                 zone.primary_ns().as_str(),
                 zone.email().as_str(),
-                zone.serial_no().as_u64(),
+                zone.serial_no().as_u32(),
                 zone.refresh().as_u32(),
                 zone.retry().as_u32(),
                 zone.expire().as_u32(),
-                zone.soa_ttl().as_u32(),
+                zone.negative_ttl().as_u32(),
                 zone.default_ttl().as_u32(),
                 false,
             )
@@ -1542,11 +1542,11 @@ async fn zone_file(
             (
                 zone.primary_ns().as_str(),
                 zone.email().as_str(),
-                zone.serial_no().as_u64(),
+                zone.serial_no().as_u32(),
                 zone.refresh().as_u32(),
                 zone.retry().as_u32(),
                 zone.expire().as_u32(),
-                zone.soa_ttl().as_u32(),
+                zone.negative_ttl().as_u32(),
                 zone.default_ttl().as_u32(),
                 true,
             )

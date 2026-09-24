@@ -114,11 +114,7 @@ pub struct NetworkPolicyName(String);
 
 impl NetworkPolicyName {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let name = normalize_identifier_name(
-            value.as_ref(),
-            "network policy name",
-            true,
-        )?;
+        let name = normalize_identifier_name(value.as_ref(), "network policy name", true)?;
         if name.len() > 100 {
             return Err(AppError::validation(
                 "network policy name must be at most 100 characters",
@@ -163,11 +159,8 @@ pub struct NetworkPolicyAttributeName(String);
 
 impl NetworkPolicyAttributeName {
     pub fn new(value: impl AsRef<str>) -> Result<Self, AppError> {
-        let name = normalize_identifier_name(
-            value.as_ref(),
-            "network policy attribute name",
-            true,
-        )?;
+        let name =
+            normalize_identifier_name(value.as_ref(), "network policy attribute name", true)?;
         if name.len() > 100 {
             return Err(AppError::validation(
                 "network policy attribute name must be at most 100 characters",

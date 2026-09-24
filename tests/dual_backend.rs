@@ -5,6 +5,10 @@
 
 mod common;
 
+use uuid::Uuid;
+
+use mreg_rust::{domain::types::CidrValue, errors::AppError};
+
 use std::sync::OnceLock;
 
 use actix_web::http::StatusCode;
@@ -14,6 +18,7 @@ use tokio::sync::Mutex;
 
 use common::TestCtx;
 use mreg_rust::domain::{
+    exports::CreateExportRun,
     host::AssignIpAddress,
     host_contact::CreateHostContact,
     host_group::CreateHostGroup,
@@ -350,10 +355,13 @@ async fn ip_assign_scenario(ctx: &TestCtx) {
 
 async fn ip_creates_a_record_scenario(ctx: &TestCtx) {
     let cidr = ctx.cidr(1);
-    let host = ctx.host("arec");
+    let zone = ctx.zone("arec");
+    let nameserver = ctx.nameserver("ns1", &zone);
+    let host = ctx.host_in_zone("arec", &zone);
     let address = ctx.ip_in_cidr(&cidr, 10);
     ctx.seed_network(&cidr).await;
-    ctx.seed_host(&host).await;
+    ctx.seed_zone(&zone, &nameserver).await;
+    ctx.seed_host_in_zone(&host, &zone).await;
 
     let status = ctx
         .post(
@@ -417,6 +425,38 @@ async fn ip_patch_mac_scenario(ctx: &TestCtx) {
             .as_str()
             .unwrap()
             .eq_ignore_ascii_case("aa:bb:cc:dd:ee:ff")
+    );
+}
+
+async fn ip_assign_eui64_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(4);
+    let host = ctx.host("eui64");
+    let address = ctx.ip_in_cidr(&cidr, 10);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+
+    let (status, body) = ctx
+        .post_json(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:11",
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        (
+            status,
+            body["mac_address"].as_str(),
+            body["mac_address_kind"].as_str(),
+        ),
+        (
+            StatusCode::CREATED,
+            Some("AA:BB:CC:DD:EE:FF:00:11"),
+            Some("eui64"),
+        )
     );
 }
 
@@ -528,7 +568,10 @@ async fn delegation_replace_preserves_identity_scenario(ctx: &TestCtx) {
         vec![DnsName::new(&second_ns).unwrap()],
     );
     ctx.storage()
-        .transaction(move |tx| tx.zones().replace_forward_zone_delegation(id, command))
+        .transaction(move |tx| {
+            tx.zones()
+                .replace_forward_zone_delegation(id, command.unwrap())
+        })
         .await
         .unwrap();
     let listed = ctx
@@ -866,6 +909,83 @@ async fn import_batch_is_atomic_scenario(ctx: &TestCtx) {
         .find(|item| item["id"] == import_id)
         .expect("import batch should exist");
     assert_eq!(stored["status"], "failed");
+}
+
+async fn import_batch_freezes_network_after_building_graph_scenario(ctx: &TestCtx) {
+    let _guard = task_queue_mutex().lock().await;
+    drain_task_queue(ctx).await;
+
+    let cidr = ctx.cidr(8);
+    let host = ctx.host("frozen-import-host");
+    let (create_status, _) = ctx
+        .post_json(
+            "/workflows/imports",
+            json!({
+                "requested_by": "tester",
+                "items": [
+                    {
+                        "ref": "network-1",
+                        "kind": "network",
+                        "operation": "create",
+                        "attributes": {
+                            "cidr": cidr,
+                            "description": "Frozen imported network",
+                            "vlan": 42,
+                            "dns_delegated": true,
+                            "category": "prod",
+                            "location": "dc1",
+                            "frozen": true,
+                            "reserved": 5
+                        }
+                    },
+                    {
+                        "ref": "host-1",
+                        "kind": "host",
+                        "operation": "create",
+                        "attributes": { "name": host }
+                    },
+                    {
+                        "ref": "attachment-1",
+                        "kind": "host_attachment",
+                        "operation": "create",
+                        "attributes": {
+                            "host_name": host,
+                            "network": cidr,
+                            "mac_address": "aa:bb:cc:dd:ee:08"
+                        }
+                    }
+                ]
+            }),
+        )
+        .await;
+    let run_status = ctx.post("/workflows/tasks/run-next", json!({})).await;
+    let network = ctx.get_json(&format!("/inventory/networks/{cidr}")).await;
+    let attachments = ctx
+        .get_json(&format!("/inventory/hosts/{host}/attachments"))
+        .await;
+
+    assert_eq!(
+        (
+            create_status,
+            run_status,
+            network["vlan"].as_u64(),
+            network["dns_delegated"].as_bool(),
+            network["category"].as_str(),
+            network["location"].as_str(),
+            network["frozen"].as_bool(),
+            attachments.as_array().map(Vec::len),
+        ),
+        (
+            StatusCode::CREATED,
+            StatusCode::OK,
+            Some(42),
+            Some(true),
+            Some("prod"),
+            Some("dc1"),
+            Some(true),
+            Some(1),
+        ),
+    );
 }
 
 async fn import_batch_rejects_out_of_network_attachment_prefix_scenario(ctx: &TestCtx) {
@@ -1258,6 +1378,12 @@ async fn zone_delete_scenario(ctx: &TestCtx) {
     assert_eq!(status, StatusCode::CREATED);
 
     let status = ctx.delete(&format!("/dns/forward-zones/{zone}")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let status = ctx.delete(&format!("/inventory/hosts/{host}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let status = ctx.delete(&format!("/dns/forward-zones/{zone}")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let status = ctx.get_status(&format!("/dns/forward-zones/{zone}")).await;
@@ -1459,6 +1585,10 @@ dual_backend_test!(ip_patch_mac, |ctx| {
     ip_patch_mac_scenario(&ctx).await;
 });
 
+dual_backend_test!(ip_assign_eui64, |ctx| {
+    ip_assign_eui64_scenario(&ctx).await;
+});
+
 dual_backend_test!(zone_create, |ctx| {
     zone_create_scenario(&ctx).await;
 });
@@ -1529,6 +1659,10 @@ dual_backend_test!(policy_atom_in_use_reject_delete, |ctx| {
 
 dual_backend_test!(import_batch_is_atomic, |ctx| {
     import_batch_is_atomic_scenario(&ctx).await;
+});
+
+dual_backend_test!(import_batch_freezes_network_after_building_graph, |ctx| {
+    import_batch_freezes_network_after_building_graph_scenario(&ctx).await;
 });
 
 dual_backend_test!(
@@ -1814,9 +1948,7 @@ async fn ip_move_preserves_community_assignment_scenario(ctx: &TestCtx) {
         None,
         assignment.mac_address().cloned(),
     )
-    .unwrap()
-    .with_reserved_addresses(true)
-    .with_assignment_id(assignment.id());
+    .unwrap();
     let old = IpAddressValue::new(&old_address).unwrap();
     storage
         .transaction(move |tx| tx.hosts().move_ip_address(&old, command))
@@ -1866,7 +1998,17 @@ async fn compatibility_replacements_preserve_contact_and_ptr_identity_scenario(c
     assert_eq!(contact["id"], contact_id);
     assert_eq!(contact["hosts"], json!([first_host, second_host]));
 
-    let address = IpAddressValue::new(ctx.ip_in_cidr(&ctx.cidr(44), 44)).unwrap();
+    let cidr = ctx.cidr(44);
+    ctx.seed_network(&cidr).await;
+    let address = IpAddressValue::new(ctx.ip_in_cidr(&cidr, 44)).unwrap();
+    assert_eq!(
+        ctx.post(
+            "/inventory/ip-addresses",
+            json!({"host_name":first_host,"address":address.as_str()})
+        )
+        .await,
+        StatusCode::CREATED
+    );
     let (status, ptr) = ctx
         .post_json(
             "/dns/ptr-overrides",
@@ -1876,7 +2018,7 @@ async fn compatibility_replacements_preserve_contact_and_ptr_identity_scenario(c
     assert_eq!(status, StatusCode::CREATED);
     let ptr_id = ptr["id"].clone();
     let replace_ptr = CreatePtrOverride::new(
-        Hostname::new(&second_host).unwrap(),
+        Hostname::new(&first_host).unwrap(),
         address,
         Some(DnsName::new("ptr-target.example.org").unwrap()),
     );
@@ -1888,7 +2030,7 @@ async fn compatibility_replacements_preserve_contact_and_ptr_identity_scenario(c
         .get_json(&format!("/dns/ptr-overrides/{}", address.as_str()))
         .await;
     assert_eq!(ptr["id"], ptr_id);
-    assert_eq!(ptr["host_name"], second_host);
+    assert_eq!(ptr["host_name"], first_host);
     assert_eq!(ptr["target_name"], "ptr-target.example.org");
 }
 
@@ -2579,6 +2721,156 @@ async fn ip_assign_no_auto_dhcp_without_mac_scenario(ctx: &TestCtx) {
     );
 }
 
+async fn ip_assign_eui64_does_not_create_ethernet_identifiers_scenario(ctx: &TestCtx) {
+    let cidr_v4 = ctx.cidr(4);
+    let address_v4 = ctx.ip_in_cidr(&cidr_v4, 10);
+    let host = ctx.host("dhcp-eui64");
+    ctx.seed_network(&cidr_v4).await;
+    ctx.seed_host(&host).await;
+
+    let status_v4 = ctx
+        .post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address_v4,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:11",
+            }),
+        )
+        .await;
+
+    let v4_cidr_seed = ctx.cidr(5);
+    let prefix = v4_cidr_seed.strip_suffix("/24").expect("expected /24");
+    let octets: Vec<&str> = prefix.split('.').collect();
+    let group = format!(
+        "{:x}{:02x}",
+        octets[1].parse::<u16>().unwrap(),
+        octets[2].parse::<u16>().unwrap()
+    );
+    let cidr_v6 = format!("fd00:{group}::/120");
+    let address_v6 = format!("fd00:{group}::10");
+    let status_v6_network = ctx
+        .post(
+            "/inventory/networks",
+            json!({
+                "cidr": cidr_v6,
+                "description": "EUI-64 DHCP behavior test",
+            }),
+        )
+        .await;
+    let status_v6 = ctx
+        .post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address_v6,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:12",
+            }),
+        )
+        .await;
+
+    let body = ctx.get_json(&format!("/inventory/hosts/{host}")).await;
+    let identifier_count = body["attachments"]
+        .as_array()
+        .expect("attachments list")
+        .iter()
+        .flat_map(|attachment| {
+            attachment["dhcp_identifiers"]
+                .as_array()
+                .expect("DHCP identifier list")
+        })
+        .count();
+
+    assert_eq!(
+        (status_v4, status_v6_network, status_v6, identifier_count,),
+        (
+            StatusCode::CREATED,
+            StatusCode::CREATED,
+            StatusCode::CREATED,
+            0,
+        )
+    );
+}
+
+async fn eui64_is_not_used_as_ethernet_export_matcher_scenario(ctx: &TestCtx) {
+    let _guard = task_queue_mutex().lock().await;
+    let cidr = ctx.cidr(6);
+    let host = ctx.host("export-eui64");
+    let address = ctx.ip_in_cidr(&cidr, 10);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+
+    let assign_status = ctx
+        .post(
+            "/inventory/ip-addresses",
+            json!({
+                "host_name": host,
+                "address": address,
+                "mac_address": "aa:bb:cc:dd:ee:ff:00:13",
+            }),
+        )
+        .await;
+
+    let storage = ctx.storage();
+    let run = storage
+        .exports()
+        .create_export_run(
+            CreateExportRun::new(
+                "dhcp-canonical-json",
+                Some("tester".to_string()),
+                "dhcp",
+                json!({}),
+            )
+            .expect("valid export command"),
+        )
+        .await
+        .expect("create export run");
+    let rendered = storage
+        .exports()
+        .run_export(run.id())
+        .await
+        .expect("run DHCP export");
+    let output: serde_json::Value = serde_json::from_str(
+        rendered
+            .rendered_output()
+            .expect("successful export has output"),
+    )
+    .expect("canonical export is JSON");
+    let network = output["dhcp4_networks"]
+        .as_array()
+        .expect("DHCPv4 networks")
+        .iter()
+        .find(|network| network["cidr"].as_str() == Some(cidr.as_str()))
+        .expect("exported network");
+    let attachment = network["attachments"]
+        .as_array()
+        .expect("network attachments")
+        .iter()
+        .find(|attachment| attachment["host_name"].as_str() == Some(host.as_str()))
+        .expect("exported attachment");
+    let included_as_dhcp4 = network["dhcp4_attachments"]
+        .as_array()
+        .expect("DHCPv4 attachments")
+        .iter()
+        .any(|attachment| attachment["host_name"].as_str() == Some(host.as_str()));
+    let warned = output["warnings"]
+        .as_array()
+        .expect("export warnings")
+        .iter()
+        .any(|warning| warning.as_str().is_some_and(|text| text.contains("EUI-64")));
+
+    assert_eq!(
+        (
+            assign_status,
+            attachment["mac_address_kind"].as_str(),
+            attachment["matchers"]["ipv4"].is_null(),
+            included_as_dhcp4,
+            warned,
+        ),
+        (StatusCode::CREATED, Some("eui64"), true, false, true)
+    );
+}
+
 dual_backend_test_auto_dhcp!(ip_assign_auto_creates_v4_client_id, |ctx| {
     ip_assign_auto_creates_v4_client_id_scenario(&ctx).await;
 });
@@ -2593,6 +2885,17 @@ dual_backend_test_auto_dhcp!(ip_assign_no_duplicate_dhcp_identifier, |ctx| {
 
 dual_backend_test_auto_dhcp!(ip_assign_no_auto_dhcp_without_mac, |ctx| {
     ip_assign_no_auto_dhcp_without_mac_scenario(&ctx).await;
+});
+
+dual_backend_test_auto_dhcp!(
+    ip_assign_eui64_does_not_create_ethernet_identifiers,
+    |ctx| {
+        ip_assign_eui64_does_not_create_ethernet_identifiers_scenario(&ctx).await;
+    }
+);
+
+dual_backend_test!(eui64_is_not_used_as_ethernet_export_matcher, |ctx| {
+    eui64_is_not_used_as_ethernet_export_matcher_scenario(&ctx).await;
 });
 
 // ─── Security & correctness fixes ────────────────────────────────────────────
@@ -2735,4 +3038,481 @@ async fn pagination_limit_scenario(ctx: &TestCtx) {
 
 dual_backend_test!(pagination_limit, |ctx| {
     pagination_limit_scenario(&ctx).await;
+});
+
+async fn pagination_cursor_survives_boundary_deletion_scenario(ctx: &TestCtx) {
+    for index in 0..3 {
+        ctx.post(
+            "/inventory/labels",
+            json!({
+                "name": ctx.name(&format!("cursor-delete-{index}")),
+                "description": "same sort key",
+            }),
+        )
+        .await;
+    }
+    let first = ctx
+        .get_json(&format!(
+            "/inventory/labels?limit=1&sort_by=description&name__contains={}",
+            ctx.namespace()
+        ))
+        .await;
+    let cursor = first["next_cursor"].as_str().expect("next cursor");
+    let boundary = first["items"][0]["name"].as_str().expect("label name");
+    ctx.delete(&format!("/inventory/labels/{boundary}")).await;
+    let second = ctx
+        .get_json(&format!(
+            "/inventory/labels?limit=2&sort_by=description&name__contains={}&after={cursor}",
+            ctx.namespace()
+        ))
+        .await;
+    assert_eq!(second["items"].as_array().expect("items").len(), 2);
+}
+
+dual_backend_test!(pagination_cursor_survives_boundary_deletion, |ctx| {
+    pagination_cursor_survives_boundary_deletion_scenario(&ctx).await;
+});
+
+async fn malformed_pagination_cursor_is_rejected_scenario(ctx: &TestCtx) {
+    let status = ctx.get_status("/inventory/labels?after=not-a-cursor").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+dual_backend_test!(malformed_pagination_cursor_is_rejected, |ctx| {
+    malformed_pagination_cursor_is_rejected_scenario(&ctx).await;
+});
+
+async fn zero_pagination_limit_is_rejected_scenario(ctx: &TestCtx) {
+    let status = ctx.get_status("/inventory/labels?limit=0").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+dual_backend_test!(zero_pagination_limit_is_rejected, |ctx| {
+    zero_pagination_limit_is_rejected_scenario(&ctx).await;
+});
+
+async fn nameserver_sorting_is_backend_consistent_scenario(ctx: &TestCtx) {
+    let first = ctx.nameserver("sort-a", &ctx.zone("sort-ns"));
+    let second = ctx.nameserver("sort-z", &ctx.zone("sort-ns"));
+    ctx.post("/dns/nameservers", json!({ "name": first })).await;
+    ctx.post("/dns/nameservers", json!({ "name": second }))
+        .await;
+
+    let body = ctx
+        .get_json("/dns/nameservers?sort_by=name&sort_dir=desc&limit=1000")
+        .await;
+    let actual = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .filter(|name| name.contains(ctx.namespace()))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(actual, vec![second, first]);
+}
+
+dual_backend_test!(nameserver_sorting_is_backend_consistent, |ctx| {
+    nameserver_sorting_is_backend_consistent_scenario(&ctx).await;
+});
+
+async fn bacnet_cursor_paginates_natural_identifiers_scenario(ctx: &TestCtx) {
+    for slot in 1..=3 {
+        let host = ctx.host(&format!("bacnet-page-{slot}"));
+        ctx.seed_host(&host).await;
+        ctx.post(
+            "/inventory/bacnet-ids",
+            json!({ "bacnet_id": ctx.bacnet_id(slot), "host_name": host }),
+        )
+        .await;
+    }
+    let first = ctx
+        .get_json(&format!(
+            "/inventory/bacnet-ids?limit=2&host__contains={}",
+            ctx.namespace()
+        ))
+        .await;
+    let cursor = first["next_cursor"].as_str().expect("next cursor");
+    let second = ctx
+        .get_json(&format!(
+            "/inventory/bacnet-ids?limit=2&host__contains={}&after={cursor}",
+            ctx.namespace()
+        ))
+        .await;
+    assert_eq!(second["items"].as_array().expect("items").len(), 1);
+}
+
+dual_backend_test!(bacnet_cursor_paginates_natural_identifiers, |ctx| {
+    bacnet_cursor_paginates_natural_identifiers_scenario(&ctx).await;
+});
+
+async fn frozen_network_rejects_inventory_mutation_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(29);
+    let host = ctx.host("frozen-mutation");
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+    ctx.patch(
+        &format!("/inventory/networks/{cidr}"),
+        json!({ "frozen": true }),
+    )
+    .await;
+    let status = ctx
+        .post(
+            &format!("/inventory/hosts/{host}/attachments"),
+            json!({ "network": cidr }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+dual_backend_test!(frozen_network_rejects_inventory_mutation, |ctx| {
+    frozen_network_rejects_inventory_mutation_scenario(&ctx).await;
+});
+
+async fn excessive_reserved_space_is_rejected_scenario(ctx: &TestCtx) {
+    let status = ctx
+        .post(
+            "/inventory/networks",
+            json!({
+                "cidr": ctx.cidr(30),
+                "description": "invalid capacity",
+                "reserved": 255,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+dual_backend_test!(excessive_reserved_space_is_rejected, |ctx| {
+    excessive_reserved_space_is_rejected_scenario(&ctx).await;
+});
+
+async fn forward_zone_creation_backfills_managed_address_record_scenario(ctx: &TestCtx) {
+    let zone = ctx.zone("late-forward");
+    let host = ctx.host_in_zone("late-host", &zone);
+    let nameserver = ctx.nameserver("ns", &zone);
+    let cidr = ctx.cidr(31);
+    let address = ctx.ip_in_cidr(&cidr, 40);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+    ctx.post(
+        "/inventory/ip-addresses",
+        json!({ "host_name": host, "address": address }),
+    )
+    .await;
+    ctx.post("/dns/nameservers", json!({ "name": nameserver }))
+        .await;
+    ctx.post(
+        "/dns/forward-zones",
+        json!({
+            "name": zone,
+            "primary_ns": nameserver,
+            "nameservers": [nameserver],
+            "email": format!("hostmaster@{zone}"),
+        }),
+    )
+    .await;
+    let records = ctx
+        .get_json(&format!("/dns/records?type_name=A&owner_name={host}"))
+        .await;
+    assert_eq!(records["items"][0]["data"]["address"], address);
+}
+
+dual_backend_test!(
+    forward_zone_creation_backfills_managed_address_record,
+    |ctx| {
+        forward_zone_creation_backfills_managed_address_record_scenario(&ctx).await;
+    }
+);
+
+async fn reverse_zone_creation_backfills_managed_ptr_record_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(32);
+    let host = ctx.host("late-ptr");
+    let address = ctx.ip_in_cidr(&cidr, 41);
+    let octets = cidr
+        .strip_suffix(".0/24")
+        .expect("/24 network")
+        .split('.')
+        .collect::<Vec<_>>();
+    let zone = format!("{}.{}.{}.in-addr.arpa", octets[2], octets[1], octets[0]);
+    let nameserver = format!("{}.example.test", ctx.name("ns-late-ptr"));
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&host).await;
+    ctx.post(
+        "/inventory/ip-addresses",
+        json!({ "host_name": host, "address": address }),
+    )
+    .await;
+    ctx.post("/dns/nameservers", json!({ "name": nameserver }))
+        .await;
+    ctx.post(
+        "/dns/reverse-zones",
+        json!({
+            "name": zone,
+            "network": cidr,
+            "primary_ns": nameserver,
+            "nameservers": [nameserver],
+            "email": "hostmaster@example.test",
+        }),
+    )
+    .await;
+    let owner = mreg_rust::domain::types::ip_to_ptr_name(
+        &mreg_rust::domain::types::IpAddressValue::new(&address).expect("IP"),
+    );
+    let records = ctx
+        .get_json(&format!("/dns/records?type_name=PTR&owner_name={owner}"))
+        .await;
+    assert_eq!(records["items"][0]["data"]["ptrdname"], host);
+}
+
+dual_backend_test!(reverse_zone_creation_backfills_managed_ptr_record, |ctx| {
+    reverse_zone_creation_backfills_managed_ptr_record_scenario(&ctx).await;
+});
+
+async fn frozen_network_rejects_excluded_range_deletion_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(70);
+    ctx.seed_network(&cidr).await;
+    let (status, range) = ctx
+        .post_json(
+            "/inventory/networks/excluded-ranges",
+            json!({
+                "network": cidr, "start_ip":ctx.ip_in_cidr(&cidr, 70),
+                "end_ip":ctx.ip_in_cidr(&cidr, 80), "description":"reserved block"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "seed range");
+    assert_eq!(
+        ctx.patch(
+            &format!("/inventory/networks/{}", cidr.replace('/', "%2F")),
+            json!({"frozen":true})
+        )
+        .await,
+        StatusCode::OK,
+        "freeze network"
+    );
+    let id = Uuid::parse_str(range["id"].as_str().unwrap()).unwrap();
+    let network = CidrValue::new(cidr).unwrap();
+    let result = ctx
+        .storage()
+        .transaction(move |tx| tx.networks().delete_excluded_range(&network, id))
+        .await;
+    assert!(matches!(result, Err(AppError::Conflict(_))));
+}
+
+dual_backend_test!(frozen_network_rejects_excluded_range_deletion, |ctx| {
+    frozen_network_rejects_excluded_range_deletion_scenario(&ctx).await;
+});
+
+async fn ptr_override_replacement_rejects_different_host_scenario(ctx: &TestCtx) {
+    let owner = ctx.host("ptr-owner");
+    let other = ctx.host("ptr-other");
+    let cidr = ctx.cidr(71);
+    ctx.seed_network(&cidr).await;
+    ctx.seed_host(&owner).await;
+    ctx.seed_host(&other).await;
+    let address = ctx.ip_in_cidr(&cidr, 71);
+    assert_eq!(
+        ctx.post(
+            "/inventory/ip-addresses",
+            json!({"host_name":owner,"address":address})
+        )
+        .await,
+        StatusCode::CREATED,
+        "seed IP"
+    );
+    assert_eq!(
+        ctx.post(
+            "/dns/ptr-overrides",
+            json!({"host_name":owner,"address":address})
+        )
+        .await,
+        StatusCode::CREATED,
+        "seed override"
+    );
+    let command = CreatePtrOverride::new(
+        Hostname::new(other).unwrap(),
+        IpAddressValue::new(address).unwrap(),
+        None,
+    );
+    let result = ctx
+        .storage()
+        .transaction(move |tx| tx.ptr_overrides().replace_ptr_override(command))
+        .await;
+    assert!(matches!(result, Err(AppError::Validation(_))));
+}
+
+dual_backend_test!(ptr_override_replacement_rejects_different_host, |ctx| {
+    ptr_override_replacement_rejects_different_host_scenario(&ctx).await;
+});
+
+async fn network_policy_pattern_update_checks_canonical_uniqueness_scenario(ctx: &TestCtx) {
+    let first = ctx.name("pattern-first");
+    let second = ctx.name("pattern-second");
+    // Template identifiers deliberately exclude hyphens.
+    let pattern = format!("pattern_{}", first.replace('-', "_"));
+    for (name, template) in [(&first, Some(pattern.clone())), (&second, None)] {
+        assert_eq!(
+            ctx.post(
+                "/policy/network/policies",
+                json!({"name":name,"description":"Policy","community_template_pattern":template})
+            )
+            .await,
+            StatusCode::CREATED,
+            "seed policy"
+        );
+    }
+    assert_eq!(
+        ctx.patch(
+            &format!("/policy/network/policies/{second}"),
+            json!({"community_template_pattern":format!("  {pattern}  ")})
+        )
+        .await,
+        StatusCode::CONFLICT
+    );
+}
+
+dual_backend_test!(
+    network_policy_pattern_update_checks_canonical_uniqueness,
+    |ctx| {
+        network_policy_pattern_update_checks_canonical_uniqueness_scenario(&ctx).await;
+    }
+);
+
+async fn frozen_network_rejects_community_update_scenario(ctx: &TestCtx) {
+    let cidr = ctx.cidr(72);
+    let policy = ctx.name("frozen-policy");
+    ctx.seed_network(&cidr).await;
+    assert_eq!(
+        ctx.post(
+            "/policy/network/policies",
+            json!({"name":policy,"description":"Policy"})
+        )
+        .await,
+        StatusCode::CREATED,
+        "seed policy"
+    );
+    ctx.assign_network_policy(&cidr, &policy).await;
+    let (status, community) = ctx
+        .post_json(
+            "/policy/network/communities",
+            json!({"name":"guests","description":"Guests","policy_name":policy,"network":cidr}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "seed community");
+    assert_eq!(
+        ctx.patch(
+            &format!("/inventory/networks/{}", cidr.replace('/', "%2F")),
+            json!({"frozen":true})
+        )
+        .await,
+        StatusCode::OK,
+        "freeze network"
+    );
+    assert_eq!(
+        ctx.patch(
+            &format!(
+                "/policy/network/communities/{}",
+                community["id"].as_str().unwrap()
+            ),
+            json!({"description":"Changed"})
+        )
+        .await,
+        StatusCode::CONFLICT
+    );
+}
+
+dual_backend_test!(frozen_network_rejects_community_update, |ctx| {
+    frozen_network_rejects_community_update_scenario(&ctx).await;
+});
+
+async fn failed_policy_deletion_preserves_frozen_network_policy_scenario(ctx: &TestCtx) {
+    use mreg_rust::domain::types::NetworkPolicyName;
+
+    let cidr = ctx.cidr(73);
+    let name = ctx.name("frozen-deletion-policy");
+    ctx.seed_network(&cidr).await;
+    assert_eq!(
+        ctx.post(
+            "/policy/network/policies",
+            json!({"name":name,"description":"Policy"})
+        )
+        .await,
+        StatusCode::CREATED,
+        "seed policy"
+    );
+    ctx.assign_network_policy(&cidr, &name).await;
+    assert_eq!(
+        ctx.patch(
+            &format!("/inventory/networks/{}", cidr.replace('/', "%2F")),
+            json!({"frozen":true})
+        )
+        .await,
+        StatusCode::OK,
+        "freeze network"
+    );
+    let policy_name = NetworkPolicyName::new(name).unwrap();
+    let storage = ctx.storage();
+    let result = storage
+        .network_policies()
+        .delete_network_policy(&policy_name)
+        .await;
+    let policy_survived = storage
+        .network_policies()
+        .get_network_policy_by_name(&policy_name)
+        .await
+        .is_ok();
+    assert_eq!(
+        (
+            matches!(result, Err(AppError::Conflict(_))),
+            policy_survived
+        ),
+        (true, true)
+    );
+}
+
+dual_backend_test!(
+    failed_policy_deletion_preserves_frozen_network_policy,
+    |ctx| {
+        failed_policy_deletion_preserves_frozen_network_policy_scenario(&ctx).await;
+    }
+);
+
+async fn host_group_replacement_rejects_parent_cycle_scenario(ctx: &TestCtx) {
+    let root = ctx.name("cycle-root");
+    let middle = ctx.name("cycle-middle");
+    let leaf = ctx.name("cycle-leaf");
+    for (name, parents) in [
+        (&root, vec![]),
+        (&middle, vec![&root]),
+        (&leaf, vec![&middle]),
+    ] {
+        assert_eq!(
+            ctx.post(
+                "/inventory/host-groups",
+                json!({"name":name,"description":"Group","parent_groups":parents})
+            )
+            .await,
+            StatusCode::CREATED,
+            "seed group"
+        );
+    }
+    let name = HostGroupName::new(root).unwrap();
+    let command = CreateHostGroup::new(
+        name.clone(),
+        "Group",
+        vec![],
+        vec![HostGroupName::new(leaf).unwrap()],
+        vec![],
+    )
+    .unwrap();
+    let result = ctx
+        .storage()
+        .transaction(move |tx| tx.host_groups().replace_host_group(&name, command))
+        .await;
+    assert!(matches!(result, Err(AppError::Validation(_))));
+}
+
+dual_backend_test!(host_group_replacement_rejects_parent_cycle, |ctx| {
+    host_group_replacement_rejects_parent_cycle_scenario(&ctx).await;
 });

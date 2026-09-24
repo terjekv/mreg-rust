@@ -97,7 +97,7 @@ Django mreg, by contrast, trusts whatever the ORM loads from the database. If a 
 
 Django mreg has a separate model, serializer, view, and URL route for each record type (`/cnames/`, `/txts/`, `/mxs/`, `/srvs/`, ...). Adding a new type means touching all four layers.
 
-mreg-rust has a single `POST /dns/records` endpoint that accepts a `type_name` field. 18 built-in types ship with RFC-aware validation schemas. Custom types can be registered at runtime and use RFC 3597 raw RDATA encoding.
+mreg-rust has a single `POST /dns/records` endpoint that accepts a `type_name` field. 25 built-in types ship with RFC-aware validation schemas. Custom types can be registered at runtime and use RFC 3597 raw RDATA encoding.
 
 ### Hosts, networks, and IPs are inventory, not DNS
 
@@ -134,7 +134,7 @@ Django mreg used concatenated or inconsistent paths. mreg-rust uses kebab-case t
 
 ### Pagination
 
-Django mreg uses offset-based pagination (`?page=2&page_size=50`). mreg-rust uses cursor-based pagination with UUID cursors (`?limit=50&after=<cursor>`). Responses always include `{ items, total, next_cursor }`.
+Django mreg uses offset-based pagination (`?page=2&page_size=50`). mreg-rust uses keyset pagination with opaque cursors (`?limit=50&after=<cursor>`). Responses always include `{ items, total, next_cursor }`.
 
 ### Filtering and sorting
 
@@ -165,10 +165,10 @@ Django mreg has limited DHCP support (MAC address on IP assignment, export scrip
 
 mreg-rust introduces a full DHCP data model:
 
-- **Attachments** represent a host's network interface (NIC), with optional MAC address
+- **Attachments** represent a host's network interface (NIC), with an optional EUI-48 or EUI-64 MAC address
 - **DHCP identifiers** per attachment: IPv4 `client_id` or IPv6 DUID (LLT, EN, LL, UUID, raw), with priority ordering
 - **Prefix reservations** for DHCPv6-PD
-- **Auto-creation** of identifiers from MAC when IPs are assigned (configurable via `MREG_DHCP_AUTO_V4_CLIENT_ID` and `MREG_DHCP_AUTO_V6_DUID_LL`)
+- **Auto-creation** of Ethernet identifiers from EUI-48 addresses when IPs are assigned (configurable via `MREG_DHCP_AUTO_V4_CLIENT_ID` and `MREG_DHCP_AUTO_V6_DUID_LL`)
 - **Built-in export templates** for Kea DHCPv4/v6 and ISC DHCPd files, both full configs and host snippets.
 
 See [dhcp-and-attachments.md](dhcp-and-attachments.md) for the full workflow.
@@ -208,7 +208,7 @@ Authorization is still delegated to Treetop for policy evaluation, same as in Dj
 Django mreg uses Django signals for side-effects. mreg-rust has:
 
 - **Audit trail** -- immutable history events recorded in the service layer for every mutation, queryable via `GET /system/history`
-- **Domain events** -- fire-and-forget delivery to webhook URLs, AMQP topic exchanges, or Redis streams (AMQP and Redis behind feature flags)
+- **Domain events** -- transactional-outbox, at-least-once delivery to webhook URLs, AMQP topic exchanges, or Redis streams (AMQP and Redis behind feature flags)
 
 ## What Django mreg has that mreg-rust does not
 

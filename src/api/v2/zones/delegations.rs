@@ -198,7 +198,7 @@ pub(crate) async fn create_forward_zone_delegation(
         DnsName::new(request.name)?,
         request.comment,
         nameservers,
-    );
+    )?;
     let delegation = state
         .services
         .zones()
@@ -336,7 +336,7 @@ pub(crate) async fn create_reverse_zone_delegation(
         DnsName::new(request.name)?,
         request.comment,
         nameservers,
-    );
+    )?;
     let delegation = state
         .services
         .zones()

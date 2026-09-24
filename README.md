@@ -89,7 +89,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 
 ## DNS record support
 
-18 built-in record types with RFC-aware validation: A, AAAA, NS, PTR, CNAME, MX, TXT, SRV, NAPTR, SSHFP, LOC, HINFO, DS, DNSKEY, CAA, TLSA, SVCB, HTTPS.
+25 built-in record types with RFC-aware validation: A, AAAA, NS, PTR, CNAME, DNAME, MX, TXT, SRV, NAPTR, SSHFP, LOC, HINFO, DS, DNSKEY, CDS, CDNSKEY, CSYNC, CAA, TLSA, SMIMEA, SVCB, HTTPS, URI, OPENPGPKEY.
 
 Runtime-defined record types with RFC 3597 raw RDATA support for any DNS type.
 

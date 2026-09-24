@@ -29,6 +29,5 @@ pub trait TxAttachmentCommunityAssignmentStore {
         &self,
         assignment_id: Uuid,
     ) -> Result<AttachmentCommunityAssignment, AppError>;
-    fn delete_attachment_community_assignment(&self, assignment_id: Uuid)
-    -> Result<(), AppError>;
+    fn delete_attachment_community_assignment(&self, assignment_id: Uuid) -> Result<(), AppError>;
 }

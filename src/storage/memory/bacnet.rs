@@ -5,14 +5,14 @@ use crate::{
     domain::{
         bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
         filters::BacnetIdFilter,
-        pagination::{Page, PageRequest},
+        pagination::{Page, PageRequest, paginate_by_key},
         types::{BacnetIdentifier, Hostname},
     },
     errors::AppError,
     storage::BacnetStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_simple};
+use super::{MemoryState, MemoryStorage};
 
 pub(super) fn create_bacnet_id_in_state(
     state: &mut MemoryState,
@@ -54,13 +54,35 @@ pub(super) fn list_bacnet_ids_in_state(
     page: &PageRequest,
     filter: &BacnetIdFilter,
 ) -> Result<Page<BacnetIdAssignment>, AppError> {
-    let items: Vec<BacnetIdAssignment> = state
+    let mut items: Vec<BacnetIdAssignment> = state
         .bacnet_ids
         .values()
         .filter(|item| filter.matches(item))
         .cloned()
         .collect();
-    Ok(paginate_simple(items, page))
+    let sort_by = page.sort_by().unwrap_or("bacnet_id");
+    if !["bacnet_id", "host_name", "created_at", "updated_at"].contains(&sort_by) {
+        return Err(AppError::validation(format!(
+            "unsupported sort_by field for BACnet IDs: {sort_by}"
+        )));
+    }
+    let key = |item: &BacnetIdAssignment| match sort_by {
+        "host_name" => item.host_name().as_str().to_string(),
+        "created_at" => item.created_at().to_rfc3339(),
+        "updated_at" => item.updated_at().to_rfc3339(),
+        _ => format!("{:010}", item.bacnet_id().as_u32()),
+    };
+    items.sort_by(|left, right| {
+        let comparison = key(left).cmp(&key(right));
+        match page.sort_direction() {
+            crate::domain::pagination::SortDirection::Asc => comparison,
+            crate::domain::pagination::SortDirection::Desc => comparison.reverse(),
+        }
+        .then_with(|| left.bacnet_id().as_u32().cmp(&right.bacnet_id().as_u32()))
+    });
+    paginate_by_key(items, page, sort_by, page.sort_direction(), key, |item| {
+        uuid::Uuid::from_u128(u128::from(item.bacnet_id().as_u32()))
+    })
 }
 
 pub(super) fn get_bacnet_id_in_state(

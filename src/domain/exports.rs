@@ -6,6 +6,15 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 
+fn register_export_filters(environment: &mut Environment<'_>) {
+    environment.add_filter("isc_comment", |value: String| {
+        value.replace(['\r', '\n'], " ")
+    });
+    environment.add_filter("isc_string", |value: String| {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    });
+}
+
 /// Render an export template against a pre-built context value.
 ///
 /// `pub` only with the `bench-helpers` feature so benches can call it
@@ -30,10 +39,12 @@ fn render_export_template_impl(
     template: &ExportTemplate,
     context: &Value,
 ) -> Result<String, AppError> {
-    match template.engine() {
+    const MAX_EXPORT_BYTES: usize = 64 * 1024 * 1024;
+    let rendered = match template.engine() {
         "json" => serde_json::to_string_pretty(context).map_err(AppError::internal),
         "minijinja" => {
             let mut env = Environment::new();
+            register_export_filters(&mut env);
             env.add_template("export", template.body())
                 .map_err(AppError::internal)?;
             env.get_template("export")
@@ -44,7 +55,20 @@ fn render_export_template_impl(
         other => Err(AppError::validation(format!(
             "unsupported export template engine '{other}'"
         ))),
+    }?;
+    if rendered.len() > MAX_EXPORT_BYTES {
+        return Err(AppError::validation(
+            "rendered export exceeds the 64 MiB output limit",
+        ));
     }
+    if template.name().starts_with("kea-") {
+        serde_json::from_str::<Value>(&rendered).map_err(|error| {
+            AppError::internal(format!(
+                "built-in Kea template produced invalid JSON: {error}"
+            ))
+        })?;
+    }
+    Ok(rendered)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -81,6 +105,7 @@ impl ExportTemplate {
                 "export template name, engine, scope, and body are required",
             ));
         }
+        validate_template_definition(&engine, &scope, &body)?;
 
         Ok(Self {
             id,
@@ -156,6 +181,7 @@ impl CreateExportTemplate {
                 "export template name, engine, scope, and body are required",
             ));
         }
+        validate_template_definition(&engine, &scope, &body)?;
 
         Ok(Self {
             name,
@@ -189,6 +215,36 @@ impl CreateExportTemplate {
 
     pub fn metadata(&self) -> &Value {
         &self.metadata
+    }
+}
+
+fn validate_template_definition(engine: &str, scope: &str, body: &str) -> Result<(), AppError> {
+    const MAX_TEMPLATE_BYTES: usize = 1024 * 1024;
+    if body.len() > MAX_TEMPLATE_BYTES {
+        return Err(AppError::validation(
+            "export template body exceeds the 1 MiB limit",
+        ));
+    }
+    if !matches!(
+        scope,
+        "inventory" | "forward_zone" | "reverse_zone" | "dhcp"
+    ) {
+        return Err(AppError::validation(format!(
+            "unsupported export template scope '{scope}'"
+        )));
+    }
+    match engine {
+        "json" => Ok(()),
+        "minijinja" => {
+            let mut environment = Environment::new();
+            register_export_filters(&mut environment);
+            environment
+                .add_template("validation", body)
+                .map_err(|error| AppError::validation(format!("invalid export template: {error}")))
+        }
+        _ => Err(AppError::validation(format!(
+            "unsupported export template engine '{engine}'"
+        ))),
     }
 }
 

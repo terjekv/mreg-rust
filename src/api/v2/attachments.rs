@@ -14,7 +14,10 @@ use crate::{
             DhcpIdentifierKind, HostAttachment, UpdateHostAttachment,
         },
         host::AssignIpAddress,
-        types::{CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressValue, UpdateField},
+        types::{
+            CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressKind, MacAddressValue,
+            UpdateField,
+        },
     },
     errors::AppError,
 };
@@ -28,6 +31,22 @@ crate::page_response!(
     "Paginated list of host attachments."
 );
 
+#[derive(Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MacAddressKindResponse {
+    Eui48,
+    Eui64,
+}
+
+impl From<MacAddressKind> for MacAddressKindResponse {
+    fn from(value: MacAddressKind) -> Self {
+        match value {
+            MacAddressKind::Eui48 => Self::Eui48,
+            MacAddressKind::Eui64 => Self::Eui64,
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct HostAttachmentResponse {
     pub id: Uuid,
@@ -36,6 +55,7 @@ pub struct HostAttachmentResponse {
     pub network_id: Uuid,
     pub network: String,
     pub mac_address: Option<String>,
+    pub mac_address_kind: Option<MacAddressKindResponse>,
     pub comment: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -50,6 +70,7 @@ impl HostAttachmentResponse {
             network_id: value.network_id(),
             network: value.network_cidr().as_str(),
             mac_address: value.mac_address().map(|v| v.as_str()),
+            mac_address_kind: value.mac_address().map(|value| value.kind().into()),
             comment: value.comment().map(str::to_string),
             created_at: value.created_at(),
             updated_at: value.updated_at(),
@@ -219,6 +240,8 @@ impl CreateAttachmentPrefixReservationRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct CreateAttachmentIpAddressRequest {
     address: Option<String>,
+    #[serde(default)]
+    allocation: Option<String>,
 }
 
 async fn ip_page_for_attachment<'a>(
@@ -452,16 +475,26 @@ pub(crate) async fn assign_ip_to_attachment(
     )
     .await?;
     let request = payload.into_inner();
-    let assignment = state
-        .services
-        .hosts()
-        .assign_ip_address(AssignIpAddress::new(
-            attachment.host_name().clone(),
-            request.address.map(IpAddressValue::new).transpose()?,
-            Some(attachment.network_cidr().clone()),
-            attachment.mac_address().cloned(),
-        )?)
-        .await?;
+    let address = request.address.map(IpAddressValue::new).transpose()?;
+    let allocation = match request.allocation.as_deref() {
+        Some("random") => crate::domain::host::AllocationPolicy::Random,
+        Some("first_free") | None => crate::domain::host::AllocationPolicy::FirstFree,
+        Some(other) => {
+            return Err(AppError::validation(format!(
+                "unknown allocation policy: {other}"
+            )));
+        }
+    };
+    let network = address.is_none().then(|| attachment.network_cidr().clone());
+    let command = AssignIpAddress::new(
+        attachment.host_name().clone(),
+        address,
+        network,
+        attachment.mac_address().cloned(),
+    )?
+    .with_allocation(allocation)
+    .within_attachment(attachment.id());
+    let assignment = state.services.hosts().assign_ip_address(command).await?;
     Ok(HttpResponse::Created().json(IpAddressResponse::from_domain(&assignment)))
 }
 

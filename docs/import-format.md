@@ -197,10 +197,19 @@ Some import kinds accept migration-friendly aliases for natural keys:
 }
 ```
 
-Legacy `host_name` plus `network`/`mac_address` input is still accepted, but new
-migration tooling should emit explicit `host_attachment` items first and then
-reference them from `ip_address`, `attachment_dhcp_identifier`,
-`attachment_prefix_reservation`, and `attachment_community_assignment`.
+The direct form uses `host_name` with exactly one of `address` or `network`, plus
+an optional `mac_address`. Graph-oriented migration tooling should emit explicit
+`host_attachment` items first and then reference them from `ip_address`,
+`attachment_dhcp_identifier`, `attachment_prefix_reservation`, and
+`attachment_community_assignment`.
+The `mac_address` field accepts both EUI-48 and EUI-64 values.
+
+With `attachment_id` or `attachment_id_ref`, the host and MAC address come from
+the attachment; `host_name` is optional. Supply `address` for manual allocation,
+or omit it to allocate from the attachment's network. The assignment stays on
+that exact attachment, even when another network also contains the address.
+If supplied, `host_name` and `network` must match the attachment. Supplying both
+`address` and `network` is still invalid.
 
 ## Validation and Failure Semantics
 

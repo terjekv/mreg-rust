@@ -35,7 +35,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 pub struct HostCommunityAssignmentQuery {
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -111,6 +115,44 @@ impl HostCommunityAssignmentResponse {
     }
 }
 
+async fn assignment_authorization(
+    state: &AppState,
+    req: &HttpRequest,
+    action: &str,
+    assignment: &HostCommunityAssignment,
+) -> Result<crate::authz::AuthorizationRequestBuilder, AppError> {
+    let ip = state
+        .services
+        .hosts()
+        .get_ip_address(assignment.address())
+        .await?;
+    let attachment = state
+        .services
+        .attachments()
+        .get_attachment(ip.attachment_id())
+        .await?;
+    Ok(authz_request(
+        req,
+        action,
+        authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
+        assignment.id().to_string(),
+    )
+    .attr(
+        "host_name",
+        AttrValue::String(assignment.host_name().as_str().to_string()),
+    )
+    .attr("address", AttrValue::Ip(assignment.address().as_str()))
+    .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+    .attr(
+        "policy_name",
+        AttrValue::String(assignment.policy_name().as_str().to_string()),
+    )
+    .attr(
+        "community_name",
+        AttrValue::String(assignment.community_name().as_str().to_string()),
+    ))
+}
+
 /// List host-community assignments
 #[utoipa::path(
     get,
@@ -166,31 +208,64 @@ pub(crate) async fn create_host_community_assignment(
     state: web::Data<AppState>,
     payload: web::Json<CreateHostCommunityAssignmentRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let request = payload.into_inner();
+    let command = payload.into_inner().into_command()?;
+    let ip = state
+        .services
+        .hosts()
+        .get_ip_address(command.address())
+        .await?;
+    let attachment = state
+        .services
+        .attachments()
+        .get_attachment(ip.attachment_id())
+        .await?;
+    if attachment.host_name() != command.host_name() {
+        return Err(AppError::validation(
+            "host community assignment address must belong to the supplied host",
+        ));
+    }
+    let community = state
+        .services
+        .communities()
+        .find_by_names(command.policy_name(), command.community_name())
+        .await?;
+    if community.network_cidr() != attachment.network_cidr() {
+        return Err(AppError::validation(
+            "community must belong to the IP assignment network",
+        ));
+    }
     require(
         &state,
         authz_request(
             &req,
             authz::actions::host_community_assignment::CREATE,
             authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
-            format!("{}:{}", request.host_name, request.address),
+            format!(
+                "{}:{}",
+                command.host_name().as_str(),
+                command.address().as_str()
+            ),
         )
-        .attr("host_name", AttrValue::String(request.host_name.clone()))
-        .attr("address", AttrValue::Ip(request.address.clone()))
+        .attr(
+            "host_name",
+            AttrValue::String(attachment.host_name().as_str().to_string()),
+        )
+        .attr("address", AttrValue::Ip(command.address().as_str()))
+        .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
         .attr(
             "policy_name",
-            AttrValue::String(request.policy_name.clone()),
+            AttrValue::String(community.policy_name().as_str().to_string()),
         )
         .attr(
             "community_name",
-            AttrValue::String(request.community_name.clone()),
+            AttrValue::String(community.name().as_str().to_string()),
         ),
     )
     .await?;
     let item = state
         .services
         .host_community_assignments()
-        .create(request.into_command()?)
+        .create(command)
         .await?;
     Ok(HttpResponse::Created().json(HostCommunityAssignmentResponse::from_domain(&item)))
 }
@@ -213,21 +288,22 @@ pub(crate) async fn get_host_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let mapping_id = path.into_inner();
-    require(
-        &state,
-        authz_request(
-            &req,
-            authz::actions::host_community_assignment::GET,
-            authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
-            mapping_id.to_string(),
-        ),
-    )
-    .await?;
     let item = state
         .services
         .host_community_assignments()
         .get(mapping_id)
         .await?;
+    require(
+        &state,
+        assignment_authorization(
+            state.get_ref(),
+            &req,
+            authz::actions::host_community_assignment::GET,
+            &item,
+        )
+        .await?,
+    )
+    .await?;
     Ok(HttpResponse::Ok().json(HostCommunityAssignmentResponse::from_domain(&item)))
 }
 
@@ -249,14 +325,20 @@ pub(crate) async fn delete_host_community_assignment(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let mapping_id = path.into_inner();
+    let item = state
+        .services
+        .host_community_assignments()
+        .get(mapping_id)
+        .await?;
     require(
         &state,
-        authz_request(
+        assignment_authorization(
+            state.get_ref(),
             &req,
             authz::actions::host_community_assignment::DELETE,
-            authz::actions::resource_kinds::HOST_COMMUNITY_ASSIGNMENT,
-            mapping_id.to_string(),
-        ),
+            &item,
+        )
+        .await?,
     )
     .await?;
     state

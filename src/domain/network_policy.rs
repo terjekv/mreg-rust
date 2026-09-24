@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{NetworkPolicyAttributeName, NetworkPolicyName, UpdateField},
+    domain::types::{
+        CommunityTemplatePattern, NetworkPolicyAttributeName, NetworkPolicyName,
+        RequiredDescription, UpdateField,
+    },
     errors::AppError,
 };
 
@@ -144,8 +147,8 @@ impl NetworkPolicyDetails {
 pub struct NetworkPolicy {
     id: Uuid,
     name: NetworkPolicyName,
-    description: String,
-    community_template_pattern: Option<String>,
+    description: RequiredDescription,
+    community_template_pattern: Option<CommunityTemplatePattern>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -162,10 +165,10 @@ impl NetworkPolicy {
         Ok(Self {
             id,
             name,
-            description: description.into(),
-            community_template_pattern: validate_community_template_pattern(
-                community_template_pattern,
-            )?,
+            description: RequiredDescription::new(description.into())?,
+            community_template_pattern: community_template_pattern
+                .map(CommunityTemplatePattern::new)
+                .transpose()?,
             created_at,
             updated_at,
         })
@@ -178,10 +181,12 @@ impl NetworkPolicy {
         &self.name
     }
     pub fn description(&self) -> &str {
-        &self.description
+        self.description.as_str()
     }
     pub fn community_template_pattern(&self) -> Option<&str> {
-        self.community_template_pattern.as_deref()
+        self.community_template_pattern
+            .as_ref()
+            .map(CommunityTemplatePattern::as_str)
     }
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
@@ -195,8 +200,8 @@ impl NetworkPolicy {
 #[derive(Clone, Debug)]
 pub struct CreateNetworkPolicy {
     name: NetworkPolicyName,
-    description: String,
-    community_template_pattern: Option<String>,
+    description: RequiredDescription,
+    community_template_pattern: Option<CommunityTemplatePattern>,
     attributes: Vec<SetNetworkPolicyAttributeValue>,
 }
 
@@ -208,10 +213,10 @@ impl CreateNetworkPolicy {
     ) -> Result<Self, AppError> {
         Ok(Self {
             name,
-            description: description.into(),
-            community_template_pattern: validate_community_template_pattern(
-                community_template_pattern,
-            )?,
+            description: RequiredDescription::new(description.into())?,
+            community_template_pattern: community_template_pattern
+                .map(CommunityTemplatePattern::new)
+                .transpose()?,
             attributes: Vec::new(),
         })
     }
@@ -220,10 +225,12 @@ impl CreateNetworkPolicy {
         &self.name
     }
     pub fn description(&self) -> &str {
-        &self.description
+        self.description.as_str()
     }
     pub fn community_template_pattern(&self) -> Option<&str> {
-        self.community_template_pattern.as_deref()
+        self.community_template_pattern
+            .as_ref()
+            .map(CommunityTemplatePattern::as_str)
     }
     pub fn attributes(&self) -> &[SetNetworkPolicyAttributeValue] {
         &self.attributes
@@ -237,21 +244,42 @@ impl CreateNetworkPolicy {
 #[derive(Clone, Debug, Default)]
 pub struct UpdateNetworkPolicy {
     pub name: Option<NetworkPolicyName>,
-    pub description: Option<String>,
-    pub community_template_pattern: UpdateField<String>,
+    pub description: Option<RequiredDescription>,
+    pub community_template_pattern: UpdateField<CommunityTemplatePattern>,
     /// `None` preserves memberships; `Some` replaces the complete set.
     pub attributes: Option<Vec<SetNetworkPolicyAttributeValue>>,
 }
 
-fn validate_community_template_pattern(value: Option<String>) -> Result<Option<String>, AppError> {
-    value.map(|value| {
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() { return Ok(None); }
-        if trimmed.len() > 100 || !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(AppError::validation(
-                "community template pattern must contain only ASCII letters, digits, or underscores and be at most 100 characters",
-            ));
-        }
-        Ok(Some(trimmed))
-    }).unwrap_or(Ok(None))
+#[cfg(test)]
+mod strictness_tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    fn create_rejects_blank_description(#[case] value: &str) {
+        assert!(
+            CreateNetworkPolicy::new(NetworkPolicyName::new("campus").unwrap(), value, None)
+                .is_err()
+        );
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    fn restore_rejects_blank_description(#[case] value: &str) {
+        let now = Utc::now();
+        assert!(
+            NetworkPolicy::restore(
+                Uuid::nil(),
+                NetworkPolicyName::new("campus").unwrap(),
+                value,
+                None,
+                now,
+                now
+            )
+            .is_err()
+        );
+    }
 }

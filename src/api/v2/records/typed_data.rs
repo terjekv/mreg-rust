@@ -423,7 +423,14 @@ pub struct SvcbRecordData {
     pub priority: u16,
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<String>,
+    pub params: Option<Vec<SvcbParamData>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SvcbParamData {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, ToSchema)]
@@ -431,7 +438,7 @@ pub struct HttpsRecordData {
     pub priority: u16,
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<String>,
+    pub params: Option<Vec<SvcbParamData>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, ToSchema)]
@@ -689,10 +696,30 @@ mod tests {
         TypedRecordKind::SVCB(SvcbRecordData {
             priority: 1, target: "svc.example.org".into(), params: None,
         }))]
+    #[case::svcb_with_params("SVCB",
+        json!({"priority": 1, "target": "svc.example.org", "params": [{"key": "alpn", "value": "h2"}, {"key": "ohttp"}]}),
+        TypedRecordKind::SVCB(SvcbRecordData {
+            priority: 1,
+            target: "svc.example.org".into(),
+            params: Some(vec![
+                SvcbParamData { key: "alpn".into(), value: Some("h2".into()) },
+                SvcbParamData { key: "ohttp".into(), value: None },
+            ]),
+        }))]
     #[case::https_required_only("HTTPS",
         json!({"priority": 1, "target": "svc.example.org"}),
         TypedRecordKind::HTTPS(HttpsRecordData {
             priority: 1, target: "svc.example.org".into(), params: None,
+        }))]
+    #[case::https_with_params("HTTPS",
+        json!({"priority": 1, "target": "svc.example.org", "params": [{"key": "port", "value": "8443"}]}),
+        TypedRecordKind::HTTPS(HttpsRecordData {
+            priority: 1,
+            target: "svc.example.org".into(),
+            params: Some(vec![SvcbParamData {
+                key: "port".into(),
+                value: Some("8443".into()),
+            }]),
         }))]
     #[case::uri("URI",
         json!({"priority": 10, "weight": 1, "target": "https://example.org/"}),
@@ -700,8 +727,8 @@ mod tests {
             priority: 10, weight: 1, target: "https://example.org/".into(),
         }))]
     #[case::openpgpkey("OPENPGPKEY",
-        json!({"public_key": "mQENBA"}),
-        TypedRecordKind::OPENPGPKEY(OpenpgpkeyRecordData { public_key: "mQENBA".into() }))]
+        json!({"public_key": "dGVzdA=="}),
+        TypedRecordKind::OPENPGPKEY(OpenpgpkeyRecordData { public_key: "dGVzdA==".into() }))]
     fn canonical_payload_round_trips_through_typed(
         #[case] type_name: &str,
         #[case] data: Value,
@@ -764,12 +791,18 @@ mod tests {
         json!({
             "priority": 1,
             "target": "svc.example.org",
-            "params": "alpn=h2,h3 port=443",
+            "params": [
+                {"key": "alpn", "value": "h2,h3"},
+                {"key": "port", "value": "443"}
+            ],
         }),
         TypedRecordKind::SVCB(SvcbRecordData {
             priority: 1,
             target: "svc.example.org".into(),
-            params: Some("alpn=h2,h3 port=443".into()),
+            params: Some(vec![
+                SvcbParamData { key: "alpn".into(), value: Some("h2,h3".into()) },
+                SvcbParamData { key: "port".into(), value: Some("443".into()) },
+            ]),
         })
     )]
     #[case::https_with_params(
@@ -777,12 +810,15 @@ mod tests {
         json!({
             "priority": 1,
             "target": "svc.example.org",
-            "params": "alpn=h2,h3",
+            "params": [{"key": "alpn", "value": "h2,h3"}],
         }),
         TypedRecordKind::HTTPS(HttpsRecordData {
             priority: 1,
             target: "svc.example.org".into(),
-            params: Some("alpn=h2,h3".into()),
+            params: Some(vec![SvcbParamData {
+                key: "alpn".into(),
+                value: Some("h2,h3".into()),
+            }]),
         })
     )]
     #[case::txt_with_multiple_values(

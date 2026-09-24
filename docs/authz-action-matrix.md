@@ -136,19 +136,19 @@ instead of replacing them.
 |---|---|---|---|---|
 | `zone.forward.list` | `forward_zone` | none | `none` | |
 | `zone.forward.get` | `forward_zone` | `nameservers`, `email` | `light` | |
-| `zone.forward.create` | `forward_zone` | `nameservers`, `email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl` | `none` | |
+| `zone.forward.create` | `forward_zone` | `nameservers`, `email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl` | `none` | |
 | `zone.forward.update.primary_ns` | `forward_zone` | `new_primary_ns` | `light` | |
 | `zone.forward.update.nameservers` | `forward_zone` | `new_nameservers` | `light` | |
 | `zone.forward.update.email` | `forward_zone` | `new_email` | `light` | |
-| `zone.forward.update.timing` | `forward_zone` | changed subset of `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl` | `light` | Group timing/TTL knobs unless you need separate policy. |
+| `zone.forward.update.timing` | `forward_zone` | changed subset of `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl` | `light` | Group timing/TTL knobs unless you need separate policy. |
 | `zone.forward.delete` | `forward_zone` | none | `light` | |
 | `zone.reverse.list` | `reverse_zone` | none | `none` | |
 | `zone.reverse.get` | `reverse_zone` | `nameservers`, `email` | `light` | |
-| `zone.reverse.create` | `reverse_zone` | `nameservers`, `email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl` | `none` | |
+| `zone.reverse.create` | `reverse_zone` | `nameservers`, `email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl` | `none` | |
 | `zone.reverse.update.primary_ns` | `reverse_zone` | `new_primary_ns` | `light` | |
 | `zone.reverse.update.nameservers` | `reverse_zone` | `new_nameservers` | `light` | |
 | `zone.reverse.update.email` | `reverse_zone` | `new_email` | `light` | |
-| `zone.reverse.update.timing` | `reverse_zone` | changed subset of `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl` | `light` | |
+| `zone.reverse.update.timing` | `reverse_zone` | changed subset of `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl` | `light` | |
 | `zone.reverse.delete` | `reverse_zone` | none | `light` | |
 | `zone.forward.delegation.list` | `forward_zone` | none | `none` | Authorize list on parent zone. |
 | `zone.forward.delegation.create` | `forward_zone_delegation` | `comment`, `nameservers`, `zone_name` | `none` | |
@@ -212,9 +212,9 @@ instead of replacing them.
 | `bacnet_id.create` | `bacnet_id` | none | `none` | |
 | `bacnet_id.delete` | `bacnet_id` | none | `light` | |
 | `ptr_override.list` | `ptr_override` | query filter summary only | `none` | |
-| `ptr_override.get` | `ptr_override` | none | `light` | |
-| `ptr_override.create` | `ptr_override` | none | `none` | |
-| `ptr_override.delete` | `ptr_override` | none | `light` | |
+| `ptr_override.get` | `ptr_override` | `host_name`, `address`, `network`, `attachment_id`, `target_name` | `graph` | Context is loaded from the persisted IP assignment. |
+| `ptr_override.create` | `ptr_override` | `host_name`, `address`, `network`, `attachment_id`, `target_name` | `graph` | Caller-supplied host/network context is not trusted. |
+| `ptr_override.delete` | `ptr_override` | `host_name`, `address`, `network`, `attachment_id`, `target_name` | `graph` | |
 
 ### Network Policies, Communities, and Attachment-Community Assignments
 
@@ -229,9 +229,13 @@ instead of replacing them.
 | `community.create` | `community` | `description` | `none` | |
 | `community.delete` | `community` | none | `light` | |
 | `attachment_community_assignment.list` | `attachment_community_assignment` | query filter summary only | `none` | |
-| `attachment_community_assignment.get` | `attachment_community_assignment` | none | `light` | |
-| `attachment_community_assignment.create` | `attachment_community_assignment` | none | `none` | |
-| `attachment_community_assignment.delete` | `attachment_community_assignment` | none | `light` | |
+| `attachment_community_assignment.get` | `attachment_community_assignment` | `attachment_id`, `host_name`, `network`, `policy_name`, `community_name` | `light` | |
+| `attachment_community_assignment.create` | `attachment_community_assignment` | `attachment_id`, `host_name`, `network`, `policy_name`, `community_name` | `graph` | Attachment and community are resolved before authorization. |
+| `attachment_community_assignment.delete` | `attachment_community_assignment` | `attachment_id`, `host_name`, `network`, `policy_name`, `community_name` | `light` | |
+| `host_community_assignment.list` | `host_community_assignment` | query filter summary only | `none` | Legacy assignment model. |
+| `host_community_assignment.get` | `host_community_assignment` | `host_name`, `address`, `network`, `policy_name`, `community_name` | `graph` | |
+| `host_community_assignment.create` | `host_community_assignment` | `host_name`, `address`, `network`, `policy_name`, `community_name` | `graph` | Host, IP, network, and community relationships are resolved before authorization. |
+| `host_community_assignment.delete` | `host_community_assignment` | `host_name`, `address`, `network`, `policy_name`, `community_name` | `graph` | |
 
 ### Host Policy
 

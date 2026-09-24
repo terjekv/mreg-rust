@@ -257,7 +257,6 @@ pub struct IpAssignmentSpec {
     mac_address: Option<MacAddressValue>,
     auto_v4_client_id: bool,
     auto_v6_duid_ll: bool,
-    allow_reserved_addresses: bool,
 }
 
 impl IpAssignmentSpec {
@@ -267,9 +266,9 @@ impl IpAssignmentSpec {
         allocation: AllocationPolicy,
         mac_address: Option<MacAddressValue>,
     ) -> Result<Self, AppError> {
-        if address.is_none() && network.is_none() {
+        if address.is_some() == network.is_some() {
             return Err(AppError::validation(
-                "each ip_addresses entry must specify either address or network",
+                "each ip_addresses entry must specify exactly one of address or network",
             ));
         }
         Ok(Self {
@@ -279,7 +278,6 @@ impl IpAssignmentSpec {
             mac_address,
             auto_v4_client_id: false,
             auto_v6_duid_ll: false,
-            allow_reserved_addresses: false,
         })
     }
 
@@ -289,16 +287,11 @@ impl IpAssignmentSpec {
         self
     }
 
-    pub fn with_reserved_addresses(mut self, allow: bool) -> Self {
-        self.allow_reserved_addresses = allow;
-        self
-    }
-
     pub fn into_assign_command(self, host_name: Hostname) -> Result<AssignIpAddress, AppError> {
         let cmd = AssignIpAddress::new(host_name, self.address, self.network, self.mac_address)?;
         Ok(cmd
-            .with_auto_dhcp(self.auto_v4_client_id, self.auto_v6_duid_ll)
-            .with_reserved_addresses(self.allow_reserved_addresses))
+            .with_allocation(self.allocation)
+            .with_auto_dhcp(self.auto_v4_client_id, self.auto_v6_duid_ll))
     }
 
     pub fn address(&self) -> Option<&IpAddressValue> {
@@ -324,23 +317,19 @@ impl IpAssignmentSpec {
     pub fn auto_v6_duid_ll(&self) -> bool {
         self.auto_v6_duid_ll
     }
-
-    pub fn allow_reserved_addresses(&self) -> bool {
-        self.allow_reserved_addresses
-    }
 }
 
 /// Command to assign an IP address to a host, either explicitly or by network auto-allocation.
 #[derive(Clone, Debug)]
 pub struct AssignIpAddress {
-    assignment_id: Option<Uuid>,
     host_name: Hostname,
     address: Option<IpAddressValue>,
     network: Option<crate::domain::types::CidrValue>,
+    allocation: AllocationPolicy,
+    attachment_id: Option<Uuid>,
     mac_address: Option<MacAddressValue>,
     auto_v4_client_id: bool,
     auto_v6_duid_ll: bool,
-    allow_reserved_addresses: bool,
 }
 
 impl AssignIpAddress {
@@ -350,21 +339,21 @@ impl AssignIpAddress {
         network: Option<crate::domain::types::CidrValue>,
         mac_address: Option<MacAddressValue>,
     ) -> Result<Self, AppError> {
-        if address.is_none() && network.is_none() {
+        if address.is_some() == network.is_some() {
             return Err(AppError::validation(
-                "either an explicit address or a network must be provided",
+                "exactly one of address or network must be provided",
             ));
         }
 
         Ok(Self {
-            assignment_id: None,
             host_name,
             address,
             network,
+            allocation: AllocationPolicy::FirstFree,
+            attachment_id: None,
             mac_address,
             auto_v4_client_id: false,
             auto_v6_duid_ll: false,
-            allow_reserved_addresses: false,
         })
     }
 
@@ -374,19 +363,18 @@ impl AssignIpAddress {
         self
     }
 
-    pub fn with_reserved_addresses(mut self, allow: bool) -> Self {
-        self.allow_reserved_addresses = allow;
+    pub fn with_allocation(mut self, allocation: AllocationPolicy) -> Self {
+        self.allocation = allocation;
         self
     }
 
-    /// Preserve an existing assignment identity while replacing its address or host.
-    pub fn with_assignment_id(mut self, id: Uuid) -> Self {
-        self.assignment_id = Some(id);
+    /// Restrict this assignment to an existing attachment.
+    ///
+    /// Storage implementations must use this exact attachment rather than
+    /// resolving or creating another attachment with similar attributes.
+    pub fn within_attachment(mut self, attachment_id: Uuid) -> Self {
+        self.attachment_id = Some(attachment_id);
         self
-    }
-
-    pub fn assignment_id(&self) -> Option<Uuid> {
-        self.assignment_id
     }
 
     pub fn host_name(&self) -> &Hostname {
@@ -401,6 +389,14 @@ impl AssignIpAddress {
         self.network.as_ref()
     }
 
+    pub fn allocation(&self) -> &AllocationPolicy {
+        &self.allocation
+    }
+
+    pub fn attachment_id(&self) -> Option<Uuid> {
+        self.attachment_id
+    }
+
     pub fn mac_address(&self) -> Option<&MacAddressValue> {
         self.mac_address.as_ref()
     }
@@ -411,10 +407,6 @@ impl AssignIpAddress {
 
     pub fn auto_v6_duid_ll(&self) -> bool {
         self.auto_v6_duid_ll
-    }
-
-    pub fn allow_reserved_addresses(&self) -> bool {
-        self.allow_reserved_addresses
     }
 }
 

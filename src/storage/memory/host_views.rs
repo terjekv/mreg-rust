@@ -18,7 +18,7 @@ use crate::{
     storage::HostViewStore,
 };
 
-use super::{MemoryState, MemoryStorage, paginate_by_cursor, sort_items};
+use super::{MemoryState, MemoryStorage, sort_and_paginate};
 
 fn build_host_view(state: &MemoryState, host: &Host, expansions: HostViewExpansions) -> HostView {
     let mut view = HostView::new(host.clone());
@@ -168,7 +168,7 @@ impl HostViewStore for MemoryStorage {
         } else {
             Some(super::host_address_filter_index(&state))
         };
-        let mut hosts: Vec<Host> = state
+        let hosts: Vec<Host> = state
             .hosts
             .values()
             .filter(|host| {
@@ -181,8 +181,8 @@ impl HostViewStore for MemoryStorage {
             })
             .cloned()
             .collect();
-        sort_items(
-            &mut hosts,
+        let page_hosts = sort_and_paginate(
+            hosts,
             page,
             &["name", "comment", "created_at", "updated_at"],
             |host, field| match field {
@@ -192,7 +192,6 @@ impl HostViewStore for MemoryStorage {
                 _ => host.name().as_str().to_string(),
             },
         )?;
-        let page_hosts = paginate_by_cursor(hosts, page)?;
         let items = page_hosts
             .items
             .iter()

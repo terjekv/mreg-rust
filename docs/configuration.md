@@ -31,8 +31,8 @@ For authentication flow and endpoint behavior, see [authentication.md](authentic
 | `MREG_EVENT_AMQP_EXCHANGE` | `mreg.events` | AMQP exchange name (topic type, durable) |
 | `MREG_EVENT_REDIS_URL` | — | Redis connection URL for event streaming (requires `redis` feature) |
 | `MREG_EVENT_REDIS_STREAM` | `mreg:events` | Redis Stream key for event delivery |
-| `MREG_DHCP_AUTO_V4_CLIENT_ID` | `false` | Auto-create a `client_id` DHCP identifier from the attachment MAC address when an IPv4 IP is assigned |
-| `MREG_DHCP_AUTO_V6_DUID_LL` | `false` | Auto-create a `duid_ll` DHCP identifier from the attachment MAC address when an IPv6 IP is assigned |
+| `MREG_DHCP_AUTO_V4_CLIENT_ID` | `false` | Auto-create a `client_id` DHCP identifier from an EUI-48 attachment MAC address when an IPv4 IP is assigned |
+| `MREG_DHCP_AUTO_V6_DUID_LL` | `false` | Auto-create a `duid_ll` DHCP identifier from an EUI-48 attachment MAC address when an IPv6 IP is assigned |
 
 ## Environment Files
 

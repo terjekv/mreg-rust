@@ -84,7 +84,7 @@ pub(super) fn builtin_svcb() -> Result<CreateRecordTypeDefinition, AppError> {
                     false,
                     Vec::new(),
                 )?,
-                RecordFieldSchema::new("params", RecordFieldKind::Text, false, false, Vec::new())?,
+                RecordFieldSchema::new("params", RecordFieldKind::List, false, false, Vec::new())?,
             ],
             json!({
                 "rfc_profile": {
@@ -129,7 +129,7 @@ pub(super) fn builtin_https() -> Result<CreateRecordTypeDefinition, AppError> {
                     false,
                     Vec::new(),
                 )?,
-                RecordFieldSchema::new("params", RecordFieldKind::Text, false, false, Vec::new())?,
+                RecordFieldSchema::new("params", RecordFieldKind::List, false, false, Vec::new())?,
             ],
             json!({
                 "rfc_profile": {

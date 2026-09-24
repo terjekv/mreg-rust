@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use minijinja::Environment;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -13,7 +12,8 @@ use crate::{
         resource_records::{
             CreateRecordInstance, CreateRecordTypeDefinition, DnsClass, ExistingRecordSummary,
             RecordInstance, RecordOwnerKind, RecordRrset, RecordTypeDefinition, UpdateRecord,
-            ValidatedRecordContent, alias_target_names, validate_record_relationships,
+            ValidatedRecordContent, alias_target_names, render_record_data, validate_alias_graph,
+            validate_record_relationships,
         },
         types::{DnsName, Hostname, RecordTypeName},
     },
@@ -22,8 +22,7 @@ use crate::{
 };
 
 use super::{
-    MemoryState, MemoryStorage, bump_zone_serial_in_state, paginate_by_cursor,
-    rebuild_record_owner_counts, sort_and_paginate,
+    MemoryState, MemoryStorage, bump_zone_serial_in_state, paginate_by_cursor, sort_and_paginate,
 };
 
 pub(super) fn create_record_in_state(
@@ -47,51 +46,57 @@ pub(super) fn create_record_in_state(
         command.anchor_name(),
         command.owner_name(),
     )?;
-    let validated = if command.legacy_compatibility() {
-        record_type.validate_legacy_record_input(
-            command.owner_name(),
-            command.data(),
-            command.raw_rdata(),
-        )?
-    } else {
-        record_type.validate_record_input(
-            command.owner_name(),
-            command.data(),
-            command.raw_rdata(),
-        )?
-    };
-    let (same_owner_records, same_rrset_records, existing_rrset_id) = if state
-        .record_owner_counts
-        .contains_key(command.owner_name().as_str())
-    {
-        let mut same_owner_records = Vec::new();
-        let mut same_rrset_records = Vec::new();
-        let mut existing_rrset_id = None;
-        for record in &state.records {
-            if record.owner_name() != command.owner_name().as_str() {
-                continue;
-            }
-            let summary = ExistingRecordSummary::new(
+    if record_type.schema().zone_bound() && zone_id.is_none() {
+        return Err(AppError::validation(format!(
+            "record type '{}' must belong to an existing zone",
+            record_type.name().as_str()
+        )));
+    }
+    let validated = record_type.validate_record_input(
+        command.owner_name(),
+        command.data(),
+        command.raw_rdata(),
+    )?;
+    let same_owner_records = state
+        .records
+        .iter()
+        .filter(|record| {
+            record.owner_name() == command.owner_name().as_str() && record.zone_id() == zone_id
+        })
+        .map(|record| {
+            ExistingRecordSummary::new(
                 record.type_name().clone(),
                 record.ttl(),
                 record.data().clone(),
                 record.raw_rdata().cloned(),
-            );
-            if record.type_id() == record_type.id() {
-                existing_rrset_id = Some(record.rrset_id());
-                same_rrset_records.push(summary.clone());
-            }
-            same_owner_records.push(summary);
-        }
-        (same_owner_records, same_rrset_records, existing_rrset_id)
-    } else {
-        (Vec::new(), Vec::new(), None)
-    };
+            )
+        })
+        .collect::<Vec<_>>();
+    let existing_rrset_id = state
+        .rrsets
+        .values()
+        .find(|rrset| {
+            rrset.type_id() == record_type.id()
+                && rrset.owner_name() == command.owner_name()
+                && rrset.dns_class() == &DnsClass::IN
+                && rrset.zone_id() == zone_id
+        })
+        .map(RecordRrset::id);
+    let same_rrset_records = state
+        .records
+        .iter()
+        .filter(|record| existing_rrset_id.is_some_and(|rrset_id| record.rrset_id() == rrset_id))
+        .map(|record| {
+            ExistingRecordSummary::new(
+                record.type_name().clone(),
+                record.ttl(),
+                record.data().clone(),
+                record.raw_rdata().cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
     let alias_owner_names = match &validated {
         ValidatedRecordContent::Structured(normalized) => {
-            alias_target_names(normalized, record_type.name())
-        }
-        ValidatedRecordContent::LegacyStructured(normalized) => {
             alias_target_names(normalized, record_type.name())
         }
         ValidatedRecordContent::RawRdata(_) => Vec::new(),
@@ -99,7 +104,9 @@ pub(super) fn create_record_in_state(
     .into_iter()
     .filter(|target| {
         state.records.iter().any(|record| {
-            record.type_name().as_str() == "CNAME" && record.owner_name() == target.as_str()
+            (record.type_name().as_str() == "CNAME" && record.owner_name() == target.as_str())
+                || (record.type_name().as_str() == "DNAME"
+                    && is_strict_subdomain(target, record.owner_name()))
         })
     })
     .collect();
@@ -111,20 +118,14 @@ pub(super) fn create_record_in_state(
         &same_rrset_records,
         &alias_owner_names,
     )?;
-    let rendered = if let (Some(template), ValidatedRecordContent::Structured(normalized)) =
-        (record_type.schema().render_template(), &validated)
-    {
-        let mut env = Environment::new();
-        env.add_template("record", template)
-            .map_err(AppError::internal)?;
-        Some(
-            env.get_template("record")
-                .map_err(AppError::internal)?
-                .render(minijinja::value::Value::from_serialize(normalized))
-                .map_err(AppError::internal)?,
-        )
-    } else {
-        None
+    validate_alias_graph_in_state(state, record_type.name(), command.owner_name(), zone_id)?;
+    let rendered = match &validated {
+        ValidatedRecordContent::Structured(normalized) => render_record_data(
+            record_type.name(),
+            record_type.schema().render_template(),
+            normalized,
+        )?,
+        ValidatedRecordContent::RawRdata(_) => None,
     };
 
     let now = Utc::now();
@@ -154,7 +155,6 @@ pub(super) fn create_record_in_state(
     };
     let (data, raw_rdata) = match validated {
         ValidatedRecordContent::Structured(data) => (data, None),
-        ValidatedRecordContent::LegacyStructured(data) => (data, None),
         ValidatedRecordContent::RawRdata(raw_rdata) => (Value::Null, Some(raw_rdata)),
     };
     let record = RecordInstance::restore(
@@ -174,10 +174,6 @@ pub(super) fn create_record_in_state(
         now,
     );
     state.records.push(record.clone());
-    *state
-        .record_owner_counts
-        .entry(record.owner_name().to_string())
-        .or_default() += 1;
     Ok(record)
 }
 
@@ -202,9 +198,11 @@ pub(super) fn resolve_record_owner(
             let host = state.hosts.get(anchor_name).cloned().ok_or_else(|| {
                 AppError::not_found(format!("host '{}' was not found", anchor_name))
             })?;
+            ensure_owner_within_anchor(owner_name.as_str(), host.name().as_str(), "host")?;
             let zone_id = host
                 .zone()
-                .and_then(|zone| state.forward_zones.get(zone.as_str()).map(|zone| zone.id()));
+                .and_then(|zone| state.forward_zones.get(zone.as_str()).map(|zone| zone.id()))
+                .or_else(|| best_matching_zone_for_owner_name(state, owner_name));
             Ok((
                 Some(host.id()),
                 Some(host.name().as_str().to_string()),
@@ -219,6 +217,7 @@ pub(super) fn resolve_record_owner(
                 .ok_or_else(|| {
                     AppError::not_found(format!("forward zone '{}' was not found", anchor_name))
                 })?;
+            ensure_owner_within_anchor(owner_name.as_str(), zone.name().as_str(), "forward zone")?;
             Ok((
                 Some(zone.id()),
                 Some(zone.name().as_str().to_string()),
@@ -233,6 +232,7 @@ pub(super) fn resolve_record_owner(
                 .ok_or_else(|| {
                     AppError::not_found(format!("reverse zone '{}' was not found", anchor_name))
                 })?;
+            ensure_owner_within_anchor(owner_name.as_str(), zone.name().as_str(), "reverse zone")?;
             Ok((
                 Some(zone.id()),
                 Some(zone.name().as_str().to_string()),
@@ -243,10 +243,15 @@ pub(super) fn resolve_record_owner(
             let nameserver = state.nameservers.get(anchor_name).cloned().ok_or_else(|| {
                 AppError::not_found(format!("nameserver '{}' was not found", anchor_name))
             })?;
+            if owner_name.as_str() != nameserver.name().as_str() {
+                return Err(AppError::validation(
+                    "nameserver-owned records must use the nameserver name as owner",
+                ));
+            }
             Ok((
                 Some(nameserver.id()),
                 Some(nameserver.name().as_str().to_string()),
-                None,
+                best_matching_zone_for_owner_name(state, owner_name),
             ))
         }
         RecordOwnerKind::ForwardZoneDelegation => {
@@ -304,7 +309,19 @@ pub(super) fn resolve_record_owner(
     }
 }
 
-fn best_matching_zone_for_owner_name(state: &MemoryState, owner_name: &DnsName) -> Option<Uuid> {
+fn ensure_owner_within_anchor(owner: &str, anchor: &str, label: &str) -> Result<(), AppError> {
+    if !is_same_or_subdomain(owner, anchor) {
+        return Err(AppError::validation(format!(
+            "record owner '{owner}' is not within its {label} anchor '{anchor}'"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn best_matching_zone_for_owner_name(
+    state: &MemoryState,
+    owner_name: &DnsName,
+) -> Option<Uuid> {
     let owner_name = owner_name.as_str();
     state
         .forward_zones
@@ -457,7 +474,7 @@ pub(super) fn update_record_in_state(
         .iter()
         .position(|r| r.id() == record_id)
         .ok_or_else(|| AppError::not_found("record not found"))?;
-    let existing = &state.records[position];
+    let existing = state.records[position].clone();
 
     let record_type = state
         .record_types
@@ -485,7 +502,11 @@ pub(super) fn update_record_in_state(
         let same_owner_records = state
             .records
             .iter()
-            .filter(|r| r.owner_name() == existing.owner_name() && r.id() != record_id)
+            .filter(|r| {
+                r.owner_name() == existing.owner_name()
+                    && r.zone_id() == existing.zone_id()
+                    && r.id() != record_id
+            })
             .map(|r| {
                 ExistingRecordSummary::new(
                     r.type_name().clone(),
@@ -514,51 +535,39 @@ pub(super) fn update_record_in_state(
             ValidatedRecordContent::Structured(normalized) => {
                 alias_target_names(normalized, record_type.name())
             }
-            ValidatedRecordContent::LegacyStructured(normalized) => {
-                alias_target_names(normalized, record_type.name())
-            }
             ValidatedRecordContent::RawRdata(_) => Vec::new(),
         }
         .into_iter()
         .filter(|target| {
-            state
-                .records
-                .iter()
-                .any(|r| r.type_name().as_str() == "CNAME" && r.owner_name() == target.as_str())
+            state.records.iter().any(|r| {
+                (r.type_name().as_str() == "CNAME" && r.owner_name() == target.as_str())
+                    || (r.type_name().as_str() == "DNAME"
+                        && is_strict_subdomain(target, r.owner_name()))
+            })
         })
         .collect();
 
         validate_record_relationships(
             &record_type,
-            new_ttl,
+            existing.ttl(),
             &validated,
             &same_owner_records,
             &same_rrset_records,
             &alias_owner_names,
         )?;
+        validate_alias_graph_in_state(state, record_type.name(), &owner_name, existing.zone_id())?;
 
-        new_rendered = if let (Some(template), ValidatedRecordContent::Structured(normalized)) =
-            (record_type.schema().render_template(), &validated)
-        {
-            let mut env = Environment::new();
-            env.add_template("record", template)
-                .map_err(AppError::internal)?;
-            Some(
-                env.get_template("record")
-                    .map_err(AppError::internal)?
-                    .render(minijinja::value::Value::from_serialize(normalized))
-                    .map_err(AppError::internal)?,
-            )
-        } else {
-            None
+        new_rendered = match &validated {
+            ValidatedRecordContent::Structured(normalized) => render_record_data(
+                record_type.name(),
+                record_type.schema().render_template(),
+                normalized,
+            )?,
+            ValidatedRecordContent::RawRdata(_) => None,
         };
 
         match validated {
             ValidatedRecordContent::Structured(data) => {
-                new_data = data;
-                new_raw_rdata = None;
-            }
-            ValidatedRecordContent::LegacyStructured(data) => {
                 new_data = data;
                 new_raw_rdata = None;
             }
@@ -592,10 +601,93 @@ pub(super) fn update_record_in_state(
     );
 
     state.records[position] = updated.clone();
+    if new_ttl != existing.ttl() {
+        let rrset = state
+            .rrsets
+            .get(&existing.rrset_id())
+            .cloned()
+            .ok_or_else(|| AppError::internal("record RRset is missing"))?;
+        state.rrsets.insert(
+            rrset.id(),
+            RecordRrset::restore(
+                rrset.id(),
+                rrset.type_id(),
+                rrset.type_name().clone(),
+                rrset.dns_class().clone(),
+                rrset.owner_name().clone(),
+                rrset.anchor_kind().cloned(),
+                rrset.anchor_id(),
+                rrset.anchor_name().map(str::to_string),
+                rrset.zone_id(),
+                new_ttl,
+                rrset.created_at(),
+                now,
+            ),
+        );
+        for record in state
+            .records
+            .iter_mut()
+            .filter(|record| record.rrset_id() == existing.rrset_id())
+        {
+            *record = RecordInstance::restore(
+                record.id(),
+                record.rrset_id(),
+                record.type_id(),
+                record.type_name().clone(),
+                record.owner_kind().cloned(),
+                record.owner_id(),
+                DnsName::new(record.owner_name())?,
+                record.zone_id(),
+                new_ttl,
+                record.data().clone(),
+                record.raw_rdata().cloned(),
+                record.rendered().map(str::to_string),
+                record.created_at(),
+                now,
+            );
+        }
+    }
     if let Some(zone_id) = updated.zone_id() {
         bump_zone_serial_in_state(state, zone_id);
     }
     Ok(updated)
+}
+
+fn validate_alias_graph_in_state(
+    state: &MemoryState,
+    type_name: &RecordTypeName,
+    owner_name: &DnsName,
+    zone_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    let has_inbound_reference = type_name.as_str() == "CNAME"
+        && state.records.iter().any(|record| {
+            alias_target_names(record.data(), record.type_name())
+                .iter()
+                .any(|target| target == owner_name.as_str())
+        });
+    let has_descendant_data = type_name.as_str() == "DNAME"
+        && state.records.iter().any(|record| {
+            record.zone_id() == zone_id
+                && is_strict_subdomain(record.owner_name(), owner_name.as_str())
+        });
+    let is_below_dname = state.records.iter().any(|record| {
+        record.zone_id() == zone_id
+            && record.type_name().as_str() == "DNAME"
+            && is_strict_subdomain(owner_name.as_str(), record.owner_name())
+    });
+    validate_alias_graph(
+        type_name,
+        owner_name,
+        has_inbound_reference,
+        has_descendant_data,
+        is_below_dname,
+    )
+}
+
+fn is_strict_subdomain(candidate: &str, parent: &str) -> bool {
+    candidate.len() > parent.len()
+        && candidate.ends_with(parent)
+        && candidate.as_bytes().get(candidate.len() - parent.len() - 1) == Some(&b'.')
 }
 
 pub(super) fn delete_record_in_state(
@@ -608,7 +700,7 @@ pub(super) fn delete_record_in_state(
         .position(|r| r.id() == record_id)
         .ok_or_else(|| AppError::not_found("record not found"))?;
     let removed = state.records.remove(position);
-    rebuild_record_owner_counts(state);
+    state.managed_ip_records.remove(&removed.id());
     let zone_id = removed.zone_id();
     let rrset_id = removed.rrset_id();
     let rrset_still_has_records = state.records.iter().any(|r| r.rrset_id() == rrset_id);
@@ -655,7 +747,6 @@ pub(super) fn delete_rrset_in_state(
         .remove(&rrset_id)
         .ok_or_else(|| AppError::not_found("rrset not found"))?;
     state.records.retain(|r| r.rrset_id() != rrset_id);
-    rebuild_record_owner_counts(state);
     if let Some(zone_id) = rrset.zone_id() {
         bump_zone_serial_in_state(state, zone_id);
     }
@@ -683,6 +774,7 @@ pub(super) fn delete_records_by_owner_in_state(
     let mut rrset_ids = HashSet::new();
     state.records.retain(|record| {
         if record.owner_id() == Some(owner_id) {
+            state.managed_ip_records.remove(&record.id());
             rrset_ids.insert(record.rrset_id());
             false
         } else {
@@ -690,7 +782,6 @@ pub(super) fn delete_records_by_owner_in_state(
         }
     });
     let count = original_len.saturating_sub(state.records.len()) as u64;
-    rebuild_record_owner_counts(state);
     for rrset_id in rrset_ids {
         if !state.records.iter().any(|r| r.rrset_id() == rrset_id) {
             state.rrsets.remove(&rrset_id);
@@ -718,7 +809,6 @@ pub(super) fn delete_records_by_owner_name_and_type_in_state(
         }
     }
     state.records = kept;
-    rebuild_record_owner_counts(state);
     let count = removed_records.len() as u64;
     let rrset_ids: HashSet<Uuid> = removed_records.iter().map(|r| r.rrset_id()).collect();
     for rrset_id in rrset_ids {
@@ -762,7 +852,6 @@ pub(super) fn rename_record_owner_in_state(
             }
         })
         .collect();
-    rebuild_record_owner_counts(state);
     // Update rrsets where anchor_id matches
     let rrset_ids: Vec<Uuid> = state
         .rrsets

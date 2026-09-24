@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::vec_to_page;
+use super::helpers::vec_to_page_by;
 
 impl PostgresStorage {
     pub(super) fn query_tasks(
@@ -26,7 +26,7 @@ impl PostgresStorage {
     ) -> Result<Vec<TaskEnvelope>, AppError> {
         let rows = tasks::table
             .select(TaskRow::as_select())
-            .order((tasks::available_at.asc(), tasks::created_at.asc()))
+            .order((tasks::available_at.asc(), tasks::id.asc()))
             .load::<TaskRow>(connection)?;
         rows.into_iter().map(TaskRow::into_domain).collect()
     }
@@ -79,7 +79,13 @@ impl TaskStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_tasks(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "available_at",
+                    &crate::domain::pagination::SortDirection::Asc,
+                    |item| item.available_at().to_rfc3339(),
+                )
             })
             .await
     }

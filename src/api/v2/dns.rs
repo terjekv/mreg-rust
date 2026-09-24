@@ -97,7 +97,11 @@ pub(crate) async fn rrsets(
 #[derive(Deserialize)]
 pub struct ListRecordsQuery {
     // Pagination + sort
-    after: Option<uuid::Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,

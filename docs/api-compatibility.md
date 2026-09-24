@@ -59,7 +59,7 @@ and serialize legacy DRF-style responses. No entry in this table is a redirect.
 | `labels/` | Collection/detail/name lookup, create, rename/update, and delete. |
 | `nameservers/` | List/detail keyed by name. |
 | `ptroverrides/` | Collection, create/change/delete, host projection, and network-level projections. Changes preserve the V2 UUID. |
-| DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. Noncanonical legacy NAPTR/SSHFP input is retained honestly, marked `legacy_compatibility` in V2, and is not rendered as canonical DNS RDATA. Exact collection filters prevent records of the same type from being mistaken for one another. |
+| DNS record families | CNAME/HINFO/LOC/MX/NAPTR/SSHFP/SRV/TXT collection, detail where used by the CLI, create, and delete adapters, rendered from polymorphic stored records. NAPTR/SSHFP input uses the same canonical validation and rendering as V2; invalid legacy values are rejected. Exact collection filters prevent records of the same type from being mistaken for one another. |
 | `networks/` | List/CIDR detail, create/update/delete, excluded-range mutations, lookup by IP, reserved/used/unused counts and lists, first/random unused address, host and PTR projections, policy assignment/filtering, per-network community limits, and community/member CRUD. |
 | Forward/reverse zones | List/detail, forward-zone create/update/delete, nameserver replacement, forward-delegation create/list/comment/delete, hostname/delegation lookup, delegation detail by name, and generated BIND-style zone files. Delegation changes preserve the V2 UUID. |
 | Network and host policy | Network-policy and network-policy-attribute list/create/detail/update/delete, boolean policy-attribute membership with atomic replace semantics, protected attributes, community-template patterns, plus host-policy atom/role CRUD, rename, atom/host membership, labels, and reverse membership projections. |
@@ -132,8 +132,10 @@ implemented.
 The `mreg-cli` CI job pins upstream mreg-cli commit
 `72e598d3602812fc61a2d3a248ac8f4385dfb118`, runs its 401-command recorded
 testsuite, and compares recordings. Exact matches pass. A changed command is
-accepted only when its requests contain an allowlisted explicit status (501 by
-default). Because the suite is stateful, an unsupported mutation marks later
+accepted when its requests contain an allowlisted explicit status (501 by
+default), or when the exact pinned command and response match a documented
+strict-validation gap in `scripts/mreg-cli-strict-gaps.json`. Arbitrary 400/409
+responses are not allowlisted. Because the suite is stateful, an unsupported mutation marks later
 differences as unverified downstream behavior rather than false matches; a
 difference before the first such mutation fails the job. A mutating CLI command
 whose unsupported GET preflight prevents its POST/PATCH/DELETE also taints later
@@ -141,13 +143,27 @@ state. Permission commands are explicitly non-tainting, as permitted for this
 compatibility job.
 
 Run the same path locally with `scripts/run-mreg-cli-compat.sh`. The script
-handles Linux host networking and Docker Desktop on macOS. The final recorded
-run on 2026-07-11 completed all 401 commands with 388 exact command matches, 13
-explicit 501 permission-data gaps, no commands left unverified, and no unexpected
-recording differences. The comparison normalizes only volatile identity, time,
-and address values, plus one redundant read-only label lookup whose repetition
-depends on the CLI cache surviving a permission 501. User-visible output, HTTP
-methods, status codes, response bodies, and resulting state otherwise match.
+handles Linux host networking and Docker Desktop on macOS. The earlier 388/401 exact-match result predates the strictness review and is
+not a claim about the current branch. The upstream recording contains invalid
+NAPTR/SSHFP payloads and inventory operations that conflict with the shared
+model invariants. Compatibility must not be achieved by accepting those values.
+
+The strict run on 2026-09-24 recorded 274 exact command matches, 13 explicit
+permission-data gaps, 29 expected strict-validation rejections, and 85 downstream
+commands whose equality is unverified after those rejected mutations. There were
+no other differences before fixture state diverged. This is not full Django
+compatibility; the Rust regression suite checks strict behavior independently.
+
+## Validation takes precedence
+
+Both API versions construct the same validated domain commands. Required policy
+and community descriptions cannot be blank. NAPTR records must select exactly
+one of a regexp or replacement; SSHFP fingerprints must contain the correct
+number of hexadecimal digits. Explicit IP assignments obey reserved and unusable
+address bounds. PTR override addresses belong to the supplied host. Frozen
+networks reject updates through compatibility routes as well as native routes.
+Callers must correct invalid data or unfreeze the affected network before retrying.
+
 
 ## OpenAPI and documentation
 

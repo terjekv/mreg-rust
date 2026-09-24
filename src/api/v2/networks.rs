@@ -24,7 +24,10 @@ use crate::{
 use super::authz::{UpdateAuthzBuilder, request as authz_request, require, require_all};
 use super::{
     attachment_community_assignments::AttachmentCommunityAssignmentResponse,
-    attachments::{AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse},
+    attachments::{
+        AttachmentDhcpIdentifierResponse, AttachmentPrefixReservationResponse,
+        MacAddressKindResponse,
+    },
     hosts::IpAddressResponse,
 };
 
@@ -65,7 +68,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct ListNetworksQuery {
     // Pagination + sort
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -127,11 +134,7 @@ impl CreateNetworkRequest {
             ReservedCount::new(self.reserved)?,
         )?
         .with_policy(self.policy_name.map(NetworkPolicyName::new).transpose()?)
-        .with_max_communities(
-            self.max_communities
-                .map(CommunityLimit::new)
-                .transpose()?,
-        ))
+        .with_max_communities(self.max_communities.map(CommunityLimit::new).transpose()?))
     }
 }
 
@@ -297,6 +300,7 @@ pub struct NetworkHostInventoryResponse {
 pub struct NetworkAttachmentInventoryResponse {
     attachment_id: Uuid,
     mac_address: Option<String>,
+    mac_address_kind: Option<MacAddressKindResponse>,
     ip_addresses: Vec<IpAddressResponse>,
     dhcp_identifiers: Vec<AttachmentDhcpIdentifierResponse>,
     prefix_reservations: Vec<AttachmentPrefixReservationResponse>,
@@ -422,6 +426,7 @@ async fn build_network_response_impl(
             .push(NetworkAttachmentInventoryResponse {
                 attachment_id: attachment.id(),
                 mac_address: attachment.mac_address().map(|value| value.as_str()),
+                mac_address_kind: attachment.mac_address().map(|value| value.kind().into()),
                 ip_addresses: ip_addresses_by_attachment
                     .get(&attachment.id())
                     .cloned()
@@ -623,9 +628,7 @@ pub(crate) async fn update_network(
         location: request.location,
         frozen: request.frozen,
         reserved: request.reserved.map(ReservedCount::new).transpose()?,
-        max_communities: request
-            .max_communities
-            .try_map(CommunityLimit::new)?,
+        max_communities: request.max_communities.try_map(CommunityLimit::new)?,
         policy: request.policy_name.try_map(NetworkPolicyName::new)?,
     };
     let network = state.services.networks().update(&cidr, command).await?;

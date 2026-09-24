@@ -8,6 +8,11 @@ SERVER_LOG=${MREG_CLI_SERVER_LOG:-${TMPDIR:-/tmp}/mreg-rust-compat.log}
 RESULT_LOG=${MREG_CLI_RESULT_LOG:-${TMPDIR:-/tmp}/mreg-cli-compat-result.json}
 CONTAINER=mreg-cli-compat-$$
 SERVER_PID=
+BUILD_PROFILE=${MREG_CLI_BUILD_PROFILE:-release}
+PROFILE_DIR=$BUILD_PROFILE
+if [[ $BUILD_PROFILE == dev ]]; then
+    PROFILE_DIR=debug
+fi
 
 cleanup() {
     docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
@@ -23,7 +28,7 @@ fi
 git -C "$MREG_CLI_DIR" checkout --detach "$MREG_CLI_COMMIT"
 
 cd "$ROOT"
-cargo build --release
+cargo build --profile "$BUILD_PROFILE"
 env \
     MREG_LISTEN=127.0.0.1 \
     MREG_PORT=8000 \
@@ -33,7 +38,7 @@ env \
     MREG_ALLOW_DEV_AUTHZ_BYPASS=true \
     MREG_REQUIRE_MAC_FOR_BINDING_IP_TO_COMMUNITY=true \
     MREG_MAP_GLOBAL_COMMUNITY_NAMES=true \
-    ./target/release/mreg-rust >"$SERVER_LOG" 2>&1 &
+    "${CARGO_TARGET_DIR:-$ROOT/target}/$PROFILE_DIR/mreg-rust" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 for _ in {1..30}; do

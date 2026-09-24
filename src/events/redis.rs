@@ -1,9 +1,7 @@
+use super::{DomainEvent, EventSink, safe_url_for_log};
 use async_trait::async_trait;
 use redis::AsyncCommands;
 use tokio::sync::Mutex;
-use tracing::warn;
-
-use super::{DomainEvent, EventSink, safe_url_for_log};
 
 /// Emits events to a Redis Stream via `XADD`.
 pub struct RedisSink {
@@ -36,22 +34,13 @@ impl RedisSink {
 
 #[async_trait]
 impl EventSink for RedisSink {
-    async fn emit(&self, event: &DomainEvent) {
-        let payload = match serde_json::to_string(event) {
-            Ok(json) => json,
-            Err(error) => {
-                warn!(%error, "failed to serialize event for Redis");
-                return;
-            }
-        };
+    async fn emit(&self, event: &DomainEvent) -> Result<(), String> {
+        let payload = serde_json::to_string(event)
+            .map_err(|error| format!("failed to serialize event for Redis: {error}"))?;
 
-        let mut conn = match self.get_or_connect().await {
-            Ok(c) => c,
-            Err(error) => {
-                warn!(url = %safe_url_for_log(&self.url), %error, "Redis connection failed, dropping event");
-                return;
-            }
-        };
+        let mut conn = self.get_or_connect().await.map_err(|error| {
+            format!("Redis connection {}: {error}", safe_url_for_log(&self.url))
+        })?;
 
         let result: Result<String, redis::RedisError> = conn
             .xadd(
@@ -68,14 +57,12 @@ impl EventSink for RedisSink {
             )
             .await;
 
-        if let Err(error) = result {
-            warn!(
-                stream = %self.stream,
-                %error,
-                "Redis XADD failed, dropping event"
-            );
-            // Clear cached connection so next emit reconnects
-            *self.connection.lock().await = None;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                *self.connection.lock().await = None;
+                Err(format!("Redis XADD to {}: {error}", self.stream))
+            }
         }
     }
 }

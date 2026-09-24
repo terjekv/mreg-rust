@@ -447,12 +447,12 @@ fn rewrite_host_policy_path(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::middleware::Authn;
     use actix_web::{
         App,
         http::{StatusCode, header},
         test, web,
     };
-    use crate::middleware::Authn;
 
     #[actix_web::test]
     async fn rewrites_core_legacy_routes() {

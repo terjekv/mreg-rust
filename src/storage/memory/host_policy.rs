@@ -87,7 +87,7 @@ pub(super) fn update_atom_in_state(
                 "host policy atom '{}' was not found",
                 name.as_str()
             ))
-    })?;
+        })?;
     let now = Utc::now();
     let new_name = command.name.unwrap_or_else(|| atom.name().clone());
     if new_name != *atom.name() && state.host_policy_atoms.contains_key(new_name.as_str()) {
@@ -112,7 +112,11 @@ pub(super) fn update_atom_in_state(
         .insert(new_name.as_str().to_string(), updated.clone());
     if new_name != *name {
         for role in state.host_policy_roles.values_mut() {
-            if !role.atoms().iter().any(|atom_name| atom_name == name.as_str()) {
+            if !role
+                .atoms()
+                .iter()
+                .any(|atom_name| atom_name == name.as_str())
+            {
                 continue;
             }
             let atoms = role
@@ -273,7 +277,7 @@ pub(super) fn update_role_in_state(
                 "host policy role '{}' was not found",
                 name.as_str()
             ))
-    })?;
+        })?;
     let now = Utc::now();
     let new_name = command.name.unwrap_or_else(|| role.name().clone());
     if new_name != *role.name() && state.host_policy_roles.contains_key(new_name.as_str()) {

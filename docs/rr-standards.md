@@ -4,8 +4,8 @@ This project treats built-in DNS resource records as RFC-backed types rather tha
 
 ## Current enforcement
 
-- `RRSet`s are first-class storage objects with owner name, class, anchor metadata, and TTL.
-- RRSet TTLs must match for records with the same owner and type.
+- `RRSet`s are first-class storage objects with owner name, authoritative zone, class, anchor metadata, and TTL.
+- RRSet identity and TTL consistency are zone-local. This permits distinct parent-delegation and child-apex NS data at a zone cut.
 - Identical duplicate RRs are rejected inside the same RRSet.
 - `CNAME` and `DNAME` are exclusive at an owner name and block other data at that owner (RFC 6672).
 - `MX`, `SRV`, `NAPTR`, `NS`, and `PTR` target-like fields are checked against existing `CNAME`/`DNAME` owner names so alias targets can be rejected.
@@ -21,15 +21,21 @@ This project treats built-in DNS resource records as RFC-backed types rather tha
   - a non-root `replacement`
 - `SSHFP` validates algorithm and fingerprint type against the currently supported IANA-assigned values.
 - `LOC` uses a structured payload with range/default validation.
-- `DS` validates algorithm (RFC 8624 recommended: 8, 10, 13, 14, 15, 16) and digest type (2=SHA-256, 4=SHA-384).
-- `DNSKEY` enforces protocol=3 (RFC 4034 Section 2.1.2) and validates algorithm against RFC 8624 recommendations.
-- `CDS` validates identically to `DS` — algorithm and digest type per RFC 8624.
-- `CDNSKEY` validates identically to `DNSKEY` — protocol=3 and algorithm per RFC 8624.
-- `SMIMEA` validates identically to `TLSA` — usage (0-3), selector (0-1), matching_type (0-2) per RFC 8162.
-- `CAA` validates tag format (RFC 8659: lowercase ASCII alphanumeric) and flags range (0-255).
-- `TLSA` validates usage (0-3), selector (0-1), and matching_type (0-2) per RFC 6698.
+- `DS` validates zone-signing algorithms and assigned/private-use digest types against the current IANA registries, including the fixed digest lengths of assigned algorithms.
+- `DNSKEY` enforces protocol=3 (RFC 4034 Section 2.1.2) and accepts only algorithms whose IANA registry entries permit zone signing.
+- `CDS` otherwise validates like `DS`, but also accepts the exact RFC 8078 `0 0 0 00` delete signal as a singleton RRset.
+- `CDNSKEY` otherwise validates like `DNSKEY`, but also accepts the exact RFC 8078 `0 3 0 AA==` delete signal as a singleton RRset.
+- `CSYNC` accepts only currently assigned flag bits and validates its presentation-format RR type bitmap.
+- `TLSA`, `SMIMEA`, and `OPENPGPKEY` enforce their RFC-defined underscored owner-name forms; OPENPGPKEY data must be non-empty base64.
+- `URI` enforces its underscored service owner form and a non-empty absolute RFC 3986 URI target.
+- `SMIMEA` validates identically to `TLSA` per RFC 8162.
+- `CAA` canonicalizes tags to lowercase ASCII alphanumeric and accepts only flags `0` or `128`, because RFC 8659 defines only the issuer-critical bit.
+- `TLSA` accepts currently assigned registry values (including C509 selector 2) and private-use value 255; fixed-length SHA-256/SHA-512 associations are length checked.
 - `SVCB` and `HTTPS` (RFC 9460) support priority + target + optional params. Target must not be an alias.
-- Runtime-defined record types can opt into RFC 3597 raw wire-format RDATA using `behavior_flags.rfc3597.allow_raw_rdata`.
+- SVCB parameters are sorted by numeric key and validated for uniqueness, `mandatory` references, AliasMode, ALPN, port, and address-hint syntax.
+- Built-in RDATA is rendered by type-aware DNS master-file renderers. Domain names are absolute and character strings are quoted/escaped; templates cannot accidentally change built-in wire meaning.
+- Runtime-defined record types can opt into RFC 3597 raw wire-format RDATA using `behavior_flags.rfc3597.allow_raw_rdata`. Raw RDATA is limited to the DNS `RDLENGTH` maximum of 65,535 octets.
+- SOA serials are unsigned 32-bit values and use RFC 1982 arithmetic. The SOA record TTL (`soa_record_ttl`) is distinct from the negative-cache/minimum field (`negative_ttl`).
 - Record ownership is flexible. A record may be:
   - anchored to a host, zone, delegation, or nameserver
   - unanchored and owned only by a DNS owner name
@@ -75,6 +81,7 @@ Owner names are validated per record type via the `owner_name_syntax` field in t
 
 - `rrsets`
   - owner name
+  - authoritative zone UUID
   - DNS class
   - TTL
   - optional anchor metadata
@@ -85,10 +92,10 @@ Owner names are validated per record type via the `owner_name_syntax` field in t
 ## Intentional limits
 
 - **DNS class IN only.** The `DnsClass` enum supports only `IN`. Classes CH (Chaosnet) and HS (Hesiod) are not used in modern DNS management and are not planned.
-- **RRSIG, NSEC, NSEC3, CDS, CDNSKEY are not built-in types.** These are DNSSEC signing artifacts managed by signing infrastructure, not by a registry API. They can be created as runtime-defined types with RFC 3597 raw RDATA support if needed for storage/transport.
+- **RRSIG, NSEC, and NSEC3 are not built-in types.** These signing artifacts are managed by signing infrastructure. They can be stored as runtime-defined RFC 3597 types when needed. CDS and CDNSKEY are built in because they are child-published signaling records used to update the parent delegation.
 - **Delegation-backed record anchors** are fully implemented for both forward and reverse zones. Records can be anchored to delegations with scope validation (owner name must be within the delegation).
 
 ## Future work
 
-- **DNSSEC key lifecycle management** — DS and DNSKEY records support validation (algorithm/protocol/digest per RFC 8624) but there is no key generation, signing, or rollover automation. This would be a major standalone feature.
+- **DNSSEC key lifecycle management** — DS and DNSKEY records support registry-aware algorithm/protocol/digest validation, but there is no key generation, signing, or rollover automation. This would be a major standalone feature.
 - **RFC 3597 export tooling** — Raw RDATA records render correctly as `TYPE<N> \# <len> <hex>` in the export context. Additional MiniJinja template helpers for zone file formatting could improve the export experience for operators working with unusual record types.

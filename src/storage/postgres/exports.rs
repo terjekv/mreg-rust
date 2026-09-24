@@ -26,7 +26,7 @@ use crate::{
 };
 
 use super::PostgresStorage;
-use super::helpers::{map_unique, vec_to_page};
+use super::helpers::{map_unique, vec_to_page_by};
 
 fn dhcp_identifier_kind_name(kind: crate::domain::attachment::DhcpIdentifierKind) -> &'static str {
     match kind {
@@ -79,11 +79,13 @@ impl PostgresStorage {
                 "primary_ns": zone.primary_ns().as_str(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "soa_rname": crate::domain::resource_records::soa_rname(zone.email().as_str())?,
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "updated": zone.updated(),
             });
@@ -96,11 +98,13 @@ impl PostgresStorage {
                 "primary_ns": zone.primary_ns().as_str(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "soa_rname": crate::domain::resource_records::soa_rname(zone.email().as_str())?,
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "updated": zone.updated(),
             });
@@ -384,11 +388,12 @@ impl PostgresStorage {
                 "name": zone.name().as_str(),
                 "primary_ns": zone.primary_ns().as_str(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
@@ -398,11 +403,12 @@ impl PostgresStorage {
                 "network": zone.network().map(|value| value.as_str()),
                 "primary_ns": zone.primary_ns().as_str(),
                 "email": zone.email().as_str(),
-                "serial_no": zone.serial_no().as_u64(),
+                "serial_no": zone.serial_no().as_u32(),
                 "refresh": zone.refresh(),
                 "retry": zone.retry(),
                 "expire": zone.expire(),
-                "soa_ttl": zone.soa_ttl().as_u32(),
+                "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+                "negative_ttl": zone.negative_ttl().as_u32(),
                 "default_ttl": zone.default_ttl().as_u32(),
                 "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
@@ -560,9 +566,12 @@ impl PostgresStorage {
                                 })
                             })
                             .or_else(|| {
-                                attachment.mac_address().map(|mac| {
-                                    json!({"kind": "mac_address", "value": mac.as_str()})
-                                })
+                                attachment
+                                    .mac_address()
+                                    .and_then(|mac| mac.as_eui48())
+                                    .map(|mac| {
+                                        json!({"kind": "mac_address", "value": mac.to_string()})
+                                    })
                             });
                         let ipv6_matcher = identifiers
                             .iter()
@@ -577,6 +586,22 @@ impl PostgresStorage {
                             .iter()
                             .filter(|assignment| assignment.family() == 6)
                             .count();
+                        let ipv4_count = attachment_ips
+                            .iter()
+                            .filter(|assignment| assignment.family() == 4)
+                            .count();
+                        if ipv4_count > 0
+                            && ipv4_matcher.is_none()
+                            && attachment
+                                .mac_address()
+                                .is_some_and(|mac| mac.as_eui64().is_some())
+                        {
+                            warnings.push(format!(
+                                "attachment '{}' on '{}' has an EUI-64 address that cannot be used as an Ethernet DHCPv4 matcher; configure a client_id identifier",
+                                attachment.host_name().as_str(),
+                                attachment.network_cidr().as_str()
+                            ));
+                        }
                         if (ipv6_count > 0 || !prefixes.is_empty()) && ipv6_matcher.is_none() {
                             warnings.push(format!(
                                 "attachment '{}' on '{}' has IPv6 reservations but no DHCPv6 identifier",
@@ -590,6 +615,9 @@ impl PostgresStorage {
                             "host_id": attachment.host_id().to_string(),
                             "host_name": attachment.host_name().as_str(),
                             "mac_address": attachment.mac_address().map(|value| value.as_str()),
+                            "mac_address_kind": attachment
+                                .mac_address()
+                                .map(|value| value.kind().as_str()),
                             "comment": attachment.comment(),
                             "dhcp_identifiers": identifiers.into_iter().map(|identifier| json!({
                                 "id": identifier.id().to_string(),
@@ -715,7 +743,13 @@ impl ExportStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_export_templates(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "name",
+                    &crate::domain::pagination::SortDirection::Asc,
+                    |item| item.name().to_string(),
+                )
             })
             .await
     }
@@ -725,7 +759,13 @@ impl ExportStore for PostgresStorage {
         self.database
             .run(move |c| {
                 let items = Self::query_export_runs(c)?;
-                Ok(vec_to_page(items, &page))
+                vec_to_page_by(
+                    items,
+                    &page,
+                    "created_at",
+                    &crate::domain::pagination::SortDirection::Desc,
+                    |item| item.created_at().to_rfc3339(),
+                )
             })
             .await
     }
@@ -763,6 +803,7 @@ impl ExportStore for PostgresStorage {
         self.database
             .run(move |connection| {
                 connection.transaction::<ExportRun, AppError, _>(|connection| {
+                    Self::ensure_builtin_export_templates(connection)?;
                     let template_id = export_templates::table
                         .filter(export_templates::name.eq(command.template_name()))
                         .select(export_templates::id)

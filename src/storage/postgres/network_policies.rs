@@ -18,7 +18,9 @@ use crate::{
         types::{NetworkPolicyAttributeName, NetworkPolicyName, UpdateField},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page},
+    storage::postgres::helpers::{
+        map_unique, run_dynamic_query, sort_and_vec_to_page_by, vec_to_page_by,
+    },
     storage::{NetworkPolicyStore, postgres::PostgresStorage},
 };
 
@@ -159,7 +161,13 @@ pub(super) fn list(
         .filter(|policy| filter.matches(policy))
         .collect();
 
-    Ok(vec_to_page(items, page))
+    vec_to_page_by(
+        items,
+        page,
+        "name",
+        &crate::domain::pagination::SortDirection::Asc,
+        |item| item.name().as_str().to_string(),
+    )
 }
 
 pub(in crate::storage::postgres) fn create(
@@ -222,6 +230,13 @@ pub(super) fn get_by_name(
 }
 
 pub(super) fn delete(connection: &mut PgConnection, name: &str) -> Result<(), AppError> {
+    let policy = get_by_name(connection, name)?;
+    if PostgresStorage::query_networks(connection)?
+        .iter()
+        .any(|network| network.policy_id() == Some(policy.id()) && network.frozen())
+    {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let deleted = sql_query("DELETE FROM network_policies WHERE name = $1")
         .bind::<Text, _>(name)
         .execute(connection)
@@ -251,11 +266,12 @@ pub(super) fn update(
         let new_name = command.name.unwrap_or_else(|| old.name().clone());
         let description = command
             .description
+            .map(|value| value.as_str().to_string())
             .unwrap_or_else(|| old.description().to_string());
         let pattern = match command.community_template_pattern {
             UpdateField::Unchanged => old.community_template_pattern().map(str::to_string),
             UpdateField::Clear => None,
-            UpdateField::Set(value) => Some(value),
+            UpdateField::Set(value) => Some(value.as_str().to_string()),
         };
         let row = sql_query(
             "UPDATE network_policies
@@ -319,6 +335,10 @@ pub(super) fn list_attributes(
     connection: &mut PgConnection,
     page: &PageRequest,
 ) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+    let mut page = page.clone();
+    if page.sort_by.is_none() {
+        page.sort_by = Some("created_at".to_string());
+    }
     let attributes = sql_query(
         "SELECT id, name::text AS name, description, created_at, updated_at
          FROM network_policy_attributes ORDER BY created_at, id",
@@ -327,7 +347,17 @@ pub(super) fn list_attributes(
     .into_iter()
     .map(row_to_attribute)
     .collect::<Result<Vec<_>, _>>()?;
-    Ok(vec_to_page(attributes, page))
+    sort_and_vec_to_page_by(
+        attributes,
+        &page,
+        &["description", "created_at", "updated_at"],
+        |attribute, field| match field {
+            "description" => attribute.description().to_string(),
+            "created_at" => attribute.created_at().to_rfc3339(),
+            "updated_at" => attribute.updated_at().to_rfc3339(),
+            _ => attribute.name().as_str().to_string(),
+        },
+    )
 }
 
 pub(super) fn create_attribute(
@@ -372,6 +402,7 @@ pub(super) fn update_attribute(
     let new_name = command.name.unwrap_or_else(|| old.name().clone());
     let description = command
         .description
+        .map(|value| value.as_str().to_string())
         .unwrap_or_else(|| old.description().to_string());
     let row = sql_query(
         "UPDATE network_policy_attributes

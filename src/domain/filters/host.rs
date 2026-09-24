@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::apply::{apply_datetime_filter, apply_optional_string_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
 use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
-use crate::domain::host::Host;
+use crate::domain::{host::Host, types::IpAddressValue};
 use crate::errors::AppError;
 
 // ─── HostFilter ─────────────────────────────────────────────────────
@@ -25,7 +25,7 @@ pub struct HostFilter {
 }
 
 impl HostFilter {
-    pub fn matches(&self, host: &Host, ip_addresses: &[String]) -> bool {
+    pub fn matches(&self, host: &Host, ip_addresses: &[IpAddressValue]) -> bool {
         for cond in &self.name {
             if !apply_string_filter(host.name().as_str(), cond) {
                 return false;
@@ -54,7 +54,7 @@ impl HostFilter {
         for cond in &self.address {
             if !ip_addresses
                 .iter()
-                .any(|address| apply_string_filter(address, cond))
+                .any(|address| apply_string_filter(&address.as_str(), cond))
             {
                 return false;
             }

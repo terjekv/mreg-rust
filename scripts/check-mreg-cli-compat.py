@@ -52,6 +52,9 @@ NESTED_NETWORK_HOST_ID = re.compile(
     r'communities/<ID>/hosts/)(\d+)'
 )
 SERVER = re.compile(r"https?://(?:127\.0\.0\.1|localhost|host\.docker\.internal):8000")
+STRICT_VALIDATION_GAPS = json.loads(
+    Path(__file__).with_name("mreg-cli-strict-gaps.json").read_text(encoding="utf-8")
+)
 
 
 def commands(path: str) -> list[dict[str, Any]]:
@@ -154,6 +157,43 @@ def statuses(command: dict[str, Any]) -> set[int]:
     }
 
 
+def strict_validation_gap(command: dict[str, Any]) -> str | None:
+    """Recognize specific shared-model invariants, never arbitrary 400/409s.
+
+    The pinned Django recording predates these constraints. A rejected mutation
+    changes later fixture state, so callers must mark downstream differences
+    unverified instead of claiming compatibility for them.
+    """
+    expected_reason = STRICT_VALIDATION_GAPS.get(command.get("command"))
+    if expected_reason is None:
+        return None
+    rules = (
+        (409, "conflict", r"conflict: network is frozen(?:; unfreeze it before changing it)?", "frozen network"),
+        (400, "validation_error", r"validation error: IP address falls inside reserved or unusable network space", "reserved address"),
+        (400, "validation_error", r"validation error: NAPTR records must use exactly one of a non-empty regexp or a non-root replacement", "NAPTR alternatives"),
+        (400, "validation_error", r"validation error: hex value must contain an even number of digits", "SSHFP encoding"),
+        (400, "validation_error", r"validation error: LOC size_m must be between 0\.01 and 90000000 metres", "LOC precision"),
+        (400, "validation_error", r"validation error: record owner '[^']+' is not within its host anchor '[^']+'", "DNS anchor containment"),
+    )
+    for request in command.get("api_requests", []):
+        if request.get("method") not in {"POST", "PUT", "PATCH", "DELETE"}:
+            continue
+        response = request.get("response")
+        if not isinstance(response, dict):
+            continue
+        for status, kind, pattern, reason in rules:
+            if (reason == expected_reason
+                    and request.get("status") == status
+                    and response.get("error") == kind
+                    and re.fullmatch(pattern, str(response.get("message", "")))):
+                # The hex diagnostic is generic; it is a known fixture gap only
+                # for SSHFP, not for unrelated records or identifiers.
+                if reason == "SSHFP encoding" and request.get("url") != "/api/v1/sshfps/":
+                    continue
+                return reason
+    return None
+
+
 def command_intends_mutation(command: str) -> bool:
     """Recognize state-changing CLI verbs even when a GET preflight stops them."""
     verbs = command.split()
@@ -199,6 +239,7 @@ def main() -> int:
         return 1
 
     accepted: list[str] = []
+    strict_rejections: list[str] = []
     downstream: list[str] = []
     unexpected: list[str] = []
     exact = 0
@@ -208,7 +249,11 @@ def main() -> int:
             exact += 1
             continue
         matched = statuses(new) & allowed
-        if matched:
+        strict_gap = strict_validation_gap(new)
+        if strict_gap:
+            strict_rejections.append(f"{new['command']} ({strict_gap})")
+            state_tainted = True
+        elif matched:
             accepted.append(f"{new['command']} ({', '.join(map(str, sorted(matched)))})")
             state_tainted = state_tainted or (
                 not new["command"].startswith(non_tainting_prefixes)
@@ -231,18 +276,21 @@ def main() -> int:
         "",
         f"- Exact command matches: {exact}",
         f"- Accepted explicit gaps: {len(accepted)}",
+        f"- Expected strict-validation rejections: {len(strict_rejections)}",
         f"- Unverified after an explicit mutating gap: {len(downstream)}",
         f"- Unexpected differences: {len(unexpected)}",
     ]
     if accepted:
         summary.extend(["", "### Accepted gaps", *[f"- `{item}`" for item in accepted]])
+    if strict_rejections:
+        summary.extend(["", "### Strict-validation gaps", *[f"- `{item}`" for item in strict_rejections]])
     if downstream:
         displayed = downstream[:50]
         summary.extend(
             [
                 "",
                 "### Unverified downstream commands",
-                "These commands ran after unsupported mutations changed the expected test state.",
+                "These commands ran after rejected mutations changed the expected test state; their compatibility is unverified.",
                 *[f"- `{item}`" for item in displayed],
             ]
         )

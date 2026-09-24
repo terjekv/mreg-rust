@@ -1,3 +1,6 @@
+use std::collections::BTreeSet;
+
+use minijinja::Environment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -95,6 +98,22 @@ impl RecordTypeSchema {
                 "record type schema must define at least one field unless RFC 3597 raw RDATA support is enabled",
             ));
         }
+        let mut names = BTreeSet::new();
+        for field in &fields {
+            if !names.insert(field.name()) {
+                return Err(AppError::validation(format!(
+                    "duplicate record field '{}'",
+                    field.name()
+                )));
+            }
+        }
+        if let Some(template) = render_template.as_deref() {
+            Environment::new()
+                .template_from_str(template)
+                .map_err(|error| {
+                    AppError::validation(format!("invalid record render template: {error}"))
+                })?;
+        }
 
         Ok(Self {
             owner_kind,
@@ -149,6 +168,15 @@ impl RecordTypeSchema {
             .ok_or_else(|| AppError::validation("record payload must be a JSON object"))?;
         let mut normalized = Map::new();
 
+        for name in object.keys() {
+            if !self.fields.iter().any(|field| field.name() == name) {
+                return Err(AppError::validation(format!(
+                    "unknown record field '{}'",
+                    name
+                )));
+            }
+        }
+
         for field in &self.fields {
             match object.get(field.name()) {
                 Some(value) => {
@@ -158,6 +186,12 @@ impl RecordTypeSchema {
                         } else {
                             vec![value.clone()]
                         };
+                        if field.required() && items.is_empty() {
+                            return Err(AppError::validation(format!(
+                                "record field '{}' must contain at least one value",
+                                field.name()
+                            )));
+                        }
                         let mut normalized_items = Vec::with_capacity(items.len());
                         for item in &items {
                             normalized_items.push(validate_field_value(field, item)?);

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use diesel::{
-    OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
+    Connection, OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
     sql_types::{Nullable, Text, Timestamptz, Uuid as SqlUuid},
 };
 use uuid::Uuid;
@@ -9,12 +9,13 @@ use uuid::Uuid;
 use crate::{
     domain::{
         filters::PtrOverrideFilter,
+        host::IpAddressAssignment,
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         types::{DnsName, Hostname, IpAddressValue},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, vec_to_page},
+    storage::postgres::helpers::{map_unique, vec_to_page_by},
     storage::{PtrOverrideStore, postgres::PostgresStorage},
 };
 
@@ -66,14 +67,49 @@ pub(super) fn list(
 
     let items: Vec<PtrOverride> = all.into_iter().filter(|ptr| filter.matches(ptr)).collect();
 
-    Ok(vec_to_page(items, page))
+    vec_to_page_by(
+        items,
+        page,
+        "address",
+        &crate::domain::pagination::SortDirection::Asc,
+        |item| {
+            let family = if item.address().as_inner().is_ipv4() {
+                4
+            } else {
+                6
+            };
+            format!(
+                "{family}:{:039}",
+                crate::domain::network::ip_to_u128(item.address().as_inner())
+            )
+        },
+    )
+}
+
+fn validate_assignment(
+    connection: &mut PgConnection,
+    command: &CreatePtrOverride,
+) -> Result<IpAddressAssignment, AppError> {
+    let host_id = PostgresStorage::resolve_host_id(connection, command.host_name())?;
+    let assignment = PostgresStorage::query_ip_address(connection, command.address())?;
+    if assignment.host_id() != host_id {
+        return Err(AppError::validation(
+            "PTR override address must belong to the supplied host",
+        ));
+    }
+    let network = PostgresStorage::query_network_by_id(connection, assignment.network_id())?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    Ok(assignment)
 }
 
 pub(in crate::storage::postgres) fn create(
     connection: &mut PgConnection,
     command: CreatePtrOverride,
 ) -> Result<PtrOverride, AppError> {
-    let host_id = PostgresStorage::resolve_host_id(connection, command.host_name())?;
+    let assignment = validate_assignment(connection, &command)?;
+    let host_id = assignment.host_id();
 
     let row = sql_query(
         "INSERT INTO ptr_overrides (host_id, address, target_name)
@@ -90,21 +126,26 @@ pub(in crate::storage::postgres) fn create(
     .get_result::<PtrOverrideRow>(connection)
     .map_err(map_unique("ptr override already exists for this address"))?;
 
-    Ok(PtrOverride::restore(
+    let item = PtrOverride::restore(
         row.id,
         Hostname::new(row.host_name)?,
         IpAddressValue::new(row.address)?,
         row.target_name.map(DnsName::new).transpose()?,
         row.created_at,
         row.updated_at,
-    ))
+    );
+    let assignment = PostgresStorage::query_ip_address(connection, item.address())?;
+    PostgresStorage::delete_managed_ip_records(connection, assignment.id(), Some("ptr"))?;
+    PostgresStorage::auto_create_ptr_record(connection, &assignment)?;
+    Ok(item)
 }
 
 pub(in crate::storage::postgres) fn replace(
     connection: &mut PgConnection,
     command: CreatePtrOverride,
 ) -> Result<PtrOverride, AppError> {
-    let host_id = PostgresStorage::resolve_host_id(connection, command.host_name())?;
+    let assignment = validate_assignment(connection, &command)?;
+    let host_id = assignment.host_id();
     let row = sql_query(
         "UPDATE ptr_overrides
          SET host_id = $1, target_name = $2, updated_at = now()
@@ -124,14 +165,17 @@ pub(in crate::storage::postgres) fn replace(
             command.address().as_str()
         ))
     })?;
-    Ok(PtrOverride::restore(
+    let item = PtrOverride::restore(
         row.id,
         Hostname::new(row.host_name)?,
         IpAddressValue::new(row.address)?,
         row.target_name.map(DnsName::new).transpose()?,
         row.created_at,
         row.updated_at,
-    ))
+    );
+    PostgresStorage::delete_managed_ip_records(connection, assignment.id(), Some("ptr"))?;
+    PostgresStorage::auto_create_ptr_record(connection, &assignment)?;
+    Ok(item)
 }
 
 pub(super) fn get_by_address(
@@ -163,6 +207,8 @@ pub(super) fn get_by_address(
 }
 
 pub(super) fn delete(connection: &mut PgConnection, addr: &str) -> Result<(), AppError> {
+    let address = IpAddressValue::new(addr)?;
+    let assignment = PostgresStorage::query_ip_address(connection, &address)?;
     let deleted = sql_query("DELETE FROM ptr_overrides WHERE address = $1::inet")
         .bind::<Text, _>(addr)
         .execute(connection)?;
@@ -172,6 +218,8 @@ pub(super) fn delete(connection: &mut PgConnection, addr: &str) -> Result<(), Ap
             addr
         )));
     }
+    PostgresStorage::delete_managed_ip_records(connection, assignment.id(), Some("ptr"))?;
+    PostgresStorage::auto_create_ptr_record(connection, &assignment)?;
     Ok(())
 }
 
@@ -203,7 +251,9 @@ impl PtrOverrideStore for PostgresStorage {
         command: CreatePtrOverride,
     ) -> Result<PtrOverride, AppError> {
         self.database
-            .run(move |connection| replace(connection, command))
+            .run(move |connection| {
+                connection.transaction(|connection| replace(connection, command))
+            })
             .await
     }
 

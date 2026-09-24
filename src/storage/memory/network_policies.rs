@@ -20,9 +20,7 @@ use crate::{
     storage::NetworkPolicyStore,
 };
 
-use super::{
-    MemoryState, MemoryStorage, networks::update_network_in_state, sort_and_paginate,
-};
+use super::{MemoryState, MemoryStorage, networks::update_network_in_state, sort_and_paginate};
 
 fn resolve_values(
     state: &MemoryState,
@@ -147,7 +145,7 @@ pub(super) fn update_network_policy_in_state(
     let pattern = match command.community_template_pattern {
         UpdateField::Unchanged => old.community_template_pattern().map(str::to_string),
         UpdateField::Clear => None,
-        UpdateField::Set(value) => Some(value),
+        UpdateField::Set(value) => Some(value.as_str().to_string()),
     };
     if state.network_policies.values().any(|policy| {
         policy.id() != old.id()
@@ -168,6 +166,7 @@ pub(super) fn update_network_policy_in_state(
         new_name.clone(),
         command
             .description
+            .map(|value| value.as_str().to_string())
             .unwrap_or_else(|| old.description().to_string()),
         pattern,
         old.created_at(),
@@ -189,12 +188,24 @@ pub(super) fn delete_network_policy_in_state(
     state: &mut MemoryState,
     name: &NetworkPolicyName,
 ) -> Result<(), AppError> {
-    let policy = state
-        .network_policies
-        .remove(name.as_str())
-        .ok_or_else(|| {
-            AppError::not_found(format!("network policy '{}' was not found", name.as_str()))
-        })?;
+    let policy = get_network_policy_by_name_in_state(state, name)?;
+    if state
+        .communities
+        .values()
+        .any(|community| community.policy_id() == policy.id())
+    {
+        return Err(AppError::conflict(
+            "network policy is still referenced by communities",
+        ));
+    }
+    if state
+        .networks
+        .values()
+        .any(|network| network.policy_id() == Some(policy.id()) && network.frozen())
+    {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    state.network_policies.remove(name.as_str());
     state.network_policy_attribute_values.remove(&policy.id());
     let assigned_networks = state
         .networks
@@ -315,6 +326,7 @@ pub(super) fn update_network_policy_attribute_in_state(
         new_name.clone(),
         command
             .description
+            .map(|value| value.as_str().to_string())
             .unwrap_or_else(|| old.description().to_string()),
         old.created_at(),
         Utc::now(),

@@ -96,7 +96,7 @@ async fn legacy_network_policy_attributes_match_django_membership_semantics() {
             .insert_header(("X-Mreg-User", "compat-test"))
             .set_json(json!({
                 "name": "Campus",
-                "description": "",
+                "description": "Campus policy",
                 "attributes": [{"name": "public", "value": false}]
             }))
             .to_request(),
@@ -105,7 +105,7 @@ async fn legacy_network_policy_attributes_match_django_membership_semantics() {
     assert_eq!(response.status(), StatusCode::CREATED);
     let policy: Value = test::read_body_json(response).await;
     assert_eq!(policy["name"], "campus");
-    assert_eq!(policy["description"], "");
+    assert_eq!(policy["description"], "Campus policy");
     assert_eq!(
         policy["attributes"],
         json!([{"name": "public", "value": false}])
@@ -1278,8 +1278,19 @@ async fn deleting_host_preserves_unanchored_v2_record_with_same_owner_name() {
     assert!(record["owner_kind"].is_null());
 }
 
+#[rstest::rstest]
+#[case("sshfps", json!({"algorithm":1,"hash_type":1,"fingerprint":"legacy-value"}), StatusCode::BAD_REQUEST)]
+#[case("sshfps", json!({"algorithm":1,"hash_type":1,"fingerprint":"0011"}), StatusCode::BAD_REQUEST)]
+#[case("sshfps", json!({"algorithm":1,"hash_type":1,"fingerprint":"aa".repeat(20)}), StatusCode::CREATED)]
+#[case("naptrs", json!({"order":1,"preference":1,"flag":"s","service":"SIP+D2U","regex":"!x!y!","replacement":"sip.example.org"}), StatusCode::BAD_REQUEST)]
+#[case("naptrs", json!({"order":1,"preference":1,"flag":"s","service":"SIP+D2U","regex":"","replacement":"."}), StatusCode::BAD_REQUEST)]
+#[case("naptrs", json!({"order":1,"preference":1,"flag":"s","service":"SIP+D2U","regex":"","replacement":"sip.example.org"}), StatusCode::CREATED)]
 #[actix_web::test]
-async fn legacy_sshfp_is_honest_in_v2_without_opening_validation_escape_hatch() {
+async fn legacy_records_use_canonical_validation(
+    #[case] endpoint: &str,
+    #[case] mut payload: Value,
+    #[case] expected: StatusCode,
+) {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory_state()))
@@ -1297,70 +1308,49 @@ async fn legacy_sshfp_is_honest_in_v2_without_opening_validation_escape_hatch() 
         request()
             .method(actix_web::http::Method::POST)
             .uri("/api/v1/hosts/")
-            .set_json(json!({"name":"sshfp.example.org","comment":"sshfp"}))
+            .set_json(json!({"name":"strict.example.org","comment":"strict"}))
             .to_request(),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status(), StatusCode::CREATED, "seed host");
     let response = test::call_service(
         &app,
         request()
             .method(actix_web::http::Method::GET)
-            .uri("/api/v1/hosts/sshfp.example.org")
+            .uri("/api/v1/hosts/strict.example.org")
             .to_request(),
     )
     .await;
     let host: Value = test::read_body_json(response).await;
-    let host_id = host["id"].as_u64().expect("legacy host id");
-
+    payload["host"] = host["id"].clone();
     let response = test::call_service(
         &app,
         request()
             .method(actix_web::http::Method::POST)
-            .uri("/api/v1/sshfps/")
-            .set_json(json!({
-                "host":host_id,"algorithm":1,"hash_type":1,"fingerprint":"legacy-value"
-            }))
+            .uri(&format!("/api/v1/{endpoint}/"))
+            .set_json(payload)
             .to_request(),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status(), expected);
+}
 
-    let response = test::call_service(
-        &app,
-        request()
-            .method(actix_web::http::Method::GET)
-            .uri("/api/v2/dns/records?owner_name=sshfp.example.org&type_name=SSHFP")
-            .to_request(),
+#[rstest::rstest]
+#[case("")]
+#[case(" \t\n")]
+#[actix_web::test]
+async fn legacy_policy_rejects_blank_description(#[case] description: &str) {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let records: Value = test::read_body_json(response).await;
-    assert_eq!(records["items"][0]["data"]["fingerprint"], "legacy-value");
-    let record_id = records["items"][0]["id"].as_str().expect("record id");
     let response = test::call_service(
         &app,
-        request()
-            .method(actix_web::http::Method::GET)
-            .uri(&format!("/api/v2/dns/records/{record_id}"))
-            .to_request(),
-    )
-    .await;
-    let record: Value = test::read_body_json(response).await;
-    assert_eq!(record["legacy_compatibility"], true);
-    assert!(record["rendered"].is_null());
-
-    let response = test::call_service(
-        &app,
-        request()
-            .method(actix_web::http::Method::POST)
-            .uri("/api/v2/dns/records")
-            .set_json(json!({
-                "type_name":"SSHFP",
-                "owner_kind":"host",
-                "owner_name":"sshfp.example.org",
-                "data":{"algorithm":1,"fp_type":1,"fingerprint":"\u{1f}mreg-v1:bad"}
-            }))
+        test::TestRequest::post()
+            .uri("/api/v1/networkpolicies/")
+            .set_json(json!({"name":"strict","description":description}))
             .to_request(),
     )
     .await;
@@ -1633,4 +1623,36 @@ async fn import_batch_appears_in_listing() {
         import_id,
         items.len()
     );
+}
+
+#[rstest::rstest]
+#[case("192.0.2.0")]
+#[case("192.0.2.1")]
+#[case("192.0.2.255")]
+#[actix_web::test]
+async fn legacy_host_rejects_reserved_and_unusable_addresses(#[case] address: &str) {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(memory_state()))
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let network = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/networks/")
+            .set_json(json!({"network":"192.0.2.0/24","description":"Test network","reserved":3}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(network.status(), StatusCode::CREATED, "seed network");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/hosts/")
+            .set_json(json!({"name":"reserved.example.org","ipaddress":address}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

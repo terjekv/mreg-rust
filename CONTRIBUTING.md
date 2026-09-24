@@ -79,11 +79,11 @@ The codebase follows a five-layer architecture:
 
 Request flow: API handler parses a domain command, calls the service layer, which delegates to a storage backend, records an audit event, and emits a domain event.
 
-See `CLAUDE.md` for detailed design patterns (type-driven domain, storage trait composition, cascading side-effects, pagination, error handling).
+See `AGENTS.md` for detailed design patterns (type-driven domain, storage trait composition, cascading side-effects, pagination, error handling).
 
 ## Adding a New Entity
 
-Follow the 9-step checklist in `CLAUDE.md`. The **labels** entity is the simplest working example:
+Follow the 9-step checklist in `AGENTS.md`. The **labels** entity is the simplest working example:
 
 - Domain: `src/domain/labels.rs`
 - Storage trait: `src/storage/labels.rs`
@@ -121,9 +121,10 @@ CI runs on every PR:
 - **Full test suite** against both memory and PostgreSQL backends
 - **Benchmark compilation** to catch build regressions
 
-PR benchmarks run automatically via iai-callgrind and criterion. Regression thresholds:
+PR benchmarks run automatically through `rust-pr-bench`, using Gungraun and
+Criterion. Regression thresholds:
 
-- **iai-callgrind:** 3% (instruction-count based, deterministic)
+- **Gungraun:** 3% (instruction-count based, deterministic)
 - **criterion:** 8% (wall-clock based, noisier)
 
 PRs that exceed these thresholds will fail the benchmark check.

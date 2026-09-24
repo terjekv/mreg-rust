@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         filters::PtrOverrideFilter,
+        host::IpAddressAssignment,
         pagination::{Page, PageRequest},
         ptr_override::{CreatePtrOverride, PtrOverride},
         types::IpAddressValue,
@@ -13,21 +14,57 @@ use crate::{
     storage::PtrOverrideStore,
 };
 
-use super::{MemoryState, MemoryStorage, sort_and_paginate};
+use super::{
+    MemoryState, MemoryStorage,
+    hosts::{create_managed_ptr_record_in_state, delete_managed_ptr_records_in_state},
+    sort_and_paginate,
+};
 
-pub(super) fn create_ptr_override_in_state(
-    state: &mut MemoryState,
-    command: CreatePtrOverride,
-) -> Result<PtrOverride, AppError> {
-    state
+fn validate_assignment_in_state(
+    state: &MemoryState,
+    command: &CreatePtrOverride,
+) -> Result<IpAddressAssignment, AppError> {
+    let host = state
         .hosts
         .get(command.host_name().as_str())
+        .cloned()
         .ok_or_else(|| {
             AppError::not_found(format!(
                 "host '{}' was not found",
                 command.host_name().as_str()
             ))
         })?;
+    let assignment = state
+        .ip_addresses
+        .get(command.address())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "ip address '{}' was not found",
+                command.address().as_str()
+            ))
+        })?;
+    if assignment.host_id() != host.id() {
+        return Err(AppError::validation(
+            "PTR override address must belong to the supplied host",
+        ));
+    }
+    let network = state
+        .networks
+        .values()
+        .find(|network| network.id() == assignment.network_id())
+        .ok_or_else(|| AppError::internal("IP assignment references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    Ok(assignment)
+}
+
+pub(super) fn create_ptr_override_in_state(
+    state: &mut MemoryState,
+    command: CreatePtrOverride,
+) -> Result<PtrOverride, AppError> {
+    let assignment = validate_assignment_in_state(state, &command)?;
     let key = command.address().as_str();
     if state.ptr_overrides.contains_key(&key) {
         return Err(AppError::conflict(format!(
@@ -45,6 +82,8 @@ pub(super) fn create_ptr_override_in_state(
         now,
     );
     state.ptr_overrides.insert(key, override_record.clone());
+    delete_managed_ptr_records_in_state(state, assignment.id())?;
+    create_managed_ptr_record_in_state(state, &assignment)?;
     Ok(override_record)
 }
 
@@ -52,12 +91,7 @@ pub(super) fn replace_ptr_override_in_state(
     state: &mut MemoryState,
     command: CreatePtrOverride,
 ) -> Result<PtrOverride, AppError> {
-    if !state.hosts.contains_key(command.host_name().as_str()) {
-        return Err(AppError::not_found(format!(
-            "host '{}' was not found",
-            command.host_name().as_str()
-        )));
-    }
+    let assignment = validate_assignment_in_state(state, &command)?;
     let old = get_ptr_override_by_address_in_state(state, command.address())?;
     let item = PtrOverride::restore(
         old.id(),
@@ -70,6 +104,8 @@ pub(super) fn replace_ptr_override_in_state(
     state
         .ptr_overrides
         .insert(command.address().as_str(), item.clone());
+    delete_managed_ptr_records_in_state(state, assignment.id())?;
+    create_managed_ptr_record_in_state(state, &assignment)?;
     Ok(item)
 }
 
@@ -113,13 +149,23 @@ pub(super) fn delete_ptr_override_in_state(
     state: &mut MemoryState,
     address: &IpAddressValue,
 ) -> Result<(), AppError> {
-    state
+    let removed = state
         .ptr_overrides
         .remove(&address.as_str())
-        .map(|_| ())
         .ok_or_else(|| {
             AppError::not_found(format!("ptr override '{}' was not found", address.as_str()))
-        })
+        })?;
+    let assignment = state
+        .ip_addresses
+        .get(address)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("IP address assignment was not found"))?;
+    delete_managed_ptr_records_in_state(state, assignment.id())?;
+    if let Err(error) = create_managed_ptr_record_in_state(state, &assignment) {
+        state.ptr_overrides.insert(address.as_str(), removed);
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -146,7 +192,10 @@ impl PtrOverrideStore for MemoryStorage {
         command: CreatePtrOverride,
     ) -> Result<PtrOverride, AppError> {
         let mut state = self.state.write().await;
-        replace_ptr_override_in_state(&mut state, command)
+        let mut candidate = state.clone();
+        let replacement = replace_ptr_override_in_state(&mut candidate, command)?;
+        *state = candidate;
+        Ok(replacement)
     }
 
     async fn get_ptr_override_by_address(

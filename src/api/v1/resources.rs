@@ -1,5 +1,7 @@
 //! Legacy collection and detail response adapters.
 
+use crate::domain::types::{CommunityTemplatePattern, RequiredDescription};
+
 use std::collections::{BTreeSet, HashMap};
 
 use actix_web::{HttpRequest, HttpResponse, web};
@@ -465,10 +467,12 @@ async fn create_ip_address(
     let assignment = state
         .services
         .hosts()
-        .assign_ip_address(
-            AssignIpAddress::new(host.name().clone(), Some(address), None, mac_address)?
-                .with_reserved_addresses(true),
-        )
+        .assign_ip_address(AssignIpAddress::new(
+            host.name().clone(),
+            Some(address),
+            None,
+            mac_address,
+        )?)
         .await?;
     Ok(HttpResponse::Created().json(ip_json(&assignment, Some(legacy_id(assignment.host_id())))))
 }
@@ -541,9 +545,7 @@ async fn update_ip_address(
             None => assignment.mac_address().cloned(),
         };
         let replacement =
-            AssignIpAddress::new(host.name().clone(), Some(new_address), None, mac_address)?
-                .with_reserved_addresses(true)
-                .with_assignment_id(assignment.id());
+            AssignIpAddress::new(host.name().clone(), Some(new_address), None, mac_address)?;
         state
             .services
             .hosts()
@@ -818,18 +820,9 @@ async fn create_host(
         zone,
         payload.ttl.map(Ttl::new).transpose()?,
         payload.comment,
-    )?;
+    )?
+    .with_ip_assignments(assignment.into_iter().collect());
     state.services.hosts().create(command).await?;
-    if let Some(spec) = assignment {
-        let explicit = spec.address().is_some();
-        let command = spec
-            .into_assign_command(name.clone())?
-            .with_reserved_addresses(explicit);
-        if let Err(error) = state.services.hosts().assign_ip_address(command).await {
-            let _ = state.services.hosts().delete(&name).await;
-            return Err(error);
-        }
-    }
     if create_default_spf {
         state
             .services
@@ -1323,6 +1316,7 @@ async fn create_forward_zone(
         SoaSeconds::new(1_814_400)?,
         Ttl::new(43_200)?,
         Ttl::new(43_200)?,
+        Ttl::new(43_200)?,
     );
     state.services.zones().create_forward(command).await?;
     // DRF's Location header makes mreg-api fetch and cache the created object.
@@ -1351,7 +1345,7 @@ async fn ensure_nameservers(state: &AppState, names: &[DnsName]) -> Result<(), A
 struct LegacyUpdateForwardZone {
     email: Option<String>,
     #[serde(rename = "serialno")]
-    serial_no: Option<u64>,
+    serial_no: Option<SerialNumber>,
     refresh: Option<u32>,
     retry: Option<u32>,
     expire: Option<u32>,
@@ -1384,11 +1378,12 @@ async fn update_forward_zone(
                 primary_ns: None,
                 nameservers: None,
                 email: payload.email.map(EmailAddressValue::new).transpose()?,
-                serial_no: payload.serial_no.map(SerialNumber::new).transpose()?,
+                serial_no: payload.serial_no,
                 refresh: payload.refresh.map(SoaSeconds::new).transpose()?,
                 retry: payload.retry.map(SoaSeconds::new).transpose()?,
                 expire: payload.expire.map(SoaSeconds::new).transpose()?,
-                soa_ttl: payload.soa_ttl.map(Ttl::new).transpose()?,
+                negative_ttl: payload.soa_ttl.map(Ttl::new).transpose()?,
+                soa_record_ttl: None,
                 default_ttl: payload.default_ttl.map(Ttl::new).transpose()?,
             },
         )
@@ -2581,7 +2576,7 @@ async fn forward_zone_detail(
 }
 
 fn reverse_zone_json(zone: &crate::domain::zone::ReverseZone) -> Value {
-    json!({"id": zone.id(), "name": zone.name().as_str(), "network": zone.network().map(|network| network.as_str()), "updated": zone.updated(), "primary_ns": zone.primary_ns().as_str(), "nameservers": zone.nameservers().iter().map(|value| json!({"name": value.as_str()})).collect::<Vec<_>>(), "email": zone.email().as_str(), "serialno": zone.serial_no().as_u64(), "serialno_updated_at": zone.serial_no_updated_at(), "refresh": zone.refresh().as_u32(), "retry": zone.retry().as_u32(), "expire": zone.expire().as_u32(), "soa_ttl": zone.soa_ttl().as_u32(), "default_ttl": zone.default_ttl().as_u32(), "created_at": zone.created_at(), "updated_at": zone.updated_at()})
+    json!({"id": zone.id(), "name": zone.name().as_str(), "network": zone.network().map(|network| network.as_str()), "updated": zone.updated(), "primary_ns": zone.primary_ns().as_str(), "nameservers": zone.nameservers().iter().map(|value| json!({"name": value.as_str()})).collect::<Vec<_>>(), "email": zone.email().as_str(), "serialno": zone.serial_no().as_u32(), "serialno_updated_at": zone.serial_no_updated_at(), "refresh": zone.refresh().as_u32(), "retry": zone.retry().as_u32(), "expire": zone.expire().as_u32(), "soa_ttl": zone.negative_ttl().as_u32(), "default_ttl": zone.default_ttl().as_u32(), "created_at": zone.created_at(), "updated_at": zone.updated_at()})
 }
 async fn reverse_zones(
     req: HttpRequest,
@@ -2741,8 +2736,7 @@ impl LegacyPolicyAttributeValue {
 #[derive(Deserialize)]
 struct LegacyCreateNetworkPolicy {
     name: String,
-    #[serde(default)]
-    description: String,
+    description: RequiredDescription,
     #[serde(default)]
     attributes: Vec<LegacyPolicyAttributeValue>,
     community_template_pattern: Option<String>,
@@ -2769,7 +2763,7 @@ async fn create_network_policy(
         .create(
             CreateNetworkPolicy::new(
                 name,
-                payload.description,
+                payload.description.as_str(),
                 payload.community_template_pattern,
             )?
             .with_attributes(
@@ -2829,9 +2823,9 @@ async fn network_policy_detail(
 #[derive(Default, Deserialize)]
 struct LegacyUpdateNetworkPolicy {
     name: Option<String>,
-    description: Option<String>,
+    description: Option<RequiredDescription>,
     #[serde(default)]
-    community_template_pattern: UpdateField<String>,
+    community_template_pattern: UpdateField<CommunityTemplatePattern>,
     attributes: Option<Vec<LegacyPolicyAttributeValue>>,
 }
 
@@ -4000,11 +3994,6 @@ async fn create_legacy_record(
             data,
         )?
     };
-    let command = if matches!(kind, "NAPTR" | "SSHFP") {
-        command.with_legacy_compatibility()
-    } else {
-        command
-    };
     let record = state.services.records().create_record(command).await?;
     Ok(HttpResponse::Created().json(record_json(&record, Some(legacy_id(host.id())))))
 }
@@ -4317,8 +4306,7 @@ async fn network_communities(
 #[derive(Deserialize)]
 struct LegacyCreateCommunity {
     name: String,
-    #[serde(default)]
-    description: String,
+    description: RequiredDescription,
 }
 
 async fn create_network_community(
@@ -4357,7 +4345,7 @@ async fn create_network_community(
             policy.name().clone(),
             network.clone(),
             CommunityName::new(payload.name)?,
-            payload.description,
+            payload.description.as_str(),
         )?)
         .await?;
     Ok(HttpResponse::Created()
@@ -4394,7 +4382,7 @@ async fn network_community_detail(
 #[derive(Deserialize)]
 struct LegacyUpdateCommunity {
     name: Option<String>,
-    description: Option<String>,
+    description: Option<RequiredDescription>,
 }
 
 async fn update_network_community(

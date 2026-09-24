@@ -29,14 +29,17 @@ pub(super) fn create_community_in_state(
                 command.policy_name().as_str()
             ))
         })?;
-    if !state
+    let network = state
         .networks
-        .contains_key(&command.network_cidr().as_str())
-    {
-        return Err(AppError::not_found(format!(
-            "network '{}' was not found",
-            command.network_cidr().as_str()
-        )));
+        .get(&command.network_cidr().as_str())
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "network '{}' was not found",
+                command.network_cidr().as_str()
+            ))
+        })?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
     }
     if state.communities.values().any(|community| {
         community.network_cidr() == command.network_cidr() && community.name() == command.name()
@@ -102,6 +105,13 @@ pub(super) fn update_community_in_state(
     command: UpdateCommunity,
 ) -> Result<Community, AppError> {
     let old = get_community_in_state(state, community_id)?;
+    let network = state
+        .networks
+        .get(&old.network_cidr().as_str())
+        .ok_or_else(|| AppError::internal("community references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let name = command.name.unwrap_or_else(|| old.name().clone());
     if state.communities.values().any(|community| {
         community.id() != community_id
@@ -122,6 +132,7 @@ pub(super) fn update_community_in_state(
         name,
         command
             .description
+            .map(|value| value.as_str().to_string())
             .unwrap_or_else(|| old.description().to_string()),
         old.created_at(),
         Utc::now(),
@@ -134,11 +145,24 @@ pub(super) fn delete_community_in_state(
     state: &mut MemoryState,
     community_id: Uuid,
 ) -> Result<(), AppError> {
-    state
+    let community = state
         .communities
-        .remove(&community_id)
-        .map(|_| ())
-        .ok_or_else(|| AppError::not_found(format!("community '{}' was not found", community_id)))?;
+        .get(&community_id)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!("community '{}' was not found", community_id))
+        })?;
+    let network = state
+        .networks
+        .get(&community.network_cidr().as_str())
+        .ok_or_else(|| AppError::internal("community references an unknown network"))?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    state.communities.remove(&community_id);
+    state
+        .attachment_community_assignments
+        .retain(|_, assignment| assignment.community_id() != community_id);
     state
         .host_community_assignments
         .retain(|_, assignment| assignment.community_id() != community_id);

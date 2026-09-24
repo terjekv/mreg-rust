@@ -14,7 +14,7 @@ use crate::{
         types::{CommunityName, Hostname, IpAddressValue, NetworkPolicyName},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page},
+    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page_by},
     storage::{HostCommunityAssignmentStore, postgres::PostgresStorage},
 };
 
@@ -90,7 +90,24 @@ pub(super) fn list(
         .map(row_to_mapping)
         .collect::<Result<Vec<_>, AppError>>()?;
 
-    Ok(vec_to_page(items, page))
+    vec_to_page_by(
+        items,
+        page,
+        "host_address",
+        &crate::domain::pagination::SortDirection::Asc,
+        |item| {
+            let family = if item.address().as_inner().is_ipv4() {
+                4
+            } else {
+                6
+            };
+            format!(
+                "{}\0{family}:{:039}",
+                item.host_name().as_str(),
+                crate::domain::network::ip_to_u128(item.address().as_inner())
+            )
+        },
+    )
 }
 
 pub(in crate::storage::postgres) fn create(
@@ -135,6 +152,18 @@ pub(in crate::storage::postgres) fn create(
                 command.community_name().as_str()
             ))
         })?;
+
+        let assignment = PostgresStorage::query_ip_address(connection, command.address())?;
+        let network = PostgresStorage::query_network_by_id(connection, assignment.network_id())?;
+        let community = super::communities::get_by_id(connection, community_row.id())?;
+        if community.network_cidr() != network.cidr() {
+            return Err(AppError::validation(
+                "community must belong to the IP assignment network",
+            ));
+        }
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
 
         let row = sql_query(
             "INSERT INTO host_community_assignments
@@ -195,6 +224,12 @@ pub(super) fn delete_by_id(
     connection: &mut PgConnection,
     mapping_id: Uuid,
 ) -> Result<(), AppError> {
+    let mapping = get_by_id(connection, mapping_id)?;
+    let assignment = PostgresStorage::query_ip_address(connection, mapping.address())?;
+    let network = PostgresStorage::query_network_by_id(connection, assignment.network_id())?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let deleted = sql_query("DELETE FROM host_community_assignments WHERE id = $1")
         .bind::<SqlUuid, _>(mapping_id)
         .execute(connection)?;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 
 use mreg_rust::domain::filters::{HostFilter, RecordFilter};
 

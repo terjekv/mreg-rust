@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::types::{CidrValue, CommunityName, NetworkPolicyName},
+    domain::types::{CidrValue, CommunityName, NetworkPolicyName, RequiredDescription},
     errors::AppError,
 };
 
@@ -14,7 +14,7 @@ pub struct Community {
     policy_name: NetworkPolicyName,
     network_cidr: CidrValue,
     name: CommunityName,
-    description: String,
+    description: RequiredDescription,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -37,7 +37,7 @@ impl Community {
             policy_name,
             network_cidr,
             name,
-            description: normalize_description(description.into()),
+            description: RequiredDescription::new(description.into())?,
             created_at,
             updated_at,
         })
@@ -59,7 +59,7 @@ impl Community {
         &self.name
     }
     pub fn description(&self) -> &str {
-        &self.description
+        self.description.as_str()
     }
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
@@ -75,7 +75,7 @@ pub struct CreateCommunity {
     policy_name: NetworkPolicyName,
     network_cidr: CidrValue,
     name: CommunityName,
-    description: String,
+    description: RequiredDescription,
 }
 
 impl CreateCommunity {
@@ -89,7 +89,7 @@ impl CreateCommunity {
             policy_name,
             network_cidr,
             name,
-            description: normalize_description(description.into()),
+            description: RequiredDescription::new(description.into())?,
         })
     }
 
@@ -103,7 +103,7 @@ impl CreateCommunity {
         &self.name
     }
     pub fn description(&self) -> &str {
-        &self.description
+        self.description.as_str()
     }
 }
 
@@ -111,9 +111,46 @@ impl CreateCommunity {
 #[derive(Clone, Debug, Default)]
 pub struct UpdateCommunity {
     pub name: Option<CommunityName>,
-    pub description: Option<String>,
+    pub description: Option<RequiredDescription>,
 }
 
-fn normalize_description(value: String) -> String {
-    value.trim().to_string()
+#[cfg(test)]
+mod strictness_tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    fn create_rejects_blank_description(#[case] value: &str) {
+        assert!(
+            CreateCommunity::new(
+                NetworkPolicyName::new("campus").unwrap(),
+                CidrValue::new("192.0.2.0/24").unwrap(),
+                CommunityName::new("guests").unwrap(),
+                value
+            )
+            .is_err()
+        );
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    fn restore_rejects_blank_description(#[case] value: &str) {
+        let now = Utc::now();
+        assert!(
+            Community::restore(
+                Uuid::nil(),
+                Uuid::nil(),
+                NetworkPolicyName::new("campus").unwrap(),
+                CidrValue::new("192.0.2.0/24").unwrap(),
+                CommunityName::new("guests").unwrap(),
+                value,
+                now,
+                now
+            )
+            .is_err()
+        );
+    }
 }

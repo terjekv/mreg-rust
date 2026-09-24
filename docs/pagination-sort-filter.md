@@ -182,14 +182,14 @@ Only two fields have special semantics that don't use the operator pattern:
 
 ## Pagination
 
-Pagination uses an opaque cursor (UUID) rather than offset/limit.
+Pagination uses an opaque, URL-safe keyset cursor rather than an offset or row identifier. The token captures the active sort field, direction, last sort value, and stable tie breaker.
 
 ### Query parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | u64 | 100 | Maximum items per page (max 1000) |
-| `after` | UUID | — | Cursor from previous page's `next_cursor` |
+| `limit` | u64 | 100 | Maximum items per page (minimum 1, max 1000) |
+| `after` | opaque string | — | Cursor from the previous page's `next_cursor` |
 
 ### Response shape
 
@@ -197,12 +197,14 @@ Pagination uses an opaque cursor (UUID) rather than offset/limit.
 {
   "items": [ ... ],
   "total": 42,
-  "next_cursor": "550e8400-e29b-41d4-a716-446655440000"
+  "next_cursor": "eyJ2ZXJzaW9uIjoxLC4uLn0"
 }
 ```
 
 - `total` reflects the count matching current filters (not just this page)
 - `next_cursor` is `null` on the last page
+- cursors remain valid if the boundary row is deleted
+- a cursor is rejected with 400 if it is malformed or reused with a different sort field/direction
 
 ## Sorting
 
@@ -221,7 +223,6 @@ Pagination uses an opaque cursor (UUID) rather than offset/limit.
 | Label | name | name, description, created_at, updated_at |
 | Nameserver | name | name, created_at, updated_at |
 | Zone | name | name, created_at, updated_at |
-| Network | name | name, description, created_at, updated_at |
 | Network | name | name (CIDR), description, created_at |
 
 ## Combining all three

@@ -16,10 +16,7 @@ use crate::{
 /// Synchronous, transaction-scoped 1:1 mirror of [`crate::storage::AttachmentStore`].
 pub trait TxAttachmentStore {
     fn list_attachments(&self, page: &PageRequest) -> Result<Page<HostAttachment>, AppError>;
-    fn list_attachments_for_host(
-        &self,
-        host: &Hostname,
-    ) -> Result<Vec<HostAttachment>, AppError>;
+    fn list_attachments_for_host(&self, host: &Hostname) -> Result<Vec<HostAttachment>, AppError>;
     fn list_attachments_for_hosts(
         &self,
         hosts: &[Hostname],
@@ -28,10 +25,7 @@ pub trait TxAttachmentStore {
         &self,
         network: &CidrValue,
     ) -> Result<Vec<HostAttachment>, AppError>;
-    fn create_attachment(
-        &self,
-        command: CreateHostAttachment,
-    ) -> Result<HostAttachment, AppError>;
+    fn create_attachment(&self, command: CreateHostAttachment) -> Result<HostAttachment, AppError>;
     fn get_attachment(&self, attachment_id: Uuid) -> Result<HostAttachment, AppError>;
     fn update_attachment(
         &self,
@@ -66,6 +60,5 @@ pub trait TxAttachmentStore {
         &self,
         command: CreateAttachmentPrefixReservation,
     ) -> Result<AttachmentPrefixReservation, AppError>;
-    fn delete_attachment_prefix_reservation(&self, reservation_id: Uuid)
-    -> Result<(), AppError>;
+    fn delete_attachment_prefix_reservation(&self, reservation_id: Uuid) -> Result<(), AppError>;
 }

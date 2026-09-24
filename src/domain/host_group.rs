@@ -33,6 +33,7 @@ impl HostGroup {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Result<Self, AppError> {
+        validate_parent_groups(&name, &parent_groups)?;
         let description = normalize_required_text(description.into(), "host group description")?;
         Ok(Self {
             id,
@@ -90,6 +91,7 @@ impl CreateHostGroup {
         parent_groups: Vec<HostGroupName>,
         owner_groups: Vec<OwnerGroupName>,
     ) -> Result<Self, AppError> {
+        validate_parent_groups(&name, &parent_groups)?;
         Ok(Self {
             name,
             description: normalize_required_text(description.into(), "host group description")?,
@@ -116,6 +118,13 @@ impl CreateHostGroup {
     }
 }
 
+fn validate_parent_groups(name: &HostGroupName, parents: &[HostGroupName]) -> Result<(), AppError> {
+    if parents.contains(name) {
+        return Err(AppError::validation("host group cannot be its own parent"));
+    }
+    Ok(())
+}
+
 fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
     let trimmed = value.trim().to_string();
     if trimmed.is_empty() {
@@ -137,4 +146,34 @@ where
     let mut seen = BTreeSet::new();
     items.retain(|item| seen.insert(item.clone()));
     items
+}
+
+#[cfg(test)]
+mod strictness_tests {
+    use super::*;
+
+    #[test]
+    fn command_rejects_self_parenting() {
+        let name = HostGroupName::new("self").unwrap();
+        assert!(CreateHostGroup::new(name.clone(), "Group", vec![], vec![name], vec![]).is_err());
+    }
+
+    #[test]
+    fn restore_rejects_self_parenting() {
+        let name = HostGroupName::new("self").unwrap();
+        let now = Utc::now();
+        assert!(
+            HostGroup::restore(
+                Uuid::nil(),
+                name.clone(),
+                "Group",
+                vec![],
+                vec![name],
+                vec![],
+                now,
+                now
+            )
+            .is_err()
+        );
+    }
 }

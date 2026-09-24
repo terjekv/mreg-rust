@@ -494,6 +494,12 @@ impl HostService<'_> {
     ) -> Result<Page<IpAddressAssignment>, AppError> {
         hosts::list_host_ip_addresses(self.storage.hosts(), name, page).await
     }
+    pub async fn get_ip_address(
+        &self,
+        address: &IpAddressValue,
+    ) -> Result<IpAddressAssignment, AppError> {
+        self.storage.hosts().get_ip_address(address).await
+    }
     pub async fn assign_ip_address(
         &self,
         command: AssignIpAddress,
@@ -544,7 +550,10 @@ impl AttachmentService<'_> {
             .await
     }
     pub async fn get_attachment(&self, attachment_id: Uuid) -> Result<HostAttachment, AppError> {
-        self.storage.attachments().get_attachment(attachment_id).await
+        self.storage
+            .attachments()
+            .get_attachment(attachment_id)
+            .await
     }
     pub async fn create_attachment(
         &self,
@@ -659,7 +668,8 @@ impl AttachmentService<'_> {
         &self,
         command: CreateAttachmentCommunityAssignment,
     ) -> Result<AttachmentCommunityAssignment, AppError> {
-        attachments::create_attachment_community_assignment(self.storage, command, self.events).await
+        attachments::create_attachment_community_assignment(self.storage, command, self.events)
+            .await
     }
     pub async fn get_attachment_community_assignment(
         &self,
@@ -674,8 +684,12 @@ impl AttachmentService<'_> {
         &self,
         assignment_id: Uuid,
     ) -> Result<(), AppError> {
-        attachments::delete_attachment_community_assignment(self.storage, assignment_id, self.events)
-            .await
+        attachments::delete_attachment_community_assignment(
+            self.storage,
+            assignment_id,
+            self.events,
+        )
+        .await
     }
 }
 
@@ -792,14 +806,8 @@ impl HostGroupService<'_> {
         command: CreateHostGroup,
         mutation: host_groups::HostGroupRelationMutation,
     ) -> Result<HostGroup, AppError> {
-        host_groups::replace_host_group_relation(
-            self.storage,
-            old,
-            command,
-            mutation,
-            self.events,
-        )
-        .await
+        host_groups::replace_host_group_relation(self.storage, old, command, mutation, self.events)
+            .await
     }
 }
 
@@ -876,28 +884,53 @@ impl NetworkPolicyService<'_> {
     pub async fn get(&self, name: &NetworkPolicyName) -> Result<NetworkPolicy, AppError> {
         network_policies::get_network_policy(self.storage.network_policies(), name).await
     }
-    pub async fn get_details(&self, name: &NetworkPolicyName) -> Result<NetworkPolicyDetails, AppError> {
+    pub async fn get_details(
+        &self,
+        name: &NetworkPolicyName,
+    ) -> Result<NetworkPolicyDetails, AppError> {
         network_policies::get_network_policy_details(self.storage.network_policies(), name).await
     }
-    pub async fn update(&self, name: &NetworkPolicyName, command: UpdateNetworkPolicy) -> Result<NetworkPolicy, AppError> {
+    pub async fn update(
+        &self,
+        name: &NetworkPolicyName,
+        command: UpdateNetworkPolicy,
+    ) -> Result<NetworkPolicy, AppError> {
         network_policies::update_network_policy(self.storage, name, command, self.events).await
     }
     pub async fn delete(&self, name: &NetworkPolicyName) -> Result<(), AppError> {
         network_policies::delete_network_policy(self.storage, name, self.events).await
     }
-    pub async fn list_attributes(&self, page: &PageRequest) -> Result<Page<NetworkPolicyAttribute>, AppError> {
-        network_policies::list_network_policy_attributes(self.storage.network_policies(), page).await
+    pub async fn list_attributes(
+        &self,
+        page: &PageRequest,
+    ) -> Result<Page<NetworkPolicyAttribute>, AppError> {
+        network_policies::list_network_policy_attributes(self.storage.network_policies(), page)
+            .await
     }
-    pub async fn create_attribute(&self, command: CreateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
+    pub async fn create_attribute(
+        &self,
+        command: CreateNetworkPolicyAttribute,
+    ) -> Result<NetworkPolicyAttribute, AppError> {
         network_policies::create_network_policy_attribute(self.storage, command, self.events).await
     }
-    pub async fn get_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<NetworkPolicyAttribute, AppError> {
+    pub async fn get_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+    ) -> Result<NetworkPolicyAttribute, AppError> {
         network_policies::get_network_policy_attribute(self.storage.network_policies(), name).await
     }
-    pub async fn update_attribute(&self, name: &NetworkPolicyAttributeName, command: UpdateNetworkPolicyAttribute) -> Result<NetworkPolicyAttribute, AppError> {
-        network_policies::update_network_policy_attribute(self.storage, name, command, self.events).await
+    pub async fn update_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+        command: UpdateNetworkPolicyAttribute,
+    ) -> Result<NetworkPolicyAttribute, AppError> {
+        network_policies::update_network_policy_attribute(self.storage, name, command, self.events)
+            .await
     }
-    pub async fn delete_attribute(&self, name: &NetworkPolicyAttributeName) -> Result<(), AppError> {
+    pub async fn delete_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+    ) -> Result<(), AppError> {
         network_policies::delete_network_policy_attribute(self.storage, name, self.events).await
     }
 }
@@ -936,8 +969,12 @@ impl CommunityService<'_> {
         policy_name: &NetworkPolicyName,
         community_name: &CommunityName,
     ) -> Result<Community, AppError> {
-        communities::find_community_by_names(self.storage.communities(), policy_name, community_name)
-            .await
+        communities::find_community_by_names(
+            self.storage.communities(),
+            policy_name,
+            community_name,
+        )
+        .await
     }
 }
 
@@ -1035,7 +1072,10 @@ impl HostPolicyService<'_> {
         &self,
         host_name: &Hostname,
     ) -> Result<Vec<HostPolicyRole>, AppError> {
-        self.storage.host_policy().list_roles_for_host(host_name).await
+        self.storage
+            .host_policy()
+            .list_roles_for_host(host_name)
+            .await
     }
     pub async fn create_role(
         &self,

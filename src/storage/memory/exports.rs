@@ -90,7 +90,8 @@ fn build_dhcp_attachment_export(
         .or_else(|| {
             attachment
                 .mac_address()
-                .map(|mac| json!({"kind": "mac_address", "value": mac.as_str()}))
+                .and_then(|mac| mac.as_eui48())
+                .map(|mac| json!({"kind": "mac_address", "value": mac.to_string()}))
         });
     let ipv6_matcher = identifiers
         .iter()
@@ -123,6 +124,19 @@ fn build_dhcp_attachment_export(
         })
         .collect();
 
+    if !ipv4_addresses.is_empty()
+        && ipv4_matcher.is_none()
+        && attachment
+            .mac_address()
+            .is_some_and(|mac| mac.as_eui64().is_some())
+    {
+        warnings.push(format!(
+            "attachment '{}' on '{}' has an EUI-64 address that cannot be used as an Ethernet DHCPv4 matcher; configure a client_id identifier",
+            attachment.host_name().as_str(),
+            attachment.network_cidr().as_str()
+        ));
+    }
+
     if (!ipv6_addresses.is_empty() || !prefixes.is_empty()) && ipv6_matcher.is_none() {
         warnings.push(format!(
             "attachment '{}' on '{}' has IPv6 reservations but no DHCPv6 identifier",
@@ -137,6 +151,7 @@ fn build_dhcp_attachment_export(
             "host_id": attachment.host_id().to_string(),
             "host_name": attachment.host_name().as_str(),
             "mac_address": attachment.mac_address().map(|value| value.as_str()),
+            "mac_address_kind": attachment.mac_address().map(|value| value.kind().as_str()),
             "comment": attachment.comment(),
             "dhcp_identifiers": identifiers.into_iter().map(|identifier| json!({
                 "id": identifier.id().to_string(),
@@ -296,11 +311,13 @@ fn forward_zone_export_context(
         "primary_ns": zone.primary_ns().as_str(),
         "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
         "email": zone.email().as_str(),
-        "serial_no": zone.serial_no().as_u64(),
+        "soa_rname": crate::domain::resource_records::soa_rname(zone.email().as_str())?,
+        "serial_no": zone.serial_no().as_u32(),
         "refresh": zone.refresh().as_u32(),
         "retry": zone.retry().as_u32(),
         "expire": zone.expire().as_u32(),
-        "soa_ttl": zone.soa_ttl().as_u32(),
+        "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+        "negative_ttl": zone.negative_ttl().as_u32(),
         "default_ttl": zone.default_ttl().as_u32(),
         "updated": zone.updated(),
     });
@@ -409,11 +426,13 @@ fn reverse_zone_export_context(
         "primary_ns": zone.primary_ns().as_str(),
         "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
         "email": zone.email().as_str(),
-        "serial_no": zone.serial_no().as_u64(),
+        "soa_rname": crate::domain::resource_records::soa_rname(zone.email().as_str())?,
+        "serial_no": zone.serial_no().as_u32(),
         "refresh": zone.refresh().as_u32(),
         "retry": zone.retry().as_u32(),
         "expire": zone.expire().as_u32(),
-        "soa_ttl": zone.soa_ttl().as_u32(),
+        "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+        "negative_ttl": zone.negative_ttl().as_u32(),
         "default_ttl": zone.default_ttl().as_u32(),
         "updated": zone.updated(),
     });
@@ -484,11 +503,12 @@ fn export_context(state: &MemoryState, run: &ExportRun) -> Value {
             "name": zone.name().as_str(),
             "primary_ns": zone.primary_ns().as_str(),
             "email": zone.email().as_str(),
-            "serial_no": zone.serial_no().as_u64(),
+            "serial_no": zone.serial_no().as_u32(),
             "refresh": zone.refresh().as_u32(),
             "retry": zone.retry().as_u32(),
             "expire": zone.expire().as_u32(),
-            "soa_ttl": zone.soa_ttl().as_u32(),
+            "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+            "negative_ttl": zone.negative_ttl().as_u32(),
             "default_ttl": zone.default_ttl().as_u32(),
             "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
@@ -503,11 +523,12 @@ fn export_context(state: &MemoryState, run: &ExportRun) -> Value {
             "network": zone.network().map(|value| value.as_str()),
             "primary_ns": zone.primary_ns().as_str(),
             "email": zone.email().as_str(),
-            "serial_no": zone.serial_no().as_u64(),
+            "serial_no": zone.serial_no().as_u32(),
             "refresh": zone.refresh().as_u32(),
             "retry": zone.retry().as_u32(),
             "expire": zone.expire().as_u32(),
-            "soa_ttl": zone.soa_ttl().as_u32(),
+            "soa_record_ttl": zone.soa_record_ttl().as_u32(),
+            "negative_ttl": zone.negative_ttl().as_u32(),
             "default_ttl": zone.default_ttl().as_u32(),
             "nameservers": zone.nameservers().iter().map(|ns| ns.as_str()).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),

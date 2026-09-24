@@ -9,12 +9,12 @@ $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
 
 ; SOA record
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.soa_rname }} (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum TTL
+    {{ zone.negative_ttl }}     ; minimum TTL
 )
 
 ; Records
@@ -31,12 +31,12 @@ $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
 
 ; SOA record
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.soa_rname }} (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum TTL
+    {{ zone.negative_ttl }}     ; minimum TTL
 )
 
 ; Records
@@ -48,17 +48,17 @@ $TTL {{ zone.default_ttl }}
 const KEA_DHCP4_FRAGMENT_TEMPLATE: &str = r#"[
 {% for network in dhcp4_networks %}
   {
-    "subnet": "{{ network.cidr }}",
+    "subnet": {{ network.cidr | tojson }},
     "reservations": [
 {% for attachment in network.dhcp4_attachments %}
       {
 {% if attachment.matchers.ipv4.kind == "client_id" %}
-        "client-id": "{{ attachment.matchers.ipv4.value }}",
+        "client-id": {{ attachment.matchers.ipv4.value | tojson }},
 {% else %}
-        "hw-address": "{{ attachment.matchers.ipv4.value }}",
+        "hw-address": {{ attachment.matchers.ipv4.value | tojson }},
 {% endif %}
-        "hostname": "{{ attachment.host_name }}",
-        "ip-address": "{{ attachment.primary_ipv4_address }}"
+        "hostname": {{ attachment.host_name | tojson }},
+        "ip-address": {{ attachment.primary_ipv4_address | tojson }}
       }{% if not loop.last %},{% endif %}
 {% endfor %}
     ]
@@ -74,17 +74,17 @@ const KEA_DHCP4_FULL_TEMPLATE: &str = r#"{
     "subnet4": [
 {% for network in dhcp4_networks %}
       {
-        "subnet": "{{ network.cidr }}",
+        "subnet": {{ network.cidr | tojson }},
         "reservations": [
 {% for attachment in network.dhcp4_attachments %}
           {
 {% if attachment.matchers.ipv4.kind == "client_id" %}
-            "client-id": "{{ attachment.matchers.ipv4.value }}",
+            "client-id": {{ attachment.matchers.ipv4.value | tojson }},
 {% else %}
-            "hw-address": "{{ attachment.matchers.ipv4.value }}",
+            "hw-address": {{ attachment.matchers.ipv4.value | tojson }},
 {% endif %}
-            "hostname": "{{ attachment.host_name }}",
-            "ip-address": "{{ attachment.primary_ipv4_address }}"
+            "hostname": {{ attachment.host_name | tojson }},
+            "ip-address": {{ attachment.primary_ipv4_address | tojson }}
           }{% if not loop.last %},{% endif %}
 {% endfor %}
         ]
@@ -97,14 +97,14 @@ const KEA_DHCP4_FULL_TEMPLATE: &str = r#"{
 const KEA_DHCP6_FRAGMENT_TEMPLATE: &str = r#"[
 {% for network in dhcp6_networks %}
   {
-    "subnet": "{{ network.cidr }}",
+    "subnet": {{ network.cidr | tojson }},
     "reservations": [
 {% for attachment in network.dhcp6_attachments %}
       {
-        "duid": "{{ attachment.matchers.ipv6.value }}",
-        "hostname": "{{ attachment.host_name }}"{% if attachment.primary_ipv6_address %},
-        "ip-addresses": ["{{ attachment.primary_ipv6_address }}"]{% endif %}{% if attachment.prefix_reservations %},
-        "prefixes": [{% for prefix in attachment.prefix_reservations %}"{{ prefix.prefix }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}
+        "duid": {{ attachment.matchers.ipv6.value | tojson }},
+        "hostname": {{ attachment.host_name | tojson }}{% if attachment.primary_ipv6_address %},
+        "ip-addresses": [{{ attachment.primary_ipv6_address | tojson }}]{% endif %}{% if attachment.prefix_reservations %},
+        "prefixes": [{% for prefix in attachment.prefix_reservations %}{{ prefix.prefix | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}
       }{% if not loop.last %},{% endif %}
 {% endfor %}
     ]
@@ -120,14 +120,14 @@ const KEA_DHCP6_FULL_TEMPLATE: &str = r#"{
     "subnet6": [
 {% for network in dhcp6_networks %}
       {
-        "subnet": "{{ network.cidr }}",
+        "subnet": {{ network.cidr | tojson }},
         "reservations": [
 {% for attachment in network.dhcp6_attachments %}
           {
-            "duid": "{{ attachment.matchers.ipv6.value }}",
-            "hostname": "{{ attachment.host_name }}"{% if attachment.primary_ipv6_address %},
-            "ip-addresses": ["{{ attachment.primary_ipv6_address }}"]{% endif %}{% if attachment.prefix_reservations %},
-            "prefixes": [{% for prefix in attachment.prefix_reservations %}"{{ prefix.prefix }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}
+            "duid": {{ attachment.matchers.ipv6.value | tojson }},
+            "hostname": {{ attachment.host_name | tojson }}{% if attachment.primary_ipv6_address %},
+            "ip-addresses": [{{ attachment.primary_ipv6_address | tojson }}]{% endif %}{% if attachment.prefix_reservations %},
+            "prefixes": [{% for prefix in attachment.prefix_reservations %}{{ prefix.prefix | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}
           }{% if not loop.last %},{% endif %}
 {% endfor %}
         ]
@@ -138,10 +138,10 @@ const KEA_DHCP6_FULL_TEMPLATE: &str = r#"{
 }"#;
 
 const ISC_DHCPD4_FRAGMENT_TEMPLATE: &str = r#"{% for network in dhcp4_networks %}
-# {{ network.cidr }} {{ network.description }}
+# {{ network.cidr }} {{ network.description | isc_comment }}
 {% for attachment in network.dhcp4_attachments %}
 host {{ attachment.host_name | replace(".", "-") }} {
-  option host-name "{{ attachment.host_name }}";
+  option host-name "{{ attachment.host_name | isc_string }}";
 {% if attachment.matchers.ipv4.kind == "client_id" %}
   option dhcp-client-identifier "{{ attachment.matchers.ipv4.value }}";
 {% else %}
@@ -157,10 +157,10 @@ const ISC_DHCPD4_FULL_TEMPLATE: &str = r#"# Generated by mreg-rust
 authoritative;
 
 {% for network in dhcp4_networks %}
-# {{ network.cidr }} {{ network.description }}
+# {{ network.cidr }} {{ network.description | isc_comment }}
 {% for attachment in network.dhcp4_attachments %}
 host {{ attachment.host_name | replace(".", "-") }} {
-  option host-name "{{ attachment.host_name }}";
+  option host-name "{{ attachment.host_name | isc_string }}";
 {% if attachment.matchers.ipv4.kind == "client_id" %}
   option dhcp-client-identifier "{{ attachment.matchers.ipv4.value }}";
 {% else %}
@@ -173,10 +173,10 @@ host {{ attachment.host_name | replace(".", "-") }} {
 {% endfor %}"#;
 
 const ISC_DHCPD6_FRAGMENT_TEMPLATE: &str = r#"{% for network in dhcp6_networks %}
-# {{ network.cidr }} {{ network.description }}
+# {{ network.cidr }} {{ network.description | isc_comment }}
 {% for attachment in network.dhcp6_attachments %}
 host {{ attachment.host_name | replace(".", "-") }} {
-  option host-name "{{ attachment.host_name }}";
+  option host-name "{{ attachment.host_name | isc_string }}";
   host-identifier option dhcp6.client-id {{ attachment.matchers.ipv6.value }};
 {% if attachment.primary_ipv6_address %}
   fixed-address6 {{ attachment.primary_ipv6_address }};
@@ -192,10 +192,10 @@ host {{ attachment.host_name | replace(".", "-") }} {
 const ISC_DHCPD6_FULL_TEMPLATE: &str = r#"# Generated by mreg-rust
 
 {% for network in dhcp6_networks %}
-# {{ network.cidr }} {{ network.description }}
+# {{ network.cidr }} {{ network.description | isc_comment }}
 {% for attachment in network.dhcp6_attachments %}
 host {{ attachment.host_name | replace(".", "-") }} {
-  option host-name "{{ attachment.host_name }}";
+  option host-name "{{ attachment.host_name | isc_string }}";
   host-identifier option dhcp6.client-id {{ attachment.matchers.ipv6.value }};
 {% if attachment.primary_ipv6_address %}
   fixed-address6 {{ attachment.primary_ipv6_address }};

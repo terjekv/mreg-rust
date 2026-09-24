@@ -1,3 +1,4 @@
+use crate::domain::types::RequiredDescription;
 use std::collections::HashMap;
 
 use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
@@ -36,7 +37,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 pub struct CommunityQuery {
-    after: Option<Uuid>,
+    after: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
+    )]
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -64,17 +69,17 @@ pub struct CreateCommunityRequest {
     policy_name: String,
     network: String,
     name: String,
-    description: String,
+    #[schema(value_type = String)]
+    description: RequiredDescription,
 }
 
 impl CreateCommunityRequest {
     fn into_command(self) -> Result<crate::domain::community::CreateCommunity, AppError> {
-        let description = required_description(self.description, "community description")?;
         crate::domain::community::CreateCommunity::new(
             NetworkPolicyName::new(self.policy_name)?,
             crate::domain::types::CidrValue::new(self.network)?,
             CommunityName::new(self.name)?,
-            description,
+            self.description.as_str(),
         )
     }
 }
@@ -82,15 +87,8 @@ impl CreateCommunityRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateCommunityRequest {
     name: Option<String>,
-    description: Option<String>,
-}
-
-fn required_description(value: String, label: &str) -> Result<String, AppError> {
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return Err(AppError::validation(format!("{label} cannot be empty")));
-    }
-    Ok(value)
+    #[schema(value_type = Option<String>)]
+    description: Option<RequiredDescription>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -187,7 +185,7 @@ pub(crate) async fn create_community(
         .attr("network", AttrValue::Ip(request.network.clone()))
         .attr(
             "description",
-            AttrValue::String(request.description.clone()),
+            AttrValue::String(request.description.as_str().to_string()),
         ),
     )
     .await?;
@@ -269,10 +267,7 @@ pub(crate) async fn update_community(
             community_id,
             UpdateCommunity {
                 name: request.name.map(CommunityName::new).transpose()?,
-                description: request
-                    .description
-                    .map(|value| required_description(value, "community description"))
-                    .transpose()?,
+                description: request.description,
             },
         )
         .await?;

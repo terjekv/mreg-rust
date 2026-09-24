@@ -85,7 +85,7 @@ for each scope. Field names match the JSON keys exactly.
 | `parameters` | object | The parameters passed when creating the run |
 
 **`zone` fields:** `name`, `primary_ns`, `nameservers` (array), `email`,
-`serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl`, `updated`.
+`serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`, `updated`.
 
 **`delegations[]` fields:** `name`, `nameservers` (array), `comment`.
 
@@ -109,7 +109,7 @@ for each scope. Field names match the JSON keys exactly.
 | `parameters` | object | The parameters passed when creating the run |
 
 **`zone` fields:** `name`, `network` (nullable), `primary_ns`, `nameservers` (array),
-`email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl`,
+`email`, `serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`,
 `updated`.
 
 **`delegations[]` fields:** `name`, `nameservers` (array), `comment`.
@@ -143,13 +143,13 @@ The inventory scope provides a global view of the entire system.
 **`nameservers[]` fields:** `name`, `ttl` (nullable).
 
 **`forward_zones[]` fields:** `name`, `primary_ns`, `email`, `serial_no`, `refresh`,
-`retry`, `expire`, `soa_ttl`, `default_ttl`, `nameservers` (array).
+`retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`, `nameservers` (array).
 
 **`forward_zone_delegations[]` fields:** `name`, `zone_id`, `comment`,
 `nameservers` (array).
 
 **`reverse_zones[]` fields:** `name`, `network` (nullable), `primary_ns`, `email`,
-`serial_no`, `refresh`, `retry`, `expire`, `soa_ttl`, `default_ttl`,
+`serial_no`, `refresh`, `retry`, `expire`, `soa_record_ttl`, `negative_ttl`, `default_ttl`,
 `nameservers` (array).
 
 **`reverse_zone_delegations[]` fields:** `name`, `zone_id`, `comment`,
@@ -185,10 +185,10 @@ The DHCP scope is grouped around `host_attachment` identity. Top-level variables
 `category`, `location`, `frozen`, `reserved`, `communities`, `attachments`,
 `dhcp4_attachments`, `dhcp6_attachments`.
 
-**`attachments[]` fields:** `id`, `host_id`, `host_name`, `mac_address`, `comment`,
-`dhcp_identifiers`, `matchers`, `ip_addresses`, `ipv4_addresses`, `ipv6_addresses`,
-`primary_ipv4_address`, `primary_ipv6_address`, `prefix_reservations`,
-`community_assignments`.
+**`attachments[]` fields:** `id`, `host_id`, `host_name`, `mac_address`,
+`mac_address_kind`, `comment`, `dhcp_identifiers`, `matchers`, `ip_addresses`,
+`ipv4_addresses`, `ipv6_addresses`, `primary_ipv4_address`,
+`primary_ipv6_address`, `prefix_reservations`, `community_assignments`.
 
 **`matchers` fields:** `ipv4`, `ipv6`, each either `null` or an object with `kind`
 and `value`. Built-in templates use these resolved matchers rather than repeating
@@ -230,12 +230,12 @@ $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
 
 ; SOA record
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum TTL
+    {{ zone.negative_ttl }}     ; minimum TTL
 )
 
 ; Records
@@ -259,12 +259,12 @@ $ORIGIN {{ zone.name }}.
 $TTL {{ zone.default_ttl }}
 
 ; SOA record
-@ {{ zone.soa_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
+@ {{ zone.soa_record_ttl }} IN SOA {{ zone.primary_ns }}. {{ zone.email | replace("@", ".") }}. (
     {{ zone.serial_no }}  ; serial
     {{ zone.refresh }}     ; refresh
     {{ zone.retry }}       ; retry
     {{ zone.expire }}      ; expire
-    {{ zone.soa_ttl }}     ; minimum TTL
+    {{ zone.negative_ttl }}     ; minimum TTL
 )
 
 ; Records
@@ -298,8 +298,9 @@ These are pre-resolved by the export context builder so templates don't need
 fallback logic:
 
 - **IPv4 matcher**: Uses the highest-priority `client_id` DHCP identifier if
-  one exists, otherwise falls back to the attachment's MAC address. The matcher
-  object is `{"kind": "client_id", "value": "..."}` or
+  one exists, otherwise falls back to an EUI-48 attachment MAC address. EUI-64
+  addresses require an explicit `client_id`. The matcher object is
+  `{"kind": "client_id", "value": "..."}` or
   `{"kind": "mac_address", "value": "..."}`.
 - **IPv6 matcher**: Uses the highest-priority DUID identifier (`duid_llt`,
   `duid_en`, `duid_ll`, `duid_uuid`, or `duid_raw`). No fallback — if no
@@ -309,6 +310,9 @@ fallback logic:
 The convenience lists `dhcp4_attachments` and `dhcp6_attachments` on each
 network are pre-filtered to only include attachments that have a valid matcher
 and at least one address (or prefix reservation for IPv6).
+
+Attachment objects include `mac_address_kind` (`"eui48"`, `"eui64"`, or
+`null`) so custom templates can branch on address length explicitly.
 
 #### Kea DHCPv4 (`kea-dhcp4-full`)
 

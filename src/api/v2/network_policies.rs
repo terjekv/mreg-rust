@@ -1,3 +1,4 @@
+use crate::domain::types::{CommunityTemplatePattern, RequiredDescription};
 use std::collections::HashMap;
 
 use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
@@ -44,7 +45,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 pub struct PolicyQuery {
-    after: Option<Uuid>,
+    after: Option<String>,
     limit: Option<u64>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
@@ -70,8 +71,8 @@ impl PolicyQuery {
 #[derive(Deserialize, ToSchema)]
 pub struct CreateNetworkPolicyRequest {
     name: String,
-    #[serde(default)]
-    description: String,
+    #[schema(value_type = String)]
+    description: RequiredDescription,
     community_template_pattern: Option<String>,
     #[serde(default)]
     attributes: Vec<NetworkPolicyAttributeValueRequest>,
@@ -79,10 +80,9 @@ pub struct CreateNetworkPolicyRequest {
 
 impl CreateNetworkPolicyRequest {
     fn into_command(self) -> Result<crate::domain::network_policy::CreateNetworkPolicy, AppError> {
-        let description = required_description(self.description, "network policy description")?;
         Ok(crate::domain::network_policy::CreateNetworkPolicy::new(
             NetworkPolicyName::new(self.name)?,
-            description,
+            self.description.as_str(),
             self.community_template_pattern,
         )?
         .with_attributes(
@@ -151,10 +151,11 @@ impl NetworkPolicyResponse {
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateNetworkPolicyRequest {
     name: Option<String>,
-    description: Option<String>,
+    #[schema(value_type = Option<String>)]
+    description: Option<RequiredDescription>,
     #[serde(default)]
     #[schema(value_type = Option<String>)]
-    community_template_pattern: UpdateField<String>,
+    community_template_pattern: UpdateField<CommunityTemplatePattern>,
     attributes: Option<Vec<NetworkPolicyAttributeValueRequest>>,
 }
 
@@ -162,10 +163,7 @@ impl UpdateNetworkPolicyRequest {
     fn into_domain(self) -> Result<UpdateNetworkPolicy, AppError> {
         Ok(UpdateNetworkPolicy {
             name: self.name.map(NetworkPolicyName::new).transpose()?,
-            description: self
-                .description
-                .map(|value| required_description(value, "network policy description"))
-                .transpose()?,
+            description: self.description,
             community_template_pattern: self.community_template_pattern,
             attributes: self
                 .attributes
@@ -178,14 +176,6 @@ impl UpdateNetworkPolicyRequest {
                 .transpose()?,
         })
     }
-}
-
-fn required_description(value: String, label: &str) -> Result<String, AppError> {
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return Err(AppError::validation(format!("{label} cannot be empty")));
-    }
-    Ok(value)
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -302,7 +292,7 @@ pub(crate) async fn create_network_policy(
     )
     .attr(
         "description",
-        AttrValue::String(request.description.clone()),
+        AttrValue::String(request.description.as_str().to_string()),
     );
     if let Some(pattern) = &request.community_template_pattern {
         authz = authz.attr(

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
+    db::models::UuidRow,
     domain::{
         filters::HostGroupFilter,
         host_group::{CreateHostGroup, HostGroup},
@@ -16,7 +17,7 @@ use crate::{
         types::{HostGroupName, Hostname, OwnerGroupName},
     },
     errors::AppError,
-    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page},
+    storage::postgres::helpers::{map_unique, run_dynamic_query, vec_to_page_by},
     storage::{HostGroupStore, postgres::PostgresStorage},
 };
 
@@ -278,7 +279,13 @@ pub(super) fn list(
         .filter(|group| filter.matches(group))
         .collect();
 
-    Ok(vec_to_page(items, page))
+    vec_to_page_by(
+        items,
+        page,
+        "name",
+        &crate::domain::pagination::SortDirection::Asc,
+        |item| item.name().as_str().to_string(),
+    )
 }
 
 pub(in crate::storage::postgres) fn create(
@@ -355,6 +362,10 @@ pub(in crate::storage::postgres) fn replace(
         ));
     }
     connection.transaction::<HostGroup, AppError, _>(|connection| {
+        // Serialize relationship replacements so concurrent updates cannot each
+        // observe an acyclic graph and jointly introduce a cycle.
+        sql_query("LOCK TABLE host_group_parents IN SHARE ROW EXCLUSIVE MODE")
+            .execute(connection)?;
         let row = sql_query(
             "UPDATE host_groups
              SET description = $1, updated_at = now()
@@ -366,6 +377,27 @@ pub(in crate::storage::postgres) fn replace(
         .get_result::<HostGroupRow>(connection)
         .optional()?
         .ok_or_else(|| AppError::not_found(format!("host group '{}' was not found", name)))?;
+
+        let parent_ids =
+            PostgresStorage::resolve_host_group_ids(connection, command.parent_groups())?;
+        let parent_values = parent_ids.values().copied().collect::<Vec<_>>();
+        let cycle = sql_query(
+            "WITH RECURSIVE ancestors(id) AS (
+                SELECT unnest($1::uuid[])
+                UNION
+                SELECT relation.parent_group_id FROM host_group_parents relation
+                JOIN ancestors ON ancestors.id = relation.host_group_id
+             ) SELECT id FROM ancestors WHERE id = $2 LIMIT 1",
+        )
+        .bind::<Array<SqlUuid>, _>(&parent_values)
+        .bind::<SqlUuid, _>(row.id)
+        .get_result::<UuidRow>(connection)
+        .optional()?;
+        if cycle.is_some() {
+            return Err(AppError::validation(
+                "host group parents would form a cycle",
+            ));
+        }
 
         sql_query("DELETE FROM host_group_hosts WHERE host_group_id = $1")
             .bind::<SqlUuid, _>(row.id)
@@ -384,8 +416,6 @@ pub(in crate::storage::postgres) fn replace(
                 .bind::<SqlUuid, _>(host_ids[host_name])
                 .execute(connection)?;
         }
-        let parent_ids =
-            PostgresStorage::resolve_host_group_ids(connection, command.parent_groups())?;
         for parent_name in command.parent_groups() {
             sql_query(
                 "INSERT INTO host_group_parents (host_group_id, parent_group_id) VALUES ($1, $2)",

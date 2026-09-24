@@ -1,13 +1,12 @@
+use super::{DomainEvent, EventSink, safe_url_for_log};
 use async_trait::async_trait;
 use lapin::{
     BasicProperties, Channel, Connection, ConnectionProperties, ExchangeKind,
-    options::{BasicPublishOptions, ExchangeDeclareOptions},
+    options::{BasicPublishOptions, ConfirmSelectOptions, ExchangeDeclareOptions},
+    publisher_confirm::Confirmation,
     types::FieldTable,
 };
 use tokio::sync::Mutex;
-use tracing::warn;
-
-use super::{DomainEvent, EventSink, safe_url_for_log};
 
 /// Emits events to an AMQP exchange with routing key `{resource_kind}.{action}`.
 pub struct AmqpSink {
@@ -46,6 +45,9 @@ impl AmqpSink {
                 FieldTable::default(),
             )
             .await?;
+        channel
+            .confirm_select(ConfirmSelectOptions::default())
+            .await?;
         *guard = Some(channel.clone());
         Ok(channel)
     }
@@ -53,25 +55,17 @@ impl AmqpSink {
 
 #[async_trait]
 impl EventSink for AmqpSink {
-    async fn emit(&self, event: &DomainEvent) {
+    async fn emit(&self, event: &DomainEvent) -> Result<(), String> {
         let routing_key = format!("{}.{}", event.resource_kind, event.action);
-        let payload = match serde_json::to_vec(event) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                warn!(%error, "failed to serialize event for AMQP");
-                return;
-            }
-        };
+        let payload = serde_json::to_vec(event)
+            .map_err(|error| format!("failed to serialize event for AMQP: {error}"))?;
 
-        let channel = match self.get_or_connect().await {
-            Ok(ch) => ch,
-            Err(error) => {
-                warn!(url = %safe_url_for_log(&self.url), %error, "AMQP connection failed, dropping event");
-                return;
-            }
-        };
+        let channel = self
+            .get_or_connect()
+            .await
+            .map_err(|error| format!("AMQP connection {}: {error}", safe_url_for_log(&self.url)))?;
 
-        if let Err(error) = channel
+        let publish = channel
             .basic_publish(
                 &self.exchange,
                 &routing_key,
@@ -81,16 +75,33 @@ impl EventSink for AmqpSink {
                     .with_content_type("application/json".into())
                     .with_delivery_mode(2), // persistent
             )
-            .await
-        {
-            warn!(
-                exchange = %self.exchange,
-                %routing_key,
-                %error,
-                "AMQP publish failed, dropping event"
-            );
-            // Clear cached channel so next emit reconnects
-            *self.channel.lock().await = None;
+            .await;
+        let confirm = match publish {
+            Ok(confirm) => confirm,
+            Err(error) => {
+                *self.channel.lock().await = None;
+                return Err(format!("AMQP publish to {}: {error}", self.exchange));
+            }
+        };
+        match confirm.await {
+            Ok(Confirmation::Ack(None)) => Ok(()),
+            Ok(Confirmation::Ack(Some(_))) => Err(format!(
+                "AMQP publish to {} was returned as unroutable",
+                self.exchange
+            )),
+            Ok(Confirmation::Nack(_)) => Err(format!(
+                "AMQP broker negatively acknowledged publish to {}",
+                self.exchange
+            )),
+            Ok(Confirmation::NotRequested) => {
+                Err("AMQP publisher confirms are disabled".to_string())
+            }
+            Err(error) => {
+                // Clear cached channel so the retry reconnects.
+                let message = format!("AMQP confirmation for {}: {error}", self.exchange);
+                *self.channel.lock().await = None;
+                Err(message)
+            }
         }
     }
 }

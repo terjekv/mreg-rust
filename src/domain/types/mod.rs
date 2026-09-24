@@ -1,28 +1,64 @@
 mod addresses;
+mod descriptions;
 mod dns_names;
 mod encoded;
 mod identifiers;
 mod numerics;
+mod policy;
 mod record_values;
 mod update_field;
 
 pub use addresses::*;
+pub use descriptions::*;
 pub use dns_names::*;
 pub use encoded::*;
 pub use identifiers::*;
 pub use numerics::*;
+pub use policy::*;
 pub use record_values::record_type_names;
 pub use record_values::*;
 pub use update_field::*;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::{
         BacnetIdentifier, CidrValue, CommunityName, DnsCharacterString, DnsName, DomainNameValue,
         EmailAddressValue, HexEncodedValue, HostGroupName, Hostname, IpAddressValue, Ipv4AddrValue,
-        Ipv6AddrValue, LabelName, NetworkPolicyName, RecordTypeName, SerialNumber, SoaSeconds, Ttl,
-        VlanId,
+        Ipv6AddrValue, LabelName, MacAddressKind, MacAddressValue, NetworkPolicyName,
+        RecordTypeName, SerialNumber, SoaSeconds, Ttl, VlanId,
     };
+
+    #[rstest]
+    #[case("aa:bb:cc:dd:ee:ff", MacAddressKind::Eui48)]
+    #[case("aa:bb:cc:dd:ee:ff:00:11", MacAddressKind::Eui64)]
+    fn mac_address_distinguishes_eui_kind(#[case] raw: &str, #[case] expected: MacAddressKind) {
+        let value = MacAddressValue::new(raw).expect("MAC address should parse");
+        assert_eq!(value.kind(), expected);
+    }
+
+    #[rstest]
+    #[case("aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF")]
+    #[case("aa-bb-cc-dd-ee-ff-00-11", "AA:BB:CC:DD:EE:FF:00:11")]
+    #[case("\u{2003}aa:bb:cc:dd:ee:ff\u{2003}", "AA:BB:CC:DD:EE:FF")]
+    fn mac_address_normalizes_both_lengths(#[case] raw: &str, #[case] expected: &str) {
+        let value = MacAddressValue::new(raw).expect("MAC address should parse");
+        assert_eq!(value.as_str(), expected);
+    }
+
+    #[rstest]
+    #[case("aa:bb:cc:dd:ee:ff", true)]
+    #[case("aa:bb:cc:dd:ee:ff:00:11", false)]
+    fn mac_address_exposes_only_eui48_as_ethernet(#[case] raw: &str, #[case] expected: bool) {
+        let value = MacAddressValue::new(raw).expect("MAC address should parse");
+        assert_eq!(value.as_eui48().is_some(), expected);
+    }
+
+    #[test]
+    fn mac_address_rejects_unsupported_length() {
+        assert!(MacAddressValue::new("aa:bb:cc:dd:ee:ff:00").is_err());
+    }
 
     #[test]
     fn dns_names_are_canonicalized_to_lowercase_without_trailing_dot() {
@@ -103,8 +139,8 @@ mod tests {
     }
 
     #[test]
-    fn bacnet_identifier_rejects_zero() {
-        assert!(BacnetIdentifier::new(0).is_err());
+    fn bacnet_identifier_accepts_zero() {
+        assert!(BacnetIdentifier::new(0).is_ok());
     }
 
     #[test]
@@ -115,26 +151,26 @@ mod tests {
     #[test]
     fn serial_next_rfc1912_increments_within_day() {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 30).unwrap();
-        let serial = SerialNumber::new(202603300000).expect("serial");
+        let serial = SerialNumber::new(2026033000).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603300001);
+        assert_eq!(next.as_u32(), 2026033001);
     }
 
     #[test]
     fn serial_next_rfc1912_rolls_to_new_day() {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let serial = SerialNumber::new(202603300005).expect("serial");
+        let serial = SerialNumber::new(2026033005).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603310000);
+        assert_eq!(next.as_u32(), 2026033100);
     }
 
     #[test]
     fn serial_next_rfc1912_handles_clock_skew() {
         // Serial is ahead of today (clock went backwards)
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 28).unwrap();
-        let serial = SerialNumber::new(202603300005).expect("serial");
+        let serial = SerialNumber::new(2026033005).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603300006);
+        assert_eq!(next.as_u32(), 2026033006);
     }
 
     #[test]
@@ -143,7 +179,7 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 30).unwrap();
         let serial = SerialNumber::new(1).expect("serial");
         let next = serial.next_rfc1912(today).expect("next serial");
-        assert_eq!(next.as_u64(), 202603300000);
+        assert_eq!(next.as_u32(), 2026033000);
     }
 
     #[test]
@@ -227,8 +263,8 @@ mod tests {
     }
 
     #[test]
-    fn serial_rejects_overflow() {
-        assert!(SerialNumber::new(i64::MAX as u64 + 1).is_err());
+    fn serial_arithmetic_wraps_at_u32_max() {
+        assert_eq!(SerialNumber::new(u32::MAX).unwrap().next().as_u32(), 0);
     }
 
     #[test]
@@ -257,15 +293,15 @@ mod tests {
 
     #[test]
     fn vlan_id_accepts_valid_values() {
-        let value = VlanId::new(0).expect("0 should be valid");
-        assert_eq!(value.as_u32(), 0);
         let value = VlanId::new(4094).expect("4094 should be valid");
         assert_eq!(value.as_u32(), 4094);
     }
 
-    #[test]
-    fn vlan_id_rejects_out_of_range() {
-        assert!(VlanId::new(4095).is_err());
-        assert!(VlanId::new(5000).is_err());
+    #[rstest::rstest]
+    #[case(0)]
+    #[case(4095)]
+    #[case(5000)]
+    fn vlan_id_rejects_out_of_range(#[case] value: u32) {
+        assert!(VlanId::new(value).is_err());
     }
 }
