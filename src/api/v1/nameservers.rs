@@ -33,14 +33,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateNameServerRequest {
-    name: String,
-    ttl: Option<u32>,
+    #[schema(value_type = String)]
+    name: DnsName,
+    #[schema(value_type = Option<u32>)]
+    ttl: Option<Ttl>,
 }
 
 impl CreateNameServerRequest {
     fn into_command(self) -> Result<CreateNameServer, AppError> {
-        let ttl = self.ttl.map(Ttl::new).transpose()?;
-        Ok(CreateNameServer::new(DnsName::new(self.name)?, ttl))
+        let ttl = self.ttl;
+        Ok(CreateNameServer::new(self.name, ttl))
     }
 }
 
@@ -125,10 +127,10 @@ pub(crate) async fn create_nameserver(
         &req,
         authz::actions::nameserver::CREATE,
         authz::actions::resource_kinds::NAMESERVER,
-        request.name.clone(),
+        &request.name,
     );
     if let Some(ttl) = request.ttl {
-        authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
+        authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl.as_u32())));
     }
     require(&state, authz).await?;
     let nameserver = state
@@ -155,9 +157,9 @@ pub(crate) async fn create_nameserver(
 pub(crate) async fn get_nameserver(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<DnsName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = DnsName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -176,7 +178,7 @@ pub(crate) async fn get_nameserver(
 pub struct UpdateNameServerRequest {
     #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    ttl: UpdateField<u32>,
+    ttl: UpdateField<Ttl>,
 }
 
 /// Update a nameserver
@@ -195,10 +197,10 @@ pub struct UpdateNameServerRequest {
 pub(crate) async fn update_nameserver(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<DnsName>,
     payload: web::Json<UpdateNameServerRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let name = DnsName::new(path.into_inner())?;
+    let name = path.into_inner();
     let request = payload.into_inner();
     let mut authz = authz_request(
         &req,
@@ -208,7 +210,7 @@ pub(crate) async fn update_nameserver(
     );
     match &request.ttl {
         UpdateField::Set(ttl) => {
-            authz = authz.attr("new_ttl", AttrValue::Long(i64::from(*ttl)));
+            authz = authz.attr("new_ttl", AttrValue::Long(i64::from(ttl.as_u32())));
         }
         UpdateField::Clear => {
             authz = authz.attr("clear_ttl", AttrValue::Bool(true));
@@ -216,7 +218,7 @@ pub(crate) async fn update_nameserver(
         UpdateField::Unchanged => {}
     }
     require(&state, authz).await?;
-    let ttl = request.ttl.try_map(Ttl::new)?;
+    let ttl = request.ttl;
     let command = UpdateNameServer { ttl };
     let nameserver = state.services.nameservers().update(&name, command).await?;
     Ok(HttpResponse::Ok().json(NameServerResponse::from_domain(&nameserver)))
@@ -237,9 +239,9 @@ pub(crate) async fn update_nameserver(
 pub(crate) async fn delete_nameserver(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<DnsName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = DnsName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

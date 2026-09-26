@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (Rust API):** pagination requests now have private fields and use validated `PageLimit` values. Replace `PageRequest` literals and `deserialize_page_limit` with `PageRequest::new` and `Option<PageLimit>`; use `PageRequest::all()` for trusted internal enumeration. Host-policy membership APIs and role membership vectors now require `Hostname`, `LabelName`, and `HostPolicyName` instead of strings.
+- **Breaking (validation):** constrained DNS, inventory, and policy request values now validate and normalize during JSON/path/query extraction, before handler authorization or lookup. Clients must handle HTTP 400 for invalid values rather than relying on later 403/404 responses, and authorization policies must match canonical names and addresses. Valid JSON and PATCH shapes remain compatible. Persisted invalid import batches, record schemas, and oversized raw RDATA must be corrected before loading; no database schema migration is required.
 - **Breaking (Rust API):** `MacAddressValue::as_inner()` now returns `macaddr::MacAddr` instead of `macaddr::MacAddr6` so it can represent both EUI-48 and EUI-64 values. Callers that require a fixed width must migrate to `as_eui48()` or `as_eui64()` and handle `None`; callers that support both widths can match on `MacAddr::V6` and `MacAddr::V8`.
 - **Breaking (API and database):** SOA record TTL is now `soa_record_ttl`; `negative_ttl` is only the RFC 2308 SOA minimum/negative-cache value. API clients and export templates must send/read both fields, and operators must run migration `00000000000003_enforce_domain_invariants` before starting the new server.
 - **Breaking (API and Rust API):** DNS SOA serials are unsigned 32-bit RFC 1982 values. Values outside `0..=4294967295` are rejected; the migration reduces legacy oversized values modulo 2^32 and secondaries must be forced to perform a full refresh after upgrade.
@@ -41,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking (pagination API):** public page sizes, including `18446744073709551615`, now remain capped at 1000; clients using that value for unbounded listing must follow pagination cursors. Internal fetch-all requests remain explicit.
+- Closed constructor-validation bypasses in deserialization of import batches/items, record field/type schemas, and raw RDATA.
 - Fixed attachment-based IP imports in both storage backends: derive the host from the attachment, infer its network only for automatic allocation, and preserve the exact attachment when assigning an address. Direct IP imports also retain MAC addresses consistently across backends.
 - Enforced RFC-correct CNAME/DNAME exclusivity and alias graphs, null MX semantics, RRset-wide TTL updates, authoritative owner containment, strict delegations, and zone serial bumps for generated records.
 - Added canonical DNS master-file rendering for all 25 built-in record types, including absolute domain names, escaped character strings, LOC, DNSSEC records, SVCB/HTTPS parameters, and RFC 3597 raw RDATA.

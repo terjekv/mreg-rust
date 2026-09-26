@@ -12,7 +12,7 @@ use crate::{
     domain::{
         filters::NetworkPolicyFilter,
         network_policy::NetworkPolicy,
-        pagination::{PageRequest, PageResponse, SortDirection},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::NetworkPolicyName,
     },
     errors::AppError,
@@ -36,11 +36,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct PolicyQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     search: Option<String>,
@@ -50,12 +46,7 @@ pub struct PolicyQuery {
 
 impl PolicyQuery {
     fn into_parts(self) -> Result<(PageRequest, NetworkPolicyFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let mut filter = NetworkPolicyFilter::from_query_params(self.filters)?;
         filter.search = self.search;
         Ok((page, filter))
@@ -64,7 +55,8 @@ impl PolicyQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateNetworkPolicyRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: NetworkPolicyName,
     description: String,
     community_template_pattern: Option<String>,
 }
@@ -72,7 +64,7 @@ pub struct CreateNetworkPolicyRequest {
 impl CreateNetworkPolicyRequest {
     fn into_command(self) -> Result<crate::domain::network_policy::CreateNetworkPolicy, AppError> {
         crate::domain::network_policy::CreateNetworkPolicy::new(
-            NetworkPolicyName::new(self.name)?,
+            self.name,
             self.description,
             self.community_template_pattern,
         )
@@ -162,7 +154,7 @@ pub(crate) async fn create_network_policy(
         &req,
         authz::actions::network_policy::CREATE,
         authz::actions::resource_kinds::NETWORK_POLICY,
-        request.name.clone(),
+        &request.name,
     )
     .attr(
         "description",
@@ -198,9 +190,9 @@ pub(crate) async fn create_network_policy(
 pub(crate) async fn get_network_policy(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<NetworkPolicyName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = NetworkPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -230,9 +222,9 @@ pub(crate) async fn get_network_policy(
 pub(crate) async fn delete_network_policy(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<NetworkPolicyName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = NetworkPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

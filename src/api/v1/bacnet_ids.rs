@@ -9,9 +9,9 @@ use crate::{
     AppState,
     authz::{self, AttrValue},
     domain::{
-        bacnet::BacnetIdAssignment,
+        bacnet::{BacnetIdAssignment, CreateBacnetIdAssignment},
         filters::BacnetIdFilter,
-        pagination::{PageRequest, PageResponse, SortDirection},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{BacnetIdentifier, Hostname},
     },
     errors::AppError,
@@ -35,11 +35,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct BacnetQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     #[serde(flatten)]
@@ -48,12 +44,7 @@ pub struct BacnetQuery {
 
 impl BacnetQuery {
     fn into_parts(self) -> Result<(PageRequest, BacnetIdFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let filter = BacnetIdFilter::from_query_params(self.filters)?;
         Ok((page, filter))
     }
@@ -61,15 +52,17 @@ impl BacnetQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateBacnetRequest {
-    bacnet_id: u32,
-    host_name: String,
+    #[schema(value_type = u32)]
+    bacnet_id: BacnetIdentifier,
+    #[schema(value_type = String)]
+    host_name: Hostname,
 }
 
 impl CreateBacnetRequest {
-    fn into_command(self) -> Result<crate::domain::bacnet::CreateBacnetIdAssignment, AppError> {
-        Ok(crate::domain::bacnet::CreateBacnetIdAssignment::new(
-            BacnetIdentifier::new(self.bacnet_id)?,
-            Hostname::new(self.host_name)?,
+    fn into_command(self) -> Result<CreateBacnetIdAssignment, AppError> {
+        Ok(CreateBacnetIdAssignment::new(
+            self.bacnet_id,
+            self.host_name,
         ))
     }
 }
@@ -148,10 +141,16 @@ pub(crate) async fn create_bacnet_id(
             &req,
             authz::actions::bacnet_id::CREATE,
             authz::actions::resource_kinds::BACNET_ID,
-            request.bacnet_id.to_string(),
+            request.bacnet_id.as_u32().to_string(),
         )
-        .attr("bacnet_id", AttrValue::Long(i64::from(request.bacnet_id)))
-        .attr("host_name", AttrValue::String(request.host_name.clone())),
+        .attr(
+            "bacnet_id",
+            AttrValue::Long(i64::from(request.bacnet_id.as_u32())),
+        )
+        .attr(
+            "host_name",
+            AttrValue::String(request.host_name.to_string()),
+        ),
     )
     .await?;
     let item = state

@@ -318,7 +318,7 @@ pub(crate) async fn create_export_template(
             &req,
             authz::actions::export_template::CREATE,
             authz::actions::resource_kinds::EXPORT_TEMPLATE,
-            request.name.clone(),
+            &request.name,
         )
         .attr("engine", AttrValue::String(request.engine.clone()))
         .attr("scope", AttrValue::String(request.scope.clone())),

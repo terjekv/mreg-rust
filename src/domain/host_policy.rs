@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::domain::types::HostPolicyName;
+use crate::domain::types::{HostPolicyName, Hostname, LabelName};
 
 /// A single policy atom that can be assigned to roles.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,9 +88,9 @@ pub struct HostPolicyRole {
     id: Uuid,
     name: HostPolicyName,
     description: String,
-    atoms: Vec<String>,
-    hosts: Vec<String>,
-    labels: Vec<String>,
+    atoms: Vec<HostPolicyName>,
+    hosts: Vec<Hostname>,
+    labels: Vec<LabelName>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -102,9 +102,9 @@ impl HostPolicyRole {
         id: Uuid,
         name: HostPolicyName,
         description: String,
-        atoms: Vec<String>,
-        hosts: Vec<String>,
-        labels: Vec<String>,
+        atoms: Vec<HostPolicyName>,
+        hosts: Vec<Hostname>,
+        labels: Vec<LabelName>,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Self {
@@ -132,15 +132,15 @@ impl HostPolicyRole {
         &self.description
     }
 
-    pub fn atoms(&self) -> &[String] {
+    pub fn atoms(&self) -> &[HostPolicyName] {
         &self.atoms
     }
 
-    pub fn hosts(&self) -> &[String] {
+    pub fn hosts(&self) -> &[Hostname] {
         &self.hosts
     }
 
-    pub fn labels(&self) -> &[String] {
+    pub fn labels(&self) -> &[LabelName] {
         &self.labels
     }
 

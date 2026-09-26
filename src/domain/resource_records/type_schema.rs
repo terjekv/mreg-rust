@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use minijinja::Environment;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -74,7 +74,7 @@ impl RecordRfcProfile {
 }
 
 /// Validation and rendering schema for a record type, including fields and behavior flags.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct RecordTypeSchema {
     owner_kind: RecordOwnerKind,
     cardinality: RecordCardinality,
@@ -82,6 +82,31 @@ pub struct RecordTypeSchema {
     fields: Vec<RecordFieldSchema>,
     behavior_flags: Value,
     render_template: Option<String>,
+}
+
+// Deserialize through the constructor so persisted JSON cannot bypass invariants.
+impl<'de> Deserialize<'de> for RecordTypeSchema {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            owner_kind: RecordOwnerKind,
+            cardinality: RecordCardinality,
+            zone_bound: bool,
+            fields: Vec<RecordFieldSchema>,
+            behavior_flags: Value,
+            render_template: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(
+            raw.owner_kind,
+            raw.cardinality,
+            raw.zone_bound,
+            raw.fields,
+            raw.behavior_flags,
+            raw.render_template,
+        )
+        .map_err(D::Error::custom)
+    }
 }
 
 impl RecordTypeSchema {

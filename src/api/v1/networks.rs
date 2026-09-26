@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
 use chrono::{DateTime, Utc};
@@ -12,7 +12,7 @@ use crate::{
     domain::{
         filters::NetworkFilter,
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
-        pagination::{PageRequest, PageResponse, SortDirection},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{CidrValue, IpAddressValue, ReservedCount, UpdateField, VlanId},
     },
     errors::AppError,
@@ -66,16 +66,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 pub struct ListNetworksQuery {
     // Pagination + sort
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     // Special filter fields
     search: Option<String>,
-    contains_ip: Option<String>,
+    contains_ip: Option<IpAddressValue>,
     // Operator-based filter params
     #[serde(flatten)]
     filters: HashMap<String, String>,
@@ -83,25 +79,22 @@ pub struct ListNetworksQuery {
 
 impl ListNetworksQuery {
     fn into_parts(self) -> Result<(PageRequest, NetworkFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let mut filter = NetworkFilter::from_query_params(self.filters)?;
         filter.search = self.search;
-        filter.contains_ip = self.contains_ip.map(IpAddressValue::new).transpose()?;
+        filter.contains_ip = self.contains_ip;
         Ok((page, filter))
     }
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateNetworkRequest {
-    cidr: String,
+    #[schema(value_type = String)]
+    cidr: CidrValue,
     description: String,
     #[serde(default)]
-    vlan: Option<u32>,
+    #[schema(value_type = Option<u32>)]
+    vlan: Option<VlanId>,
     #[serde(default)]
     dns_delegated: bool,
     #[serde(default)]
@@ -111,20 +104,21 @@ pub struct CreateNetworkRequest {
     #[serde(default)]
     frozen: bool,
     #[serde(default = "default_reserved")]
-    reserved: u32,
+    #[schema(value_type = u32)]
+    reserved: ReservedCount,
 }
 
 impl CreateNetworkRequest {
     fn into_command(self) -> Result<CreateNetwork, AppError> {
         CreateNetwork::new_full(
-            CidrValue::new(self.cidr)?,
+            self.cidr,
             self.description,
-            self.vlan.map(VlanId::new).transpose()?,
+            self.vlan,
             self.dns_delegated,
             self.category,
             self.location,
             self.frozen,
-            ReservedCount::new(self.reserved)?,
+            self.reserved,
         )
     }
 }
@@ -134,12 +128,13 @@ pub struct UpdateNetworkRequest {
     description: Option<String>,
     #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    vlan: UpdateField<u32>,
+    vlan: UpdateField<VlanId>,
     dns_delegated: Option<bool>,
     category: Option<String>,
     location: Option<String>,
     frozen: Option<bool>,
-    reserved: Option<u32>,
+    #[schema(value_type = Option<u32>)]
+    reserved: Option<ReservedCount>,
 }
 
 fn build_network_update_authz(
@@ -157,7 +152,7 @@ fn build_network_update_authz(
         authz::actions::network::UPDATE_VLAN,
         "new_vlan",
         "clear_vlan",
-        |v| AttrValue::Long(i64::from(*v)),
+        |v| AttrValue::Long(i64::from(v.as_u32())),
     )
     .field_bool(
         request.dns_delegated,
@@ -180,7 +175,7 @@ fn build_network_update_authz(
         "new_frozen",
     )
     .field_u32(
-        request.reserved,
+        request.reserved.map(ReservedCount::as_u32),
         authz::actions::network::UPDATE_RESERVED,
         "new_reserved",
     );
@@ -194,21 +189,20 @@ pub struct UnusedAddressesQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateExcludedRangeRequest {
-    network: String,
-    start_ip: String,
-    end_ip: String,
+    #[schema(value_type = String)]
+    network: CidrValue,
+    #[schema(value_type = String)]
+    start_ip: IpAddressValue,
+    #[schema(value_type = String)]
+    end_ip: IpAddressValue,
     description: String,
 }
 
 impl CreateExcludedRangeRequest {
     fn into_parts(self) -> Result<(CidrValue, CreateExcludedRange), AppError> {
         Ok((
-            CidrValue::new(self.network)?,
-            CreateExcludedRange::new(
-                IpAddressValue::new(self.start_ip)?,
-                IpAddressValue::new(self.end_ip)?,
-                self.description,
-            )?,
+            self.network,
+            CreateExcludedRange::new(self.start_ip, self.end_ip, self.description)?,
         ))
     }
 }
@@ -379,8 +373,7 @@ async fn build_network_response_impl(
         },
     );
 
-    let mut grouped: std::collections::BTreeMap<Uuid, NetworkHostInventoryResponse> =
-        std::collections::BTreeMap::new();
+    let mut grouped: BTreeMap<Uuid, NetworkHostInventoryResponse> = BTreeMap::new();
     for attachment in &attachments {
         grouped
             .entry(attachment.host_id())
@@ -502,16 +495,19 @@ pub(crate) async fn create_network(
         &req,
         authz::actions::network::CREATE,
         authz::actions::resource_kinds::NETWORK,
-        request.cidr.clone(),
+        &request.cidr,
     )
-    .attr("cidr", AttrValue::Ip(request.cidr.clone()))
+    .attr("cidr", AttrValue::Ip(request.cidr.to_string()))
     .attr("category", AttrValue::String(request.category.clone()))
     .attr("location", AttrValue::String(request.location.clone()))
     .attr("dns_delegated", AttrValue::Bool(request.dns_delegated))
     .attr("frozen", AttrValue::Bool(request.frozen))
-    .attr("reserved", AttrValue::Long(i64::from(request.reserved)));
+    .attr(
+        "reserved",
+        AttrValue::Long(i64::from(request.reserved.as_u32())),
+    );
     if let Some(vlan) = request.vlan {
-        authz = authz.attr("vlan", AttrValue::Long(i64::from(vlan)));
+        authz = authz.attr("vlan", AttrValue::Long(i64::from(vlan.as_u32())));
     }
     require(&state, authz).await?;
     let network = state
@@ -538,9 +534,9 @@ pub(crate) async fn create_network(
 pub(crate) async fn get_network(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<CidrValue>,
 ) -> Result<HttpResponse, AppError> {
-    let cidr = CidrValue::new(path.into_inner())?;
+    let cidr = path.into_inner();
     require(
         &state,
         authz_request(
@@ -571,21 +567,21 @@ pub(crate) async fn get_network(
 pub(crate) async fn update_network(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<CidrValue>,
     payload: web::Json<UpdateNetworkRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let cidr = CidrValue::new(path.into_inner())?;
+    let cidr = path.into_inner();
     let request = payload.into_inner();
     let authz_requests = build_network_update_authz(&req, &cidr.as_str(), &request);
     require_all(&state, authz_requests).await?;
     let command = UpdateNetwork {
         description: request.description,
-        vlan: request.vlan.try_map(VlanId::new)?,
+        vlan: request.vlan,
         dns_delegated: request.dns_delegated,
         category: request.category,
         location: request.location,
         frozen: request.frozen,
-        reserved: request.reserved.map(ReservedCount::new).transpose()?,
+        reserved: request.reserved,
     };
     let network = state.services.networks().update(&cidr, command).await?;
     Ok(HttpResponse::Ok().json(build_network_response(state.get_ref(), &network, false).await?))
@@ -605,9 +601,9 @@ pub(crate) async fn update_network(
 pub(crate) async fn list_used_addresses(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<CidrValue>,
 ) -> Result<HttpResponse, AppError> {
-    let cidr = CidrValue::new(path.into_inner())?;
+    let cidr = path.into_inner();
     require(
         &state,
         authz_request(
@@ -640,10 +636,10 @@ pub(crate) async fn list_used_addresses(
 pub(crate) async fn list_unused_addresses(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<CidrValue>,
     query: web::Query<UnusedAddressesQuery>,
 ) -> Result<HttpResponse, AppError> {
-    let cidr = CidrValue::new(path.into_inner())?;
+    let cidr = path.into_inner();
     let mut authz = authz_request(
         &req,
         authz::actions::network::ADDRESS_LIST_UNUSED,
@@ -678,9 +674,9 @@ pub(crate) async fn list_unused_addresses(
 pub(crate) async fn delete_network(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<CidrValue>,
 ) -> Result<HttpResponse, AppError> {
-    let cidr = CidrValue::new(path.into_inner())?;
+    let cidr = path.into_inner();
     require(
         &state,
         authz_request(
@@ -709,9 +705,9 @@ pub(crate) async fn delete_network(
 pub(crate) async fn list_excluded_ranges(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<CidrValue>,
 ) -> Result<HttpResponse, AppError> {
-    let cidr = CidrValue::new(path.into_inner())?;
+    let cidr = path.into_inner();
     require(
         &state,
         authz_request(
@@ -762,9 +758,9 @@ pub(crate) async fn create_excluded_range(
                 request.network, request.start_ip, request.end_ip
             ),
         )
-        .attr("network", AttrValue::Ip(request.network.clone()))
-        .attr("start_ip", AttrValue::Ip(request.start_ip.clone()))
-        .attr("end_ip", AttrValue::Ip(request.end_ip.clone()))
+        .attr("network", AttrValue::Ip(request.network.to_string()))
+        .attr("start_ip", AttrValue::Ip(request.start_ip.to_string()))
+        .attr("end_ip", AttrValue::Ip(request.end_ip.to_string()))
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
@@ -780,8 +776,8 @@ pub(crate) async fn create_excluded_range(
     Ok(HttpResponse::Created().json(ExcludedRangeResponse::from_domain(&range)))
 }
 
-fn default_reserved() -> u32 {
-    3
+fn default_reserved() -> ReservedCount {
+    ReservedCount::new(3).expect("valid default reserved count")
 }
 
 #[cfg(test)]

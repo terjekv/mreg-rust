@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
@@ -239,7 +240,8 @@ impl IpAddressAssignment {
 }
 
 /// Policy for how an IP address is selected from a network during auto-allocation.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AllocationPolicy {
     /// Select the first available address in the network (lowest usable).
     #[default]

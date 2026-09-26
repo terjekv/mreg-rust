@@ -9,7 +9,7 @@ use crate::{
             UpdateHostPolicyAtom, UpdateHostPolicyRole,
         },
         pagination::{Page, PageRequest},
-        types::{HostPolicyName, Hostname},
+        types::{HostPolicyName, Hostname, LabelName},
     },
     errors::AppError,
     storage::HostPolicyStore,
@@ -111,7 +111,7 @@ pub(super) fn delete_atom_in_state(
 ) -> Result<(), AppError> {
     // Check if any role references this atom (RESTRICT behavior)
     for role in state.host_policy_roles.values() {
-        if role.atoms().iter().any(|a| a == name.as_str()) {
+        if role.atoms().contains(name) {
             return Err(AppError::conflict(format!(
                 "host policy atom '{}' is in use by role '{}'",
                 name.as_str(),
@@ -152,7 +152,7 @@ pub(super) fn list_roles_for_host_in_state(
     let mut items: Vec<HostPolicyRole> = state
         .host_policy_roles
         .values()
-        .filter(|role| role.hosts().iter().any(|value| value == host_name.as_str()))
+        .filter(|role| role.hosts().contains(host_name))
         .cloned()
         .collect();
     items.sort_by(|left, right| left.name().as_str().cmp(right.name().as_str()));
@@ -293,8 +293,7 @@ pub(super) fn add_atom_to_role_in_state(
                 role_name.as_str()
             ))
         })?;
-    let atom_str = atom_name.as_str().to_string();
-    if role.atoms().contains(&atom_str) {
+    if role.atoms().contains(atom_name) {
         return Err(AppError::conflict(format!(
             "atom '{}' is already in role '{}'",
             atom_name.as_str(),
@@ -302,7 +301,7 @@ pub(super) fn add_atom_to_role_in_state(
         )));
     }
     let mut atoms = role.atoms().to_vec();
-    atoms.push(atom_str);
+    atoms.push(atom_name.clone());
     let updated = HostPolicyRole::restore(
         role.id(),
         role.name().clone(),
@@ -334,18 +333,17 @@ pub(super) fn remove_atom_from_role_in_state(
                 role_name.as_str()
             ))
         })?;
-    let atom_str = atom_name.as_str().to_string();
-    if !role.atoms().contains(&atom_str) {
+    if !role.atoms().contains(atom_name) {
         return Err(AppError::not_found(format!(
             "atom '{}' is not in role '{}'",
             atom_name.as_str(),
             role_name.as_str()
         )));
     }
-    let atoms: Vec<String> = role
+    let atoms: Vec<_> = role
         .atoms()
         .iter()
-        .filter(|a| a.as_str() != atom_name.as_str())
+        .filter(|a| *a != atom_name)
         .cloned()
         .collect();
     let updated = HostPolicyRole::restore(
@@ -367,10 +365,10 @@ pub(super) fn remove_atom_from_role_in_state(
 pub(super) fn add_host_to_role_in_state(
     state: &mut MemoryState,
     role_name: &HostPolicyName,
-    host_name: &str,
+    host_name: &Hostname,
 ) -> Result<(), AppError> {
     // Verify host exists
-    if !state.hosts.contains_key(host_name) {
+    if !state.hosts.contains_key(host_name.as_str()) {
         return Err(AppError::not_found(format!(
             "host '{}' was not found",
             host_name
@@ -386,8 +384,7 @@ pub(super) fn add_host_to_role_in_state(
                 role_name.as_str()
             ))
         })?;
-    let host_str = host_name.to_string();
-    if role.hosts().contains(&host_str) {
+    if role.hosts().contains(host_name) {
         return Err(AppError::conflict(format!(
             "host '{}' is already in role '{}'",
             host_name,
@@ -395,7 +392,7 @@ pub(super) fn add_host_to_role_in_state(
         )));
     }
     let mut hosts = role.hosts().to_vec();
-    hosts.push(host_str);
+    hosts.push(host_name.clone());
     let updated = HostPolicyRole::restore(
         role.id(),
         role.name().clone(),
@@ -415,7 +412,7 @@ pub(super) fn add_host_to_role_in_state(
 pub(super) fn remove_host_from_role_in_state(
     state: &mut MemoryState,
     role_name: &HostPolicyName,
-    host_name: &str,
+    host_name: &Hostname,
 ) -> Result<(), AppError> {
     let role = state
         .host_policy_roles
@@ -427,18 +424,17 @@ pub(super) fn remove_host_from_role_in_state(
                 role_name.as_str()
             ))
         })?;
-    let host_str = host_name.to_string();
-    if !role.hosts().contains(&host_str) {
+    if !role.hosts().contains(host_name) {
         return Err(AppError::not_found(format!(
             "host '{}' is not in role '{}'",
             host_name,
             role_name.as_str()
         )));
     }
-    let hosts: Vec<String> = role
+    let hosts: Vec<_> = role
         .hosts()
         .iter()
-        .filter(|h| h.as_str() != host_name)
+        .filter(|h| *h != host_name)
         .cloned()
         .collect();
     let updated = HostPolicyRole::restore(
@@ -460,10 +456,10 @@ pub(super) fn remove_host_from_role_in_state(
 pub(super) fn add_label_to_role_in_state(
     state: &mut MemoryState,
     role_name: &HostPolicyName,
-    label_name: &str,
+    label_name: &LabelName,
 ) -> Result<(), AppError> {
     // Verify label exists
-    if !state.labels.contains_key(label_name) {
+    if !state.labels.contains_key(label_name.as_str()) {
         return Err(AppError::not_found(format!(
             "label '{}' was not found",
             label_name
@@ -479,8 +475,7 @@ pub(super) fn add_label_to_role_in_state(
                 role_name.as_str()
             ))
         })?;
-    let label_str = label_name.to_string();
-    if role.labels().contains(&label_str) {
+    if role.labels().contains(label_name) {
         return Err(AppError::conflict(format!(
             "label '{}' is already in role '{}'",
             label_name,
@@ -488,7 +483,7 @@ pub(super) fn add_label_to_role_in_state(
         )));
     }
     let mut labels = role.labels().to_vec();
-    labels.push(label_str);
+    labels.push(label_name.clone());
     let updated = HostPolicyRole::restore(
         role.id(),
         role.name().clone(),
@@ -508,7 +503,7 @@ pub(super) fn add_label_to_role_in_state(
 pub(super) fn remove_label_from_role_in_state(
     state: &mut MemoryState,
     role_name: &HostPolicyName,
-    label_name: &str,
+    label_name: &LabelName,
 ) -> Result<(), AppError> {
     let role = state
         .host_policy_roles
@@ -520,18 +515,17 @@ pub(super) fn remove_label_from_role_in_state(
                 role_name.as_str()
             ))
         })?;
-    let label_str = label_name.to_string();
-    if !role.labels().contains(&label_str) {
+    if !role.labels().contains(label_name) {
         return Err(AppError::not_found(format!(
             "label '{}' is not in role '{}'",
             label_name,
             role_name.as_str()
         )));
     }
-    let labels: Vec<String> = role
+    let labels: Vec<_> = role
         .labels()
         .iter()
-        .filter(|l| l.as_str() != label_name)
+        .filter(|l| *l != label_name)
         .cloned()
         .collect();
     let updated = HostPolicyRole::restore(
@@ -647,7 +641,7 @@ impl HostPolicyStore for MemoryStorage {
     async fn add_host_to_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         let mut state = self.state.write().await;
         add_host_to_role_in_state(&mut state, role_name, host_name)
@@ -656,7 +650,7 @@ impl HostPolicyStore for MemoryStorage {
     async fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         let mut state = self.state.write().await;
         remove_host_from_role_in_state(&mut state, role_name, host_name)
@@ -665,7 +659,7 @@ impl HostPolicyStore for MemoryStorage {
     async fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         let mut state = self.state.write().await;
         add_label_to_role_in_state(&mut state, role_name, label_name)
@@ -674,7 +668,7 @@ impl HostPolicyStore for MemoryStorage {
     async fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         let mut state = self.state.write().await;
         remove_label_from_role_in_state(&mut state, role_name, label_name)

@@ -11,8 +11,8 @@ use crate::{
     authz::{self, AttrValue},
     domain::{
         filters::HostContactFilter,
-        host_contact::HostContact,
-        pagination::{PageRequest, PageResponse, SortDirection},
+        host_contact::{CreateHostContact, HostContact},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{EmailAddressValue, Hostname},
     },
     errors::AppError,
@@ -36,11 +36,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct HostContactQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     search: Option<String>,
@@ -50,12 +46,7 @@ pub struct HostContactQuery {
 
 impl HostContactQuery {
     fn into_parts(self) -> Result<(PageRequest, HostContactFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let mut filter = HostContactFilter::from_query_params(self.filters)?;
         filter.search = self.search;
         Ok((page, filter))
@@ -64,21 +55,20 @@ impl HostContactQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateHostContactRequest {
-    email: String,
+    #[schema(value_type = String)]
+    email: EmailAddressValue,
     display_name: Option<String>,
     #[serde(default)]
-    hosts: Vec<String>,
+    #[schema(value_type = Vec<String>)]
+    hosts: Vec<Hostname>,
 }
 
 impl CreateHostContactRequest {
-    fn into_command(self) -> Result<crate::domain::host_contact::CreateHostContact, AppError> {
-        Ok(crate::domain::host_contact::CreateHostContact::new(
-            EmailAddressValue::new(self.email)?,
+    fn into_command(self) -> Result<CreateHostContact, AppError> {
+        Ok(CreateHostContact::new(
+            self.email,
             self.display_name,
-            self.hosts
-                .into_iter()
-                .map(Hostname::new)
-                .collect::<Result<Vec<_>, _>>()?,
+            self.hosts,
         ))
     }
 }
@@ -168,8 +158,8 @@ pub(crate) async fn create_host_contact(
         authz::actions::resource_kinds::HOST_CONTACT,
         request.email.clone(),
     )
-    .attr("email", AttrValue::String(request.email.clone()))
-    .attr("hosts", string_set(request.hosts.clone()));
+    .attr("email", AttrValue::String(request.email.to_string()))
+    .attr("hosts", string_set(&request.hosts));
     if let Some(display_name) = &request.display_name {
         authz = authz.attr("display_name", AttrValue::String(display_name.clone()));
     }
@@ -197,9 +187,9 @@ pub(crate) async fn create_host_contact(
 pub(crate) async fn get_host_contact(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<EmailAddressValue>,
 ) -> Result<HttpResponse, AppError> {
-    let email = EmailAddressValue::new(path.into_inner())?;
+    let email = path.into_inner();
     require(
         &state,
         authz_request(
@@ -229,9 +219,9 @@ pub(crate) async fn get_host_contact(
 pub(crate) async fn delete_host_contact(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<EmailAddressValue>,
 ) -> Result<HttpResponse, AppError> {
-    let email = EmailAddressValue::new(path.into_inner())?;
+    let email = path.into_inner();
     require(
         &state,
         authz_request(

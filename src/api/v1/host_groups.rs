@@ -11,8 +11,8 @@ use crate::{
     authz::{self, AttrValue},
     domain::{
         filters::HostGroupFilter,
-        host_group::HostGroup,
-        pagination::{PageRequest, PageResponse, SortDirection},
+        host_group::{CreateHostGroup, HostGroup},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{HostGroupName, Hostname, OwnerGroupName},
     },
     errors::AppError,
@@ -36,11 +36,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct HostGroupQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     search: Option<String>,
@@ -50,12 +46,7 @@ pub struct HostGroupQuery {
 
 impl HostGroupQuery {
     fn into_parts(self) -> Result<(PageRequest, HostGroupFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let mut filter = HostGroupFilter::from_query_params(self.filters)?;
         filter.search = self.search;
         Ok((page, filter))
@@ -64,33 +55,28 @@ impl HostGroupQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateHostGroupRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: HostGroupName,
     description: String,
     #[serde(default)]
-    hosts: Vec<String>,
+    #[schema(value_type = Vec<String>)]
+    hosts: Vec<Hostname>,
     #[serde(default)]
-    parent_groups: Vec<String>,
+    #[schema(value_type = Vec<String>)]
+    parent_groups: Vec<HostGroupName>,
     #[serde(default)]
-    owner_groups: Vec<String>,
+    #[schema(value_type = Vec<String>)]
+    owner_groups: Vec<OwnerGroupName>,
 }
 
 impl CreateHostGroupRequest {
-    fn into_command(self) -> Result<crate::domain::host_group::CreateHostGroup, AppError> {
-        crate::domain::host_group::CreateHostGroup::new(
-            HostGroupName::new(self.name)?,
+    fn into_command(self) -> Result<CreateHostGroup, AppError> {
+        CreateHostGroup::new(
+            self.name,
             self.description,
-            self.hosts
-                .into_iter()
-                .map(Hostname::new)
-                .collect::<Result<Vec<_>, _>>()?,
-            self.parent_groups
-                .into_iter()
-                .map(HostGroupName::new)
-                .collect::<Result<Vec<_>, _>>()?,
-            self.owner_groups
-                .into_iter()
-                .map(OwnerGroupName::new)
-                .collect::<Result<Vec<_>, _>>()?,
+            self.hosts,
+            self.parent_groups,
+            self.owner_groups,
         )
     }
 }
@@ -192,11 +178,11 @@ pub(crate) async fn create_host_group(
             &req,
             authz::actions::host_group::CREATE,
             authz::actions::resource_kinds::HOST_GROUP,
-            request.name.clone(),
+            &request.name,
         )
-        .attr("hosts", string_set(request.hosts.clone()))
-        .attr("parent_groups", string_set(request.parent_groups.clone()))
-        .attr("owner_groups", string_set(request.owner_groups.clone()))
+        .attr("hosts", string_set(&request.hosts))
+        .attr("parent_groups", string_set(&request.parent_groups))
+        .attr("owner_groups", string_set(&request.owner_groups))
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
@@ -226,9 +212,9 @@ pub(crate) async fn create_host_group(
 pub(crate) async fn get_host_group(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostGroupName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostGroupName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -258,9 +244,9 @@ pub(crate) async fn get_host_group(
 pub(crate) async fn delete_host_group(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostGroupName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostGroupName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

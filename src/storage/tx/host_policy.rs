@@ -5,7 +5,7 @@ use crate::{
             UpdateHostPolicyAtom, UpdateHostPolicyRole,
         },
         pagination::{Page, PageRequest},
-        types::{HostPolicyName, Hostname},
+        types::{HostPolicyName, Hostname, LabelName},
     },
     errors::AppError,
 };
@@ -44,21 +44,24 @@ pub trait TxHostPolicyStore {
         role_name: &HostPolicyName,
         atom_name: &HostPolicyName,
     ) -> Result<(), AppError>;
-    fn add_host_to_role(&self, role_name: &HostPolicyName, host_name: &str)
-    -> Result<(), AppError>;
+    fn add_host_to_role(
+        &self,
+        role_name: &HostPolicyName,
+        host_name: &Hostname,
+    ) -> Result<(), AppError>;
     fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError>;
     fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError>;
     fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError>;
 }

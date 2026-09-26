@@ -1164,9 +1164,21 @@ async fn postgres_imports_extended_legacy_entities() -> Result<(), Box<dyn std::
         .host_policy()
         .get_role_by_name(&HostPolicyName::new(&fixture.role)?)
         .await?;
-    assert!(imported_role.atoms().contains(&fixture.atom));
-    assert!(imported_role.hosts().contains(&fixture.host));
-    assert!(imported_role.labels().contains(&fixture.label));
+    assert!(
+        imported_role
+            .atoms()
+            .contains(&HostPolicyName::new(&fixture.atom)?)
+    );
+    assert!(
+        imported_role
+            .hosts()
+            .contains(&Hostname::new(&fixture.host)?)
+    );
+    assert!(
+        imported_role
+            .labels()
+            .contains(&LabelName::new(&fixture.label)?)
+    );
 
     let delegations = storage
         .zones()
@@ -2015,12 +2027,10 @@ async fn postgres_label_sorting_persists_across_fresh_contexts()
 
     let descending: Vec<String> = storage
         .labels()
-        .list_labels(&PageRequest {
-            after: None,
-            limit: Some(u64::MAX),
-            sort_by: Some("name".to_string()),
-            sort_dir: Some(mreg_rust::domain::pagination::SortDirection::Desc),
-        })
+        .list_labels(
+            &PageRequest::all()
+                .with_sort("name", mreg_rust::domain::pagination::SortDirection::Desc),
+        )
         .await?
         .items
         .into_iter()
@@ -2038,12 +2048,10 @@ async fn postgres_label_sorting_persists_across_fresh_contexts()
     let descending: Vec<String> = fresh
         .storage()
         .labels()
-        .list_labels(&PageRequest {
-            after: None,
-            limit: Some(u64::MAX),
-            sort_by: Some("name".to_string()),
-            sort_dir: Some(mreg_rust::domain::pagination::SortDirection::Desc),
-        })
+        .list_labels(
+            &PageRequest::all()
+                .with_sort("name", mreg_rust::domain::pagination::SortDirection::Desc),
+        )
         .await?
         .items
         .into_iter()

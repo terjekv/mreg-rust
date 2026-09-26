@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use utoipa::IntoParams;
@@ -16,51 +18,83 @@ pub enum SortDirection {
     Desc,
 }
 
+/// A positive public page size, capped at the API maximum of 1000.
+///
+/// The internal fetch-all mode cannot be constructed from a numeric input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PageLimit(NonZeroU64);
+
+impl PageLimit {
+    pub fn new(value: u64) -> Result<Self, AppError> {
+        NonZeroU64::new(value.min(MAX_LIMIT))
+            .map(Self)
+            .ok_or_else(|| AppError::validation("pagination limit must be at least 1"))
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl<'de> Deserialize<'de> for PageLimit {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(u64::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
 /// Cursor-based page request with sort support.
 #[derive(Clone, Debug, Default, Deserialize, IntoParams)]
 pub struct PageRequest {
     /// Opaque cursor returned by the preceding page. Omit for the first page.
-    pub after: Option<String>,
+    after: Option<String>,
     /// Maximum number of items to return (default 100, max 1000).
-    #[serde(default, deserialize_with = "deserialize_page_limit")]
-    pub limit: Option<u64>,
+    #[param(value_type = Option<u64>, minimum = 1)]
+    limit: Option<PageLimit>,
     /// Field name to sort by. Entity-specific; defaults vary per entity.
-    pub sort_by: Option<String>,
+    sort_by: Option<String>,
     /// Sort direction: "asc" (default) or "desc".
-    #[serde(default)]
-    pub sort_dir: Option<SortDirection>,
-}
-
-/// Deserialize a public page size, rejecting the non-progressing zero-size
-/// request before it can reach either storage backend.
-pub fn deserialize_page_limit<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let limit = Option::<u64>::deserialize(deserializer)?;
-    if limit == Some(0) {
-        return Err(D::Error::custom("pagination limit must be at least 1"));
-    }
-    Ok(limit)
+    sort_dir: Option<SortDirection>,
+    #[serde(skip)]
+    #[param(ignore)]
+    fetch_all: bool,
 }
 
 impl PageRequest {
-    /// Returns a page request that fetches all items (no limit).
-    pub fn all() -> Self {
+    pub fn new(
+        after: Option<String>,
+        limit: Option<PageLimit>,
+        sort_by: Option<String>,
+        sort_dir: Option<SortDirection>,
+    ) -> Self {
         Self {
-            after: None,
-            limit: Some(u64::MAX),
-            sort_by: None,
-            sort_dir: None,
+            after,
+            limit,
+            sort_by,
+            sort_dir,
+            fetch_all: false,
         }
     }
 
+    /// Fetch all items for trusted internal operations; never deserialized from HTTP.
+    pub fn all() -> Self {
+        Self {
+            fetch_all: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_sort(mut self, field: impl Into<String>, direction: SortDirection) -> Self {
+        self.sort_by = Some(field.into());
+        self.sort_dir = Some(direction);
+        self
+    }
+
     pub fn limit(&self) -> u64 {
-        match self.limit {
-            Some(u64::MAX) => u64::MAX,
-            Some(l) if l > MAX_LIMIT => MAX_LIMIT,
-            Some(l) => l,
-            None => DEFAULT_LIMIT,
+        if self.fetch_all {
+            u64::MAX
+        } else {
+            self.limit.map(PageLimit::as_u64).unwrap_or(DEFAULT_LIMIT)
         }
     }
 
@@ -247,7 +281,7 @@ impl<T: Serialize> PageResponse<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_LIMIT, PageRequest};
+    use super::{MAX_LIMIT, PageLimit, PageRequest};
 
     #[test]
     fn page_limit_defaults_when_unspecified() {
@@ -256,10 +290,12 @@ mod tests {
 
     #[test]
     fn page_limit_caps_user_supplied_values() {
-        let page = PageRequest {
-            limit: Some(MAX_LIMIT + 1),
-            ..Default::default()
-        };
+        let page = PageRequest::new(
+            None,
+            Some(PageLimit::new(MAX_LIMIT + 1).unwrap()),
+            None,
+            None,
+        );
         assert_eq!(page.limit(), MAX_LIMIT);
     }
 

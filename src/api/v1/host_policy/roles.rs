@@ -38,16 +38,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// Request body for creating a host-policy role.
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRoleRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: HostPolicyName,
     description: String,
 }
 
 impl CreateRoleRequest {
     fn into_command(self) -> Result<CreateHostPolicyRole, AppError> {
-        Ok(CreateHostPolicyRole::new(
-            HostPolicyName::new(self.name)?,
-            self.description,
-        ))
+        Ok(CreateHostPolicyRole::new(self.name, self.description))
     }
 }
 
@@ -76,9 +74,9 @@ impl RoleResponse {
             id: role.id(),
             name: role.name().as_str().to_string(),
             description: role.description().to_string(),
-            atoms: role.atoms().to_vec(),
-            hosts: role.hosts().to_vec(),
-            labels: role.labels().to_vec(),
+            atoms: role.atoms().iter().map(ToString::to_string).collect(),
+            hosts: role.hosts().iter().map(ToString::to_string).collect(),
+            labels: role.labels().iter().map(ToString::to_string).collect(),
             created_at: role.created_at(),
             updated_at: role.updated_at(),
         }
@@ -148,7 +146,7 @@ pub(crate) async fn create_role(
             &req,
             authz::actions::host_policy::role::CREATE,
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
-            request.name.clone(),
+            &request.name,
         )
         .attr(
             "description",
@@ -179,9 +177,9 @@ pub(crate) async fn create_role(
 pub(crate) async fn get_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostPolicyName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -212,10 +210,10 @@ pub(crate) async fn get_role(
 pub(crate) async fn update_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostPolicyName>,
     payload: web::Json<UpdateRoleRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     let request = payload.into_inner();
     let mut authz = authz_request(
         &req,
@@ -253,9 +251,9 @@ pub(crate) async fn update_role(
 pub(crate) async fn delete_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostPolicyName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

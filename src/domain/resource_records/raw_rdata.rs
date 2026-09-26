@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 
 use crate::{
@@ -10,9 +10,21 @@ use crate::{
 };
 
 /// RFC 3597 wire-format RDATA with presentation format support.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RawRdataValue {
     wire_bytes: Vec<u8>,
+}
+
+// Deserialize through the constructor so persisted JSON cannot bypass invariants.
+impl<'de> Deserialize<'de> for RawRdataValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            wire_bytes: Vec<u8>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Self::from_wire_bytes(raw.wire_bytes).map_err(D::Error::custom)
+    }
 }
 
 impl RawRdataValue {

@@ -65,6 +65,31 @@ impl HostPolicyName {
     }
 }
 
+impl fmt::Display for HostPolicyName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Serialize for HostPolicyName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for HostPolicyName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        HostPolicyName::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Validated host group name (lowercase letters, digits, hyphens, underscores, dots).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostGroupName(String);

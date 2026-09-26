@@ -22,11 +22,13 @@ use crate::api::v1::records::typed_data::RecordKind;
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordRequest {
-    type_name: String,
+    #[schema(value_type = String)]
+    type_name: RecordTypeName,
     owner_kind: Option<RecordOwnerKind>,
     owner_name: String,
     anchor_name: Option<String>,
-    ttl: Option<u32>,
+    #[schema(value_type = Option<u32>)]
+    ttl: Option<Ttl>,
     #[schema(value_type = Option<Object>)]
     data: Option<Value>,
     raw_rdata: Option<String>,
@@ -35,11 +37,11 @@ pub struct CreateRecordRequest {
 impl CreateRecordRequest {
     fn into_command(self) -> Result<CreateRecordInstance, AppError> {
         CreateRecordInstance::with_reference(
-            RecordTypeName::new(self.type_name)?,
+            self.type_name,
             self.owner_kind,
             self.owner_name,
             self.anchor_name,
-            self.ttl.map(Ttl::new).transpose()?,
+            self.ttl,
             self.data,
             self.raw_rdata
                 .map(RawRdataValue::from_presentation)
@@ -52,7 +54,7 @@ impl CreateRecordRequest {
 pub struct UpdateRecordRequest {
     #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    ttl: UpdateField<u32>,
+    ttl: UpdateField<Ttl>,
     #[schema(value_type = Option<Object>)]
     data: Option<Value>,
     raw_rdata: Option<String>,
@@ -61,7 +63,7 @@ pub struct UpdateRecordRequest {
 impl UpdateRecordRequest {
     fn into_command(self) -> Result<UpdateRecord, AppError> {
         UpdateRecord::new(
-            self.ttl.try_map(Ttl::new)?,
+            self.ttl,
             self.data,
             self.raw_rdata
                 .map(RawRdataValue::from_presentation)
@@ -167,7 +169,10 @@ pub(crate) async fn create_record(
         authz::actions::resource_kinds::RECORD,
         request.owner_name.clone(),
     )
-    .attr("type_name", AttrValue::String(request.type_name.clone()))
+    .attr(
+        "type_name",
+        AttrValue::String(request.type_name.to_string()),
+    )
     .attr("owner_name", AttrValue::String(request.owner_name.clone()));
     if let Some(owner_kind) = request.owner_kind.as_ref() {
         authz = authz.attr(
@@ -184,7 +189,7 @@ pub(crate) async fn create_record(
         authz = authz.attr("anchor_name", AttrValue::String(anchor_name.clone()));
     }
     if let Some(ttl) = request.ttl {
-        authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl)));
+        authz = authz.attr("ttl", AttrValue::Long(i64::from(ttl.as_u32())));
     }
     require(&state, authz).await?;
     let record = state
@@ -258,7 +263,7 @@ pub(crate) async fn update_record_endpoint(
         );
         match &request.ttl {
             UpdateField::Set(ttl) => {
-                authz = authz.attr("new_ttl", AttrValue::Long(i64::from(*ttl)));
+                authz = authz.attr("new_ttl", AttrValue::Long(i64::from(ttl.as_u32())));
             }
             UpdateField::Clear => {
                 authz = authz.attr("clear_ttl", AttrValue::Bool(true));

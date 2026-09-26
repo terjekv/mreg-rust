@@ -38,16 +38,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 /// Request body for creating a host-policy atom.
 #[derive(Deserialize, ToSchema)]
 pub struct CreateAtomRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: HostPolicyName,
     description: String,
 }
 
 impl CreateAtomRequest {
     fn into_command(self) -> Result<CreateHostPolicyAtom, AppError> {
-        Ok(CreateHostPolicyAtom::new(
-            HostPolicyName::new(self.name)?,
-            self.description,
-        ))
+        Ok(CreateHostPolicyAtom::new(self.name, self.description))
     }
 }
 
@@ -142,7 +140,7 @@ pub(crate) async fn create_atom(
             &req,
             authz::actions::host_policy::atom::CREATE,
             authz::actions::resource_kinds::HOST_POLICY_ATOM,
-            request.name.clone(),
+            &request.name,
         )
         .attr(
             "description",
@@ -173,9 +171,9 @@ pub(crate) async fn create_atom(
 pub(crate) async fn get_atom(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostPolicyName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -206,10 +204,10 @@ pub(crate) async fn get_atom(
 pub(crate) async fn update_atom(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostPolicyName>,
     payload: web::Json<UpdateAtomRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     let request = payload.into_inner();
     let mut authz = authz_request(
         &req,
@@ -248,9 +246,9 @@ pub(crate) async fn update_atom(
 pub(crate) async fn delete_atom(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<HostPolicyName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = HostPolicyName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

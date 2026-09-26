@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::errors::AppError;
 
@@ -30,13 +32,30 @@ pub enum RecordFieldKind {
 }
 
 /// Schema for a single field within a record type definition.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RecordFieldSchema {
     name: String,
     kind: RecordFieldKind,
     required: bool,
     repeated: bool,
     options: Vec<String>,
+}
+
+// Deserialize through the constructor so persisted JSON cannot bypass invariants.
+impl<'de> Deserialize<'de> for RecordFieldSchema {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            name: String,
+            kind: RecordFieldKind,
+            required: bool,
+            repeated: bool,
+            options: Vec<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(raw.name, raw.kind, raw.required, raw.repeated, raw.options)
+            .map_err(D::Error::custom)
+    }
 }
 
 impl RecordFieldSchema {
@@ -71,7 +90,7 @@ impl RecordFieldSchema {
                 "only enum record fields may define options",
             ));
         }
-        let unique_options = options.iter().collect::<std::collections::BTreeSet<_>>();
+        let unique_options = options.iter().collect::<BTreeSet<_>>();
         if unique_options.len() != options.len() || options.iter().any(String::is_empty) {
             return Err(AppError::validation(
                 "record field options must be non-empty and unique",

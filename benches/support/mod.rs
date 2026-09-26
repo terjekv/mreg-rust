@@ -30,7 +30,7 @@ use mreg_rust::{
         nameserver::CreateNameServer,
         network::CreateNetwork,
         network_policy::CreateNetworkPolicy,
-        pagination::{PageRequest, SortDirection},
+        pagination::{PageLimit, PageRequest, SortDirection},
         resource_records::{
             CreateRecordInstance, RecordInstance, RecordOwnerKind, RecordTypeDefinition,
         },
@@ -121,12 +121,12 @@ pub fn host_listing_scenario(
         }
     });
 
-    let page = PageRequest {
-        after: None,
-        limit: Some(100),
-        sort_by: Some("name".to_string()),
-        sort_dir: Some(SortDirection::Asc),
-    };
+    let page = PageRequest::new(
+        None,
+        Some(PageLimit::new(100).expect("positive page size")),
+        Some("name".to_string()),
+        Some(SortDirection::Asc),
+    );
     let filter = HostFilter::from_query_params(HashMap::from([
         ("address__contains".to_string(), "10.10.3".to_string()),
         ("comment__contains".to_string(), "bench".to_string()),
@@ -708,12 +708,12 @@ pub fn record_listing_storage(runtime: &Runtime, count: usize) -> (DynStorage, P
         }
     });
 
-    let page = PageRequest {
-        after: None,
-        limit: Some(100),
-        sort_by: None,
-        sort_dir: Some(SortDirection::Asc),
-    };
+    let page = PageRequest::new(
+        None,
+        Some(PageLimit::new(100).expect("positive page size")),
+        None,
+        Some(SortDirection::Asc),
+    );
     (storage, page)
 }
 

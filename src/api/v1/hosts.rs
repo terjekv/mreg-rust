@@ -16,7 +16,7 @@ use crate::{
             IpAssignmentSpec, UpdateHost, UpdateIpAddress,
         },
         host_view::{HostAttachmentView, HostView, HostViewExpansions},
-        pagination::{PageRequest, PageResponse, SortDirection},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{CidrValue, Hostname, IpAddressValue, MacAddressValue, Ttl, UpdateField, ZoneName},
     },
     errors::AppError,
@@ -58,11 +58,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 pub struct ListHostsQuery {
     // Pagination + sort
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     // Special filter fields
@@ -74,12 +70,7 @@ pub struct ListHostsQuery {
 
 impl ListHostsQuery {
     fn into_parts(self) -> Result<(PageRequest, HostFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let mut filter = HostFilter::from_query_params(self.filters)?;
         filter.search = self.search;
         Ok((page, filter))
@@ -88,18 +79,25 @@ impl ListHostsQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct IpAssignmentRequest {
-    address: Option<String>,
-    network: Option<String>,
+    #[schema(value_type = Option<String>)]
+    address: Option<IpAddressValue>,
+    #[schema(value_type = Option<String>)]
+    network: Option<CidrValue>,
     #[serde(default)]
-    allocation: Option<String>,
-    mac_address: Option<String>,
+    #[schema(value_type = Option<String>)]
+    allocation: Option<AllocationPolicy>,
+    #[schema(value_type = Option<String>)]
+    mac_address: Option<MacAddressValue>,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateHostRequest {
-    name: String,
-    zone: Option<String>,
-    ttl: Option<u32>,
+    #[schema(value_type = String)]
+    name: Hostname,
+    #[schema(value_type = Option<String>)]
+    zone: Option<ZoneName>,
+    #[schema(value_type = Option<u32>)]
+    ttl: Option<Ttl>,
     #[serde(default)]
     comment: String,
     #[serde(default)]
@@ -114,65 +112,44 @@ impl CreateHostRequest {
     ) -> Result<CreateHost, AppError> {
         let mut specs = Vec::with_capacity(self.ip_addresses.len());
         for ip_req in self.ip_addresses {
-            let allocation = match ip_req.allocation.as_deref() {
-                Some("random") => AllocationPolicy::Random,
-                Some("first_free") | None => AllocationPolicy::FirstFree,
-                Some(other) => {
-                    return Err(AppError::validation(format!(
-                        "unknown allocation policy: {other}"
-                    )));
-                }
-            };
+            let allocation = ip_req.allocation.unwrap_or_default();
             specs.push(
                 IpAssignmentSpec::new(
-                    ip_req.address.map(IpAddressValue::new).transpose()?,
-                    ip_req.network.map(CidrValue::new).transpose()?,
+                    ip_req.address,
+                    ip_req.network,
                     allocation,
-                    ip_req.mac_address.map(MacAddressValue::new).transpose()?,
+                    ip_req.mac_address,
                 )?
                 .with_auto_dhcp(auto_v4_client_id, auto_v6_duid_ll),
             );
         }
-        let cmd = CreateHost::new(
-            Hostname::new(self.name)?,
-            self.zone.map(ZoneName::new).transpose()?,
-            self.ttl.map(Ttl::new).transpose()?,
-            self.comment,
-        )?;
+        let cmd = CreateHost::new(self.name, self.zone, self.ttl, self.comment)?;
         Ok(cmd.with_ip_assignments(specs))
     }
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct AssignIpAddressRequest {
-    host_name: String,
-    address: Option<String>,
-    network: Option<String>,
+    #[schema(value_type = String)]
+    host_name: Hostname,
+    #[schema(value_type = Option<String>)]
+    address: Option<IpAddressValue>,
+    #[schema(value_type = Option<String>)]
+    network: Option<CidrValue>,
     #[serde(default)]
-    allocation: Option<String>,
-    mac_address: Option<String>,
+    #[schema(value_type = Option<String>)]
+    allocation: Option<AllocationPolicy>,
+    #[schema(value_type = Option<String>)]
+    mac_address: Option<MacAddressValue>,
 }
 
 impl AssignIpAddressRequest {
     fn into_command(self) -> Result<AssignIpAddress, AppError> {
-        let allocation = parse_allocation_policy(self.allocation.as_deref())?;
-        Ok(AssignIpAddress::new(
-            Hostname::new(self.host_name)?,
-            self.address.map(IpAddressValue::new).transpose()?,
-            self.network.map(CidrValue::new).transpose()?,
-            self.mac_address.map(MacAddressValue::new).transpose()?,
-        )?
-        .with_allocation(allocation))
-    }
-}
-
-fn parse_allocation_policy(value: Option<&str>) -> Result<AllocationPolicy, AppError> {
-    match value {
-        Some("random") => Ok(AllocationPolicy::Random),
-        Some("first_free") | None => Ok(AllocationPolicy::FirstFree),
-        Some(other) => Err(AppError::validation(format!(
-            "unknown allocation policy: {other}"
-        ))),
+        let allocation = self.allocation.unwrap_or_default();
+        Ok(
+            AssignIpAddress::new(self.host_name, self.address, self.network, self.mac_address)?
+                .with_allocation(allocation),
+        )
     }
 }
 
@@ -537,9 +514,9 @@ pub(crate) async fn create_host(
 pub(crate) async fn get_host(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<Hostname>,
 ) -> Result<HttpResponse, AppError> {
-    let name = Hostname::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         host_authz_request(state.get_ref(), &req, authz::actions::host::GET, &name).await?,
@@ -555,14 +532,15 @@ pub(crate) async fn get_host(
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateHostRequest {
-    name: Option<String>,
+    #[schema(value_type = Option<String>)]
+    name: Option<Hostname>,
     #[serde(default)]
     #[schema(value_type = Option<u32>)]
-    ttl: UpdateField<u32>,
+    ttl: UpdateField<Ttl>,
     comment: Option<String>,
     #[serde(default)]
     #[schema(value_type = Option<String>)]
-    zone: UpdateField<String>,
+    zone: UpdateField<ZoneName>,
 }
 
 fn build_host_update_authz(
@@ -579,7 +557,7 @@ fn build_host_update_authz(
             authz::actions::host::UPDATE_TTL,
             "new_ttl",
             "clear_ttl",
-            |v| AttrValue::Long(i64::from(*v)),
+            |v| AttrValue::Long(i64::from(v.as_u32())),
         )
         .field_present(&request.comment, authz::actions::host::UPDATE_COMMENT)
         .field_clearable(
@@ -587,7 +565,7 @@ fn build_host_update_authz(
             authz::actions::host::UPDATE_ZONE,
             "new_zone",
             "clear_zone",
-            |v| AttrValue::String(v.clone()),
+            |v| AttrValue::String(v.to_string()),
         );
     b.build()
 }
@@ -608,18 +586,18 @@ fn build_host_update_authz(
 pub(crate) async fn update_host(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<Hostname>,
     payload: web::Json<UpdateHostRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let current_name = Hostname::new(path.into_inner())?;
+    let current_name = path.into_inner();
     let request = payload.into_inner();
     let base_attrs = host_attrs_for_host(state.get_ref(), &current_name).await?;
     let authz_requests = build_host_update_authz(&req, current_name.as_str(), &request, base_attrs);
     require_all(&state, authz_requests).await?;
 
-    let name = request.name.map(Hostname::new).transpose()?;
-    let ttl = request.ttl.try_map(Ttl::new)?;
-    let zone = request.zone.try_map(ZoneName::new)?;
+    let name = request.name;
+    let ttl = request.ttl;
+    let zone = request.zone;
     let command = UpdateHost {
         name,
         ttl,
@@ -654,9 +632,9 @@ pub(crate) async fn update_host(
 pub(crate) async fn delete_host(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<Hostname>,
 ) -> Result<HttpResponse, AppError> {
-    let name = Hostname::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         host_authz_request(state.get_ref(), &req, authz::actions::host::DELETE, &name).await?,
@@ -715,9 +693,9 @@ pub(crate) async fn list_ip_addresses(
 pub(crate) async fn list_host_ip_addresses(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<Hostname>,
 ) -> Result<HttpResponse, AppError> {
-    let name = Hostname::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         host_authz_request(
@@ -831,7 +809,7 @@ async fn resolve_network_for_address(
 pub struct UpdateIpAddressRequest {
     #[serde(default)]
     #[schema(value_type = Option<String>)]
-    mac_address: UpdateField<String>,
+    mac_address: UpdateField<MacAddressValue>,
 }
 
 /// Update an IP address assignment
@@ -850,10 +828,10 @@ pub struct UpdateIpAddressRequest {
 pub(crate) async fn update_ip_address(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<IpAddressValue>,
     payload: web::Json<UpdateIpAddressRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let address = IpAddressValue::new(path.into_inner())?;
+    let address = path.into_inner();
     let request = payload.into_inner();
     let assignment = state.services.hosts().get_ip_address(&address).await?;
     let attachment = state
@@ -878,10 +856,13 @@ pub(crate) async fn update_ip_address(
         AttrValue::String(attachment.id().to_string()),
     );
     if let UpdateField::Set(ref mac_address) = request.mac_address {
-        authz = authz.attr("new_mac_address", AttrValue::String(mac_address.clone()));
+        authz = authz.attr(
+            "new_mac_address",
+            AttrValue::String(mac_address.to_string()),
+        );
     }
     require(&state, authz).await?;
-    let mac = request.mac_address.try_map(MacAddressValue::new)?;
+    let mac = request.mac_address;
     let command = UpdateIpAddress { mac_address: mac };
     let assignment = state
         .services
@@ -906,9 +887,9 @@ pub(crate) async fn update_ip_address(
 pub(crate) async fn unassign_ip_address(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<IpAddressValue>,
 ) -> Result<HttpResponse, AppError> {
-    let address = IpAddressValue::new(path.into_inner())?;
+    let address = path.into_inner();
     let assignment = state.services.hosts().get_ip_address(&address).await?;
     let attachment = state
         .services

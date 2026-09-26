@@ -1,7 +1,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -70,9 +70,21 @@ impl fmt::Display for ImportOperation {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ImportBatch {
     items: Vec<ImportItem>,
+}
+
+// Deserialize through the constructor so persisted JSON cannot bypass invariants.
+impl<'de> Deserialize<'de> for ImportBatch {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            items: Vec<ImportItem>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(raw.items).map_err(D::Error::custom)
+    }
 }
 
 impl ImportBatch {
@@ -88,7 +100,7 @@ impl ImportBatch {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ImportItem {
     #[serde(rename = "ref")]
     reference: String,
@@ -96,6 +108,23 @@ pub struct ImportItem {
     operation: ImportOperation,
     #[serde(default)]
     attributes: Value,
+}
+
+// Deserialize through the constructor so persisted JSON cannot bypass invariants.
+impl<'de> Deserialize<'de> for ImportItem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(rename = "ref")]
+            reference: String,
+            kind: ImportKind,
+            operation: ImportOperation,
+            #[serde(default)]
+            attributes: Value,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(raw.reference, raw.kind, raw.operation, raw.attributes).map_err(D::Error::custom)
+    }
 }
 
 impl ImportItem {

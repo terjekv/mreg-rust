@@ -11,8 +11,8 @@ use crate::{
     authz::{self, AttrValue},
     domain::{
         filters::PtrOverrideFilter,
-        pagination::{PageRequest, PageResponse, SortDirection},
-        ptr_override::PtrOverride,
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
+        ptr_override::{CreatePtrOverride, PtrOverride},
         types::{DnsName, Hostname, IpAddressValue},
     },
     errors::AppError,
@@ -36,11 +36,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct PtrQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     #[serde(flatten)]
@@ -49,12 +45,7 @@ pub struct PtrQuery {
 
 impl PtrQuery {
     fn into_parts(self) -> Result<(PageRequest, PtrOverrideFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let filter = PtrOverrideFilter::from_query_params(self.filters)?;
         Ok((page, filter))
     }
@@ -62,17 +53,20 @@ impl PtrQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreatePtrOverrideRequest {
-    host_name: String,
-    address: String,
-    target_name: Option<String>,
+    #[schema(value_type = String)]
+    host_name: Hostname,
+    #[schema(value_type = String)]
+    address: IpAddressValue,
+    #[schema(value_type = Option<String>)]
+    target_name: Option<DnsName>,
 }
 
 impl CreatePtrOverrideRequest {
-    fn into_command(self) -> Result<crate::domain::ptr_override::CreatePtrOverride, AppError> {
-        Ok(crate::domain::ptr_override::CreatePtrOverride::new(
-            Hostname::new(self.host_name)?,
-            IpAddressValue::new(self.address)?,
-            self.target_name.map(DnsName::new).transpose()?,
+    fn into_command(self) -> Result<CreatePtrOverride, AppError> {
+        Ok(CreatePtrOverride::new(
+            self.host_name,
+            self.address,
+            self.target_name,
         ))
     }
 }
@@ -224,9 +218,9 @@ pub(crate) async fn create_ptr_override(
 pub(crate) async fn get_ptr_override(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<IpAddressValue>,
 ) -> Result<HttpResponse, AppError> {
-    let address = IpAddressValue::new(path.into_inner())?;
+    let address = path.into_inner();
     let item = state.services.ptr_overrides().get(&address).await?;
     require_ptr_override_permission(
         state.get_ref(),
@@ -255,9 +249,9 @@ pub(crate) async fn get_ptr_override(
 pub(crate) async fn delete_ptr_override(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<IpAddressValue>,
 ) -> Result<HttpResponse, AppError> {
-    let address = IpAddressValue::new(path.into_inner())?;
+    let address = path.into_inner();
     let item = state.services.ptr_overrides().get(&address).await?;
     require_ptr_override_permission(
         state.get_ref(),

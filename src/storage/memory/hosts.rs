@@ -689,7 +689,7 @@ pub(super) fn delete_host_in_state(
         }
     }
     for role in state.host_policy_roles.values_mut() {
-        if role.hosts().iter().any(|item| item == host.name().as_str()) {
+        if role.hosts().contains(host.name()) {
             *role = HostPolicyRole::restore(
                 role.id(),
                 role.name().clone(),
@@ -697,7 +697,7 @@ pub(super) fn delete_host_in_state(
                 role.atoms().to_vec(),
                 role.hosts()
                     .iter()
-                    .filter(|item| item.as_str() != host.name().as_str())
+                    .filter(|item| *item != host.name())
                     .cloned()
                     .collect(),
                 role.labels().to_vec(),

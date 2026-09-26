@@ -831,14 +831,14 @@ impl<'c> TxHostPolicyStore for PgTxStorage<'c> {
     fn add_host_to_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         PostgresStorage::add_host_to_role_in_conn(&mut self.conn.borrow_mut(), role_name, host_name)
     }
     fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         PostgresStorage::remove_host_from_role_in_conn(
             &mut self.conn.borrow_mut(),
@@ -849,7 +849,7 @@ impl<'c> TxHostPolicyStore for PgTxStorage<'c> {
     fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         PostgresStorage::add_label_to_role_in_conn(
             &mut self.conn.borrow_mut(),
@@ -860,7 +860,7 @@ impl<'c> TxHostPolicyStore for PgTxStorage<'c> {
     fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         PostgresStorage::remove_label_from_role_in_conn(
             &mut self.conn.borrow_mut(),

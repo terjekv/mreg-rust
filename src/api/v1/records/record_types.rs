@@ -46,8 +46,10 @@ impl CreateRecordFieldSchemaRequest {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateRecordTypeRequest {
-    name: String,
-    dns_type: Option<i32>,
+    #[schema(value_type = String)]
+    name: RecordTypeName,
+    #[schema(value_type = Option<i32>)]
+    dns_type: Option<DnsTypeCode>,
     owner_kind: RecordOwnerKind,
     cardinality: RecordCardinality,
     #[serde(default)]
@@ -67,8 +69,8 @@ impl CreateRecordTypeRequest {
             .map(CreateRecordFieldSchemaRequest::into_domain)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CreateRecordTypeDefinition::new(
-            RecordTypeName::new(self.name)?,
-            self.dns_type.map(DnsTypeCode::new).transpose()?,
+            self.name,
+            self.dns_type,
             RecordTypeSchema::new(
                 self.owner_kind,
                 self.cardinality,
@@ -137,7 +139,7 @@ pub(crate) async fn create_record_type(
             &req,
             authz::actions::record_type::CREATE,
             authz::actions::resource_kinds::RECORD_TYPE,
-            request.name.clone(),
+            &request.name,
         ),
     )
     .await?;
@@ -164,9 +166,9 @@ pub(crate) async fn create_record_type(
 pub(crate) async fn delete_record_type_endpoint(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<RecordTypeName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = RecordTypeName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

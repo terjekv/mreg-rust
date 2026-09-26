@@ -24,7 +24,7 @@ use actix_web::web;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::storage::StorageBackendKind;
+use crate::{errors::AppError, storage::StorageBackendKind};
 
 /// Generic list response with a backend indicator, for system/diagnostic endpoints.
 ///
@@ -64,26 +64,34 @@ impl SystemListResponse {
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {
-    cfg.configure(system::configure)
-        .configure(dns::configure)
-        .configure(|cfg| auth::configure(cfg, trust_proxy_headers))
-        .configure(attachment_community_assignments::configure)
-        .configure(attachments::configure)
-        .configure(bacnet_ids::configure)
-        .configure(communities::configure)
-        .configure(host_community_assignments::configure)
-        .configure(host_contacts::configure)
-        .configure(host_groups::configure)
-        .configure(network_policies::configure)
-        .configure(networks::configure)
-        .configure(host_policy::configure)
-        .configure(hosts::configure)
-        .configure(labels::configure)
-        .configure(nameservers::configure)
-        .configure(ptr_overrides::configure)
-        .configure(records::configure)
-        .configure(workflows::configure)
-        .configure(zones::configure);
+    cfg.app_data(
+        web::PathConfig::default()
+            .error_handler(|error, _| AppError::validation(error.to_string()).into()),
+    )
+    .app_data(
+        web::QueryConfig::default()
+            .error_handler(|error, _| AppError::validation(error.to_string()).into()),
+    )
+    .configure(system::configure)
+    .configure(dns::configure)
+    .configure(|cfg| auth::configure(cfg, trust_proxy_headers))
+    .configure(attachment_community_assignments::configure)
+    .configure(attachments::configure)
+    .configure(bacnet_ids::configure)
+    .configure(communities::configure)
+    .configure(host_community_assignments::configure)
+    .configure(host_contacts::configure)
+    .configure(host_groups::configure)
+    .configure(network_policies::configure)
+    .configure(networks::configure)
+    .configure(host_policy::configure)
+    .configure(hosts::configure)
+    .configure(labels::configure)
+    .configure(nameservers::configure)
+    .configure(ptr_overrides::configure)
+    .configure(records::configure)
+    .configure(workflows::configure)
+    .configure(zones::configure);
 }
 
 #[cfg(test)]

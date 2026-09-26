@@ -10,10 +10,10 @@ use crate::{
     AppState,
     authz::{self, AttrValue},
     domain::{
-        community::Community,
+        community::{Community, CreateCommunity},
         filters::CommunityFilter,
-        pagination::{PageRequest, PageResponse, SortDirection},
-        types::{CommunityName, NetworkPolicyName},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
+        types::{CidrValue, CommunityName, NetworkPolicyName},
     },
     errors::AppError,
 };
@@ -36,11 +36,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct CommunityQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     search: Option<String>,
@@ -50,12 +46,7 @@ pub struct CommunityQuery {
 
 impl CommunityQuery {
     fn into_parts(self) -> Result<(PageRequest, CommunityFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let mut filter = CommunityFilter::from_query_params(self.filters)?;
         filter.search = self.search;
         Ok((page, filter))
@@ -64,20 +55,18 @@ impl CommunityQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateCommunityRequest {
-    policy_name: String,
-    network: String,
-    name: String,
+    #[schema(value_type = String)]
+    policy_name: NetworkPolicyName,
+    #[schema(value_type = String)]
+    network: CidrValue,
+    #[schema(value_type = String)]
+    name: CommunityName,
     description: String,
 }
 
 impl CreateCommunityRequest {
-    fn into_command(self) -> Result<crate::domain::community::CreateCommunity, AppError> {
-        crate::domain::community::CreateCommunity::new(
-            NetworkPolicyName::new(self.policy_name)?,
-            crate::domain::types::CidrValue::new(self.network)?,
-            CommunityName::new(self.name)?,
-            self.description,
-        )
+    fn into_command(self) -> Result<CreateCommunity, AppError> {
+        CreateCommunity::new(self.policy_name, self.network, self.name, self.description)
     }
 }
 
@@ -166,13 +155,13 @@ pub(crate) async fn create_community(
             &req,
             authz::actions::community::CREATE,
             authz::actions::resource_kinds::COMMUNITY,
-            request.name.clone(),
+            &request.name,
         )
         .attr(
             "policy_name",
-            AttrValue::String(request.policy_name.clone()),
+            AttrValue::String(request.policy_name.to_string()),
         )
-        .attr("network", AttrValue::Ip(request.network.clone()))
+        .attr("network", AttrValue::Ip(request.network.to_string()))
         .attr(
             "description",
             AttrValue::String(request.description.clone()),
