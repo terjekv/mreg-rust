@@ -81,6 +81,14 @@ pub async fn run() -> io::Result<()> {
     let authz = AuthorizerClient::from_config(&config).map_err(to_io_error)?;
     let events = EventSinkClient::from_config(&config, storage.clone());
     let reader = ReadableStorage::new(storage.clone());
+    let services = Services::new(storage.clone(), events.clone());
+    let seeded = services
+        .seed(&config.seed_data)
+        .await
+        .map_err(to_io_error)?;
+    if seeded > 0 {
+        info!(created = seeded, "applied configured seed data");
+    }
 
     // Background task: prune expired revoked_tokens rows hourly.
     let prune_storage = storage.clone();
@@ -94,7 +102,6 @@ pub async fn run() -> io::Result<()> {
         }
     });
 
-    let services = Services::new(storage, events.clone());
     let state = AppState {
         config: Arc::new(config),
         build_info: BuildInfo::current(),

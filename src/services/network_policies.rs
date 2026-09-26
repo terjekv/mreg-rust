@@ -194,10 +194,9 @@ pub async fn delete_network_policy_attribute(
 }
 
 fn is_protected_policy_attribute(name: &str) -> bool {
-    name == "isolated"
-        || std::env::var("MREG_PROTECTED_POLICY_ATTRIBUTES")
-            .ok()
-            .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == name))
+    std::env::var("MREG_PROTECTED_POLICY_ATTRIBUTES")
+        .ok()
+        .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == name))
 }
 
 #[tracing::instrument(skip(storage, events), fields(resource_kind = "network_policy"))]

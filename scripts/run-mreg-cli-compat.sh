@@ -34,6 +34,8 @@ env \
     MREG_PORT=8000 \
     MREG_STORAGE_BACKEND=memory \
     MREG_RUN_MIGRATIONS=false \
+    MREG_SEED_CONFIG_PATH="$ROOT/scripts/mreg-cli-seeds.toml" \
+    MREG_PROTECTED_POLICY_ATTRIBUTES=isolated \
     MREG_AUTH_MODE=none \
     MREG_ALLOW_DEV_AUTHZ_BYPASS=true \
     MREG_REQUIRE_MAC_FOR_BINDING_IP_TO_COMMUNITY=true \

@@ -1,0 +1,5 @@
+# Explicit initial data expected by the pinned upstream CLI recording.
+[[items]]
+kind = "network_policy_attribute"
+name = "isolated"
+description = "The network uses client isolation."

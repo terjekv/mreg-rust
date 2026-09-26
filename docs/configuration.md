@@ -15,6 +15,8 @@ For authentication flow and endpoint behavior, see [authentication.md](authentic
 | `MREG_DATABASE_URL` | — | PostgreSQL connection string (e.g., `postgres://mreg:mreg@localhost:5432/mreg`) |
 | `MREG_TEST_DATABASE_URL` | — | Separate PostgreSQL connection for integration tests. When not set, PostgreSQL tests are skipped. |
 | `MREG_RUN_MIGRATIONS` | `true` | Run Diesel migrations on startup |
+| `MREG_SEED_CONFIG_PATH` | — | Path to an optional TOML file of initial catalog entries, applied before serving requests on either backend |
+| `MREG_PROTECTED_POLICY_ATTRIBUTES` | — | Comma-separated network-policy attribute names protected against API rename/deletion; no names are implicitly protected |
 | `MREG_JSON_LOGS` | `false` | Use JSON-structured logging (for production log aggregators) |
 | `MREG_WORKERS` | CPU count | Number of Actix-web worker threads |
 | `MREG_TREETOP_URL` | — | Treetop authorization service endpoint (e.g., `http://localhost:9999`). When not set, authorization is bypassed or denied depending on `MREG_ALLOW_DEV_AUTHZ_BYPASS`. |
@@ -62,6 +64,52 @@ MREG_RUN_MIGRATIONS=true
 ```
 
 Case-insensitive behavior is handled by the application layer (all domain types normalize to lowercase). The database uses plain `TEXT` columns.
+
+## Initial catalog data
+
+Set `MREG_SEED_CONFIG_PATH` to a TOML file to pre-seed deployment-specific static
+data. See [seeds.example.toml](../seeds.example.toml) for all supported kinds.
+No file is loaded by default. Seeding runs at application startup for both memory
+and PostgreSQL, independently of API version and `MREG_RUN_MIGRATIONS`. PostgreSQL
+still requires an up-to-date schema when automatic migrations are disabled.
+
+```toml
+[[items]]
+kind = "network_policy_attribute"
+name = "isolated"
+description = "The network uses client isolation."
+
+[[items]]
+kind = "label"
+name = "managed"
+description = "Managed infrastructure"
+```
+
+Supported kinds are `network_policy_attribute`, `network_policy`, `label`,
+`nameserver`, `host_policy_atom`, and `host_policy_role`. Each entry has a `name`.
+Nameservers accept an optional `ttl`; the other kinds accept `description`, which
+is required and nonblank for labels and network policies. Network policies also
+accept `community_template_pattern` and `attributes = [{ name = "isolated",
+value = true }]`. Attribute values may be `false`. Define referenced attributes
+before policies, or create them beforehand. Host-policy roles are initially empty;
+manage memberships through the usual APIs.
+
+Entries use normal domain validation and normalized names. Unknown fields/kinds,
+invalid values, duplicate kind/name pairs, unreadable files, or failed writes stop
+startup. All entries are applied in one transaction; a failure rolls back its
+creations and audit records. Concurrent startup seed batches are serialized.
+
+Seeding only creates missing entries. Repeating startup preserves existing IDs,
+timestamps, descriptions, and memberships, including operator edits. Removing an
+entry from the file does not delete it from PostgreSQL; deleting a configured
+entry through the API causes it to be recreated on the next startup. Memory data
+is rebuilt from the file on every restart. Each creation records a `system:seed`
+audit event and emits a domain event after commit; skipped entries emit neither.
+
+Seeding does not imply protection. To protect an attribute from API rename or
+deletion, also set `MREG_PROTECTED_POLICY_ATTRIBUTES=isolated` (or your own names).
+The v1 CLI compatibility test runner explicitly loads
+`scripts/mreg-cli-seeds.toml` and configures its protection list.
 
 ## Authorization Modes
 

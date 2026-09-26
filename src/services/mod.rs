@@ -15,6 +15,7 @@ pub mod network_policies;
 pub mod networks;
 pub mod ptr_overrides;
 pub mod records;
+mod seeds;
 pub mod tasks;
 pub mod zones;
 
@@ -65,6 +66,7 @@ use crate::{
             CreateRecordInstance, CreateRecordTypeDefinition, RecordInstance, RecordRrset,
             RecordTypeDefinition, UpdateRecord,
         },
+        seeds::SeedData,
         tasks::{CreateTask, TaskEnvelope},
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DnsName, EmailAddressValue, HostGroupName,
@@ -97,6 +99,11 @@ pub struct Services {
 impl Services {
     pub fn new(storage: DynStorage, events: EventSinkClient) -> Self {
         Self { storage, events }
+    }
+
+    /// Atomically create missing configured catalog entries and audit each creation.
+    pub async fn seed(&self, data: &SeedData) -> Result<usize, AppError> {
+        seeds::apply(&self.storage, data, &self.events).await
     }
 
     #[doc(hidden)]

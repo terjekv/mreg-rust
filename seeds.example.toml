@@ -1,0 +1,34 @@
+# Optional deployment defaults. Enable with MREG_SEED_CONFIG_PATH=seeds.example.toml.
+# Entries are created in order only when their kind/name does not already exist.
+# This file is never loaded implicitly. Omit or replace entries to suit your site.
+
+[[items]]
+kind = "network_policy_attribute"
+name = "isolated"
+description = "The network uses client isolation."
+
+[[items]]
+kind = "network_policy"
+name = "guest"
+description = "Guest network policy"
+attributes = [{ name = "isolated", value = true }]
+
+[[items]]
+kind = "label"
+name = "managed"
+description = "Managed infrastructure"
+
+[[items]]
+kind = "nameserver"
+name = "ns1.example.org"
+ttl = 3600
+
+[[items]]
+kind = "host_policy_atom"
+name = "monitoring"
+description = "Enable monitoring"
+
+[[items]]
+kind = "host_policy_role"
+name = "server"
+description = "Server role"

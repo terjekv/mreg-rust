@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use async_trait::async_trait;
-use diesel::{Connection, PgConnection};
+use diesel::{Connection, PgConnection, RunQueryDsl, sql_query};
 use uuid::Uuid;
 
 use crate::{
@@ -88,6 +88,14 @@ impl<'c> PgTxStorage<'c> {
 }
 
 impl<'c> TxStorage for PgTxStorage<'c> {
+    fn lock_seed_data(&self) -> Result<(), AppError> {
+        // Fixed application lock, shared by all server processes on this database.
+        // This prevents concurrent create-if-missing batches from racing.
+        sql_query("SELECT pg_advisory_xact_lock(1836213607, 1936024932)")
+            .execute(&mut **self.conn.borrow_mut())?;
+        Ok(())
+    }
+
     fn labels(&self) -> &dyn TxLabelStore {
         self
     }

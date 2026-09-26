@@ -187,6 +187,11 @@ impl<'tx> MemTxStorage<'tx> {
 }
 
 impl<'tx> TxStorage for MemTxStorage<'tx> {
+    fn lock_seed_data(&self) -> Result<(), AppError> {
+        // The memory transaction already holds the exclusive state lock.
+        Ok(())
+    }
+
     fn labels(&self) -> &dyn TxLabelStore {
         self
     }

@@ -129,6 +129,12 @@ implemented.
 
 ## mreg-cli compatibility CI
 
+The runner explicitly enables `scripts/mreg-cli-seeds.toml` with
+`MREG_SEED_CONFIG_PATH` and protects `isolated` with
+`MREG_PROTECTED_POLICY_ATTRIBUTES`. These are fixture settings. Production
+deployments configure their own [initial catalog data](configuration.md#initial-catalog-data)
+independently of API version; no policy attribute is implicitly created or protected.
+
 The `mreg-cli` CI job pins upstream mreg-cli commit
 `72e598d3602812fc61a2d3a248ac8f4385dfb118`, runs its 401-command recorded
 testsuite, and compares recordings. Exact matches pass. A changed command is

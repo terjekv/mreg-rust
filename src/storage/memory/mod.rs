@@ -57,7 +57,7 @@ use crate::{
             RecordInstance, RecordRrset, RecordTypeDefinition, built_in_record_types,
         },
         tasks::TaskEnvelope,
-        types::{IpAddressValue, MacAddressValue, NetworkPolicyAttributeName},
+        types::{IpAddressValue, MacAddressValue},
         zone::{ForwardZone, ForwardZoneDelegation, ReverseZone, ReverseZoneDelegation},
     },
     errors::AppError,
@@ -285,17 +285,6 @@ impl MemoryStorage {
                     .insert(definition.name().as_str().to_string(), definition);
             }
         }
-
-        let isolated = NetworkPolicyAttribute::restore(
-            Uuid::new_v4(),
-            NetworkPolicyAttributeName::new("isolated").expect("built-in attribute name is valid"),
-            "The network uses client isolation.",
-            now,
-            now,
-        );
-        state
-            .network_policy_attributes
-            .insert("isolated".to_string(), isolated);
 
         // Seed built-in export templates
         if let Ok(builtins) = crate::domain::builtin_export_templates::built_in_export_templates() {

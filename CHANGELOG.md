@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Configurable startup seeding with `MREG_SEED_CONFIG_PATH` for network-policy
+  attributes and policies, labels, nameservers, and host-policy atoms and roles.
+  Both storage backends apply missing entries atomically with audit/events,
+  independently of API version and automatic migrations; existing data is preserved.
 - A dedicated Django-mreg v1 compatibility API, including the stateful endpoint
   adapters required by the pinned `mreg-cli` testsuite and an allowlisted CI
   comparison job documenting strict validation differences and unsupported
@@ -33,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (deployment defaults):** `isolated` is no longer automatically
+  created or protected. Deployments needing it must add it to a seed TOML file,
+  set `MREG_SEED_CONFIG_PATH`, and include it in `MREG_PROTECTED_POLICY_ATTRIBUTES`
+  if protection is required. Existing PostgreSQL rows are preserved; see
+  `seeds.example.toml` and `docs/configuration.md`.
+- **Breaking (Rust API):** `Config` now includes `seed_data`; initialize it with
+  `SeedData::default()` when constructing configuration explicitly. Custom
+  `TxStorage` implementations must implement `lock_seed_data` to serialize seed
+  batches for the transaction's lifetime (or delegate to the wrapped backend).
 - **Breaking (legacy compatibility):** v1 now enforces the same domain validation
   as v2. Correct invalid NAPTR/SSHFP data and blank network-policy or community
   descriptions before retrying requests. Explicit IP assignments must use

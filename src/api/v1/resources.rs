@@ -3017,13 +3017,6 @@ struct LegacyUpdateNetworkPolicyAttribute {
     description: Option<String>,
 }
 
-fn is_protected_policy_attribute(name: &str) -> bool {
-    name == "isolated"
-        || std::env::var("MREG_PROTECTED_POLICY_ATTRIBUTES")
-            .ok()
-            .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == name))
-}
-
 async fn update_network_policy_attribute(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -3032,17 +3025,6 @@ async fn update_network_policy_attribute(
 ) -> Result<HttpResponse, AppError> {
     let old = network_policy_attribute_from_legacy_id(&state, id.into_inner()).await?;
     let payload = payload.into_inner();
-    if is_protected_policy_attribute(old.name().as_str())
-        && payload
-            .name
-            .as_deref()
-            .is_some_and(|name| !old.name().as_str().eq_ignore_ascii_case(name))
-    {
-        return Err(AppError::forbidden(format!(
-            "Cannot rename protected attribute '{}'.",
-            old.name()
-        )));
-    }
     authorize(
         &req,
         &state,
@@ -3074,12 +3056,6 @@ async fn delete_network_policy_attribute(
     id: web::Path<u32>,
 ) -> Result<HttpResponse, AppError> {
     let attribute = network_policy_attribute_from_legacy_id(&state, id.into_inner()).await?;
-    if is_protected_policy_attribute(attribute.name().as_str()) {
-        return Err(AppError::forbidden(format!(
-            "Cannot delete the attribute '{}', it is protected.",
-            attribute.name()
-        )));
-    }
     authorize(
         &req,
         &state,

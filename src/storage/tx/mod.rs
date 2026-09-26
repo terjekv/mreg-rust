@@ -52,6 +52,9 @@ pub use zones::TxZoneStore;
 /// every per-subsystem store as a synchronous mirror of the async `Storage`
 /// accessors.
 pub trait TxStorage {
+    /// Serialize startup seed batches until this transaction commits or rolls back.
+    fn lock_seed_data(&self) -> Result<(), AppError>;
+
     fn labels(&self) -> &dyn TxLabelStore;
     fn nameservers(&self) -> &dyn TxNameServerStore;
     fn zones(&self) -> &dyn TxZoneStore;

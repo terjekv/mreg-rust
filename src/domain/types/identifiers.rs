@@ -65,6 +65,15 @@ impl HostPolicyName {
     }
 }
 
+impl<'de> Deserialize<'de> for HostPolicyName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Validated host group name (lowercase letters, digits, hyphens, underscores, dots).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostGroupName(String);
