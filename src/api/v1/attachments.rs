@@ -13,7 +13,7 @@ use crate::{
             CreateAttachmentPrefixReservation, CreateHostAttachment, DhcpIdentifierFamily,
             DhcpIdentifierKind, HostAttachment, UpdateHostAttachment,
         },
-        host::AssignIpAddress,
+        host::{AllocationPolicy, AssignIpAddress},
         types::{
             CidrValue, DhcpPriority, Hostname, IpAddressValue, MacAddressKind, MacAddressValue,
             UpdateField,
@@ -145,8 +145,10 @@ pub struct HostAttachmentDetailResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateHostAttachmentRequest {
-    network: String,
-    mac_address: Option<String>,
+    #[schema(value_type = String)]
+    network: CidrValue,
+    #[schema(value_type = Option<String>)]
+    mac_address: Option<MacAddressValue>,
     comment: Option<String>,
 }
 
@@ -154,8 +156,8 @@ impl CreateHostAttachmentRequest {
     fn into_command(self, host_name: Hostname) -> Result<CreateHostAttachment, AppError> {
         Ok(CreateHostAttachment::new(
             host_name,
-            CidrValue::new(self.network)?,
-            self.mac_address.map(MacAddressValue::new).transpose()?,
+            self.network,
+            self.mac_address,
             self.comment,
         ))
     }
@@ -165,7 +167,7 @@ impl CreateHostAttachmentRequest {
 pub struct UpdateHostAttachmentRequest {
     #[serde(default)]
     #[schema(value_type = Option<String>)]
-    mac_address: UpdateField<String>,
+    mac_address: UpdateField<MacAddressValue>,
     #[serde(default)]
     #[schema(value_type = Option<String>)]
     comment: UpdateField<String>,
@@ -174,7 +176,7 @@ pub struct UpdateHostAttachmentRequest {
 impl UpdateHostAttachmentRequest {
     fn into_command(self) -> Result<UpdateHostAttachment, AppError> {
         Ok(UpdateHostAttachment {
-            mac_address: self.mac_address.try_map(MacAddressValue::new)?,
+            mac_address: self.mac_address,
             comment: self.comment,
         })
     }
@@ -183,10 +185,11 @@ impl UpdateHostAttachmentRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct CreateAttachmentDhcpIdentifierRequest {
     family: u8,
-    kind: String,
+    kind: DhcpIdentifierKind,
     value: String,
     #[schema(default = 100)]
-    priority: i32,
+    #[schema(value_type = i32)]
+    priority: DhcpPriority,
 }
 
 impl CreateAttachmentDhcpIdentifierRequest {
@@ -200,32 +203,20 @@ impl CreateAttachmentDhcpIdentifierRequest {
                 ));
             }
         };
-        let kind = match self.kind.as_str() {
-            "client_id" => DhcpIdentifierKind::ClientId,
-            "duid_llt" => DhcpIdentifierKind::DuidLlt,
-            "duid_en" => DhcpIdentifierKind::DuidEn,
-            "duid_ll" => DhcpIdentifierKind::DuidLl,
-            "duid_uuid" => DhcpIdentifierKind::DuidUuid,
-            "duid_raw" => DhcpIdentifierKind::DuidRaw,
-            _ => {
-                return Err(AppError::validation(
-                    "unsupported attachment DHCP identifier kind",
-                ));
-            }
-        };
         CreateAttachmentDhcpIdentifier::new(
             attachment_id,
             family,
-            kind,
+            self.kind,
             self.value,
-            DhcpPriority::new(self.priority),
+            self.priority,
         )
     }
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateAttachmentPrefixReservationRequest {
-    prefix: String,
+    #[schema(value_type = String)]
+    prefix: CidrValue,
 }
 
 impl CreateAttachmentPrefixReservationRequest {
@@ -233,15 +224,17 @@ impl CreateAttachmentPrefixReservationRequest {
         self,
         attachment_id: Uuid,
     ) -> Result<CreateAttachmentPrefixReservation, AppError> {
-        CreateAttachmentPrefixReservation::new(attachment_id, CidrValue::new(self.prefix)?)
+        CreateAttachmentPrefixReservation::new(attachment_id, self.prefix)
     }
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateAttachmentIpAddressRequest {
-    address: Option<String>,
+    #[schema(value_type = Option<String>)]
+    address: Option<IpAddressValue>,
     #[serde(default)]
-    allocation: Option<String>,
+    #[schema(value_type = Option<String>)]
+    allocation: Option<AllocationPolicy>,
 }
 
 async fn ip_page_for_attachment<'a>(
@@ -281,9 +274,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 pub(crate) async fn list_host_attachments(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<Hostname>,
 ) -> Result<HttpResponse, AppError> {
-    let host_name = Hostname::new(path.into_inner())?;
+    let host_name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -315,10 +308,10 @@ pub(crate) async fn list_host_attachments(
 pub(crate) async fn create_host_attachment(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<Hostname>,
     payload: web::Json<CreateHostAttachmentRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let host_name = Hostname::new(path.into_inner())?;
+    let host_name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -475,16 +468,8 @@ pub(crate) async fn assign_ip_to_attachment(
     )
     .await?;
     let request = payload.into_inner();
-    let address = request.address.map(IpAddressValue::new).transpose()?;
-    let allocation = match request.allocation.as_deref() {
-        Some("random") => crate::domain::host::AllocationPolicy::Random,
-        Some("first_free") | None => crate::domain::host::AllocationPolicy::FirstFree,
-        Some(other) => {
-            return Err(AppError::validation(format!(
-                "unknown allocation policy: {other}"
-            )));
-        }
-    };
+    let address = request.address;
+    let allocation = request.allocation.unwrap_or_default();
     let network = address.is_none().then(|| attachment.network_cidr().clone());
     let command = AssignIpAddress::new(
         attachment.host_name().clone(),

@@ -8,7 +8,7 @@ use crate::{
     authz::actions,
     domain::{
         filters::RecordFilter,
-        pagination::{PageRequest, SortDirection},
+        pagination::{PageLimit, PageRequest, SortDirection},
     },
     errors::AppError,
 };
@@ -98,11 +98,7 @@ pub(crate) async fn rrsets(
 pub struct ListRecordsQuery {
     // Pagination + sort
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     // Operator-based filter params
@@ -112,12 +108,7 @@ pub struct ListRecordsQuery {
 
 impl ListRecordsQuery {
     fn into_parts(self) -> Result<(PageRequest, RecordFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let filter = RecordFilter::from_query_params(self.filters)?;
         Ok((page, filter))
     }

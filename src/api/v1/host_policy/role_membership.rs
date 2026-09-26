@@ -3,7 +3,7 @@ use actix_web::{HttpRequest, HttpResponse, delete, post, web};
 use crate::{
     AppState,
     authz::{self, AttrValue},
-    domain::types::HostPolicyName,
+    domain::types::{HostPolicyName, Hostname, LabelName},
     errors::AppError,
 };
 
@@ -41,11 +41,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 pub(crate) async fn add_atom_to_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
+    path: web::Path<(HostPolicyName, HostPolicyName)>,
 ) -> Result<HttpResponse, AppError> {
     let (role_name, atom_name) = path.into_inner();
-    let role_name = HostPolicyName::new(role_name)?;
-    let atom_name = HostPolicyName::new(atom_name)?;
     require(
         &state,
         authz_request(
@@ -83,11 +81,9 @@ pub(crate) async fn add_atom_to_role(
 pub(crate) async fn remove_atom_from_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
+    path: web::Path<(HostPolicyName, HostPolicyName)>,
 ) -> Result<HttpResponse, AppError> {
     let (role_name, atom_name) = path.into_inner();
-    let role_name = HostPolicyName::new(role_name)?;
-    let atom_name = HostPolicyName::new(atom_name)?;
     require(
         &state,
         authz_request(
@@ -126,10 +122,9 @@ pub(crate) async fn remove_atom_from_role(
 pub(crate) async fn add_host_to_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
+    path: web::Path<(HostPolicyName, Hostname)>,
 ) -> Result<HttpResponse, AppError> {
     let (role_name, host_name) = path.into_inner();
-    let role_name = HostPolicyName::new(role_name)?;
     require(
         &state,
         authz_request(
@@ -138,7 +133,7 @@ pub(crate) async fn add_host_to_role(
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("host", AttrValue::String(host_name.clone())),
+        .attr("host", AttrValue::String(host_name.to_string())),
     )
     .await?;
     state
@@ -167,10 +162,9 @@ pub(crate) async fn add_host_to_role(
 pub(crate) async fn remove_host_from_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
+    path: web::Path<(HostPolicyName, Hostname)>,
 ) -> Result<HttpResponse, AppError> {
     let (role_name, host_name) = path.into_inner();
-    let role_name = HostPolicyName::new(role_name)?;
     require(
         &state,
         authz_request(
@@ -179,7 +173,7 @@ pub(crate) async fn remove_host_from_role(
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("host", AttrValue::String(host_name.clone())),
+        .attr("host", AttrValue::String(host_name.to_string())),
     )
     .await?;
     state
@@ -209,10 +203,9 @@ pub(crate) async fn remove_host_from_role(
 pub(crate) async fn add_label_to_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
+    path: web::Path<(HostPolicyName, LabelName)>,
 ) -> Result<HttpResponse, AppError> {
     let (role_name, label_name) = path.into_inner();
-    let role_name = HostPolicyName::new(role_name)?;
     require(
         &state,
         authz_request(
@@ -221,7 +214,7 @@ pub(crate) async fn add_label_to_role(
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("label", AttrValue::String(label_name.clone())),
+        .attr("label", AttrValue::String(label_name.to_string())),
     )
     .await?;
     state
@@ -250,10 +243,9 @@ pub(crate) async fn add_label_to_role(
 pub(crate) async fn remove_label_from_role(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
+    path: web::Path<(HostPolicyName, LabelName)>,
 ) -> Result<HttpResponse, AppError> {
     let (role_name, label_name) = path.into_inner();
-    let role_name = HostPolicyName::new(role_name)?;
     require(
         &state,
         authz_request(
@@ -262,7 +254,7 @@ pub(crate) async fn remove_label_from_role(
             authz::actions::resource_kinds::HOST_POLICY_ROLE,
             role_name.as_str(),
         )
-        .attr("label", AttrValue::String(label_name.clone())),
+        .attr("label", AttrValue::String(label_name.to_string())),
     )
     .await?;
     state

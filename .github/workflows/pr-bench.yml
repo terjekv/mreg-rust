@@ -21,13 +21,12 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: Use matching benchmark harnesses for base and head
+      - name: Discover benchmark targets
         id: matrix
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CRITERION_ARGS: "--noplot --sample-size 80 --measurement-time 6"
         run: |
-          BENCHMARKS=$(python3 .github/scripts/benchmark_matrix.py "$HEAD_SHA" --criterion-args "$CRITERION_ARGS")
+          BENCHMARKS=$(python3 .github/scripts/benchmark_matrix.py)
           printf 'benchmarks=%s\ncriterion_args=%s\n' "$BENCHMARKS" "$CRITERION_ARGS" >> "$GITHUB_OUTPUT"
 
   bench:

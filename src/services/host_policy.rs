@@ -8,7 +8,7 @@ use crate::{
             UpdateHostPolicyAtom, UpdateHostPolicyRole,
         },
         pagination::{Page, PageRequest},
-        types::HostPolicyName,
+        types::{HostPolicyName, Hostname, LabelName},
     },
     errors::AppError,
     events::{DomainEvent, EventSinkClient},
@@ -295,7 +295,7 @@ pub async fn remove_atom_from_role(
 pub async fn add_host_to_role(
     storage: &DynStorage,
     role_name: &HostPolicyName,
-    host_name: &str,
+    host_name: &Hostname,
     events: &EventSinkClient,
 ) -> Result<(), AppError> {
     let role_name_owned = role_name.clone();
@@ -326,7 +326,7 @@ pub async fn add_host_to_role(
 pub async fn remove_host_from_role(
     storage: &DynStorage,
     role_name: &HostPolicyName,
-    host_name: &str,
+    host_name: &Hostname,
     events: &EventSinkClient,
 ) -> Result<(), AppError> {
     let role_name_owned = role_name.clone();
@@ -357,7 +357,7 @@ pub async fn remove_host_from_role(
 pub async fn add_label_to_role(
     storage: &DynStorage,
     role_name: &HostPolicyName,
-    label_name: &str,
+    label_name: &LabelName,
     events: &EventSinkClient,
 ) -> Result<(), AppError> {
     let role_name_owned = role_name.clone();
@@ -388,7 +388,7 @@ pub async fn add_label_to_role(
 pub async fn remove_label_from_role(
     storage: &DynStorage,
     role_name: &HostPolicyName,
-    label_name: &str,
+    label_name: &LabelName,
     events: &EventSinkClient,
 ) -> Result<(), AppError> {
     let role_name_owned = role_name.clone();

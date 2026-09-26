@@ -9,13 +9,17 @@ Rust reimplementation of the Django-based [mreg](https://github.com/unioslo/mreg
 ## Rust Standards
 
 - Follow Rust best practices and the conventions already present in this repository.
-- Prefer designs built around newtypes instead of passing primitive values through the domain unchecked.
-- Newtypes should usually have validating constructors, private fields, and explicit accessors or setters where mutation is part of the model.
-- Endpoints should accept newtypes whenever possible so validation happens at the boundary, as early as possible, with clear and actionable error messages.
+- Use domain newtypes for values with durable format, range, normalization, or identity constraints. Keep validated values typed through request DTOs, commands, services, storage traits, transactions, and entities; unwrap only at serialization, SQL, or external-library boundaries. Plain primitives remain appropriate for unconstrained text, counters, and transport/persistence representations.
+- Newtypes must have private representations and constructors that enforce their invariants. Provide explicit read-only accessors; setters, when needed, must validate before mutation. Do not expose mutable inner values or infallible conversions from unchecked input.
+- Endpoints should deserialize constrained JSON fields, path parameters, and query values directly into domain types wherever the invariant is context-independent. Preserve primitive wire shapes and OpenAPI schemas. Report clear validation errors before authorization or resource lookup; validate cross-field and persisted-state constraints in commands or atomic storage operations.
 - Put behavior on types with `impl` blocks when it naturally belongs to the type. Prefer this over collections of bare functions that operate on loosely related data.
-- Keep invariants close to the data they protect. Constructors and setters should reject invalid states rather than relying on callers to remember preconditions.
+- Keep invariants close to the data they protect. Constructors and setters should reject invalid states rather than relying on callers to remember preconditions. `Deserialize`, `TryFrom`, and persistence restoration must enforce the same invariants as construction; never derive a deserializer that writes constrained private fields unchecked.
 - Use small, explicit APIs. Expose only what callers need, and keep representation details private unless there is a strong reason not to.
 - Prefer `use` imports over inline fully qualified paths for functions, types, and macros. Only fully qualify a path inline when needed to resolve a genuine name ambiguity, or for a one-off reference where a `use` would mislead.
+- Use enums for closed sets of meaningful alternatives. Represent internal modes explicitly; do not overload public primitive values with internal sentinels such as an unlimited page size.
+- Use typestate builders when they prevent meaningful invalid call order or missing required data; otherwise prefer a simpler builder with validating terminal methods. If a constructor already requires all essential data and later methods only add valid options, keep that simpler API.
+- Use Rust's conventional module discovery (`foo.rs` or `foo/mod.rs`) and organize files accordingly. Do not use `#[path = "..."]` module overrides.
+- Cover newtype contracts with accepted/rejected inputs, normalization, deserialization, and relevant HTTP/backend tests. Test PATCH absent/null/value semantics and wire compatibility when changing request fields.
 - Prefer one assertion per test. Use `rstest` cases for multiple inputs or outcomes, and split unrelated response properties into separate tests unless they form one cohesive assertion.
 
 ## Commands
@@ -55,7 +59,7 @@ src/db/            → Diesel schema.rs (auto-generated), models.rs (row types)
 
 ### Key design patterns
 
-**Type-driven domain:** All domain invariants are value objects in `src/domain/types.rs` (DnsName, Hostname, ZoneName, LabelName, CidrValue, etc.). They validate and normalize on construction (e.g., DNS names lowercased, trailing dots stripped). Private fields, no mutation — only `new()`, `restore()`, and accessor methods. Custom Serialize/Deserialize impls that go through validation.
+**Type-driven domain:** Shared domain value objects live in `src/domain/types/`; subsystem-specific types live beside their domain model (DnsName, Hostname, ZoneName, LabelName, CidrValue, etc.). They validate and normalize on construction (e.g., DNS names lowercased, trailing dots stripped). Private fields, no mutation — only `new()`, `restore()`, and accessor methods. Custom Serialize/Deserialize impls that go through validation.
 
 **Storage trait composition:** The `Storage` trait in `src/storage/mod.rs` aggregates ~18 subsystem store traits (LabelStore, ZoneStore, HostStore, RecordStore, etc.). Each store trait defines CRUD + listing with filtering/pagination. Both backends implement all traits. Backend selected at runtime via `MREG_STORAGE_BACKEND` env var (auto/memory/postgres).
 

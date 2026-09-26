@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Display};
 
 use actix_web::HttpRequest;
 
@@ -51,16 +51,16 @@ impl<'a> UpdateAuthzBuilder<'a> {
 
     /// If `value` is `Some`, emit an authz request with a `String` attribute
     /// named `attr_name`.
-    pub fn field_string(
+    pub fn field_string<T: Display>(
         &mut self,
-        value: &Option<String>,
+        value: &Option<T>,
         action: &str,
         attr_name: &str,
     ) -> &mut Self {
         if let Some(val) = value {
             self.requests.push(
                 self.base_request(action)
-                    .attr(attr_name, AttrValue::String(val.clone()))
+                    .attr(attr_name, AttrValue::String(val.to_string()))
                     .build(),
             );
         }
@@ -93,16 +93,16 @@ impl<'a> UpdateAuthzBuilder<'a> {
     }
 
     /// If `value` is `Some`, emit an authz request with a string-set attribute.
-    pub fn field_string_set(
+    pub fn field_string_set<T: Display>(
         &mut self,
-        value: &Option<Vec<String>>,
+        value: &Option<Vec<T>>,
         action: &str,
         attr_name: &str,
     ) -> &mut Self {
         if let Some(vals) = value {
             self.requests.push(
                 self.base_request(action)
-                    .attr(attr_name, string_set(vals.clone()))
+                    .attr(attr_name, string_set(vals))
                     .build(),
             );
         }
@@ -186,13 +186,13 @@ pub(crate) fn request(
     req: &HttpRequest,
     action: &str,
     resource_kind: &str,
-    resource_id: impl Into<String>,
+    resource_id: impl ToString,
 ) -> AuthorizationRequestBuilder {
     AuthorizationRequest::builder(
         extract_principal(req),
         action,
         resource_kind,
-        resource_id.into(),
+        resource_id.to_string(),
     )
 }
 
@@ -213,8 +213,13 @@ pub(crate) async fn require_all(
     require_permissions(&state.authz, requests).await
 }
 
-pub(crate) fn string_set(values: impl IntoIterator<Item = String>) -> AttrValue {
-    AttrValue::Set(values.into_iter().map(AttrValue::String).collect())
+pub(crate) fn string_set<T: Display>(values: impl IntoIterator<Item = T>) -> AttrValue {
+    AttrValue::Set(
+        values
+            .into_iter()
+            .map(|value| AttrValue::String(value.to_string()))
+            .collect(),
+    )
 }
 
 pub(crate) fn host_attrs(authz_context: &HostAuthContext) -> BTreeMap<String, AttrValue> {

@@ -1007,28 +1007,28 @@ impl HostPolicyService<'_> {
     pub async fn add_host_to_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         host_policy::add_host_to_role(self.storage, role_name, host_name, self.events).await
     }
     pub async fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         host_policy::remove_host_from_role(self.storage, role_name, host_name, self.events).await
     }
     pub async fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         host_policy::add_label_to_role(self.storage, role_name, label_name, self.events).await
     }
     pub async fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         host_policy::remove_label_from_role(self.storage, role_name, label_name, self.events).await
     }

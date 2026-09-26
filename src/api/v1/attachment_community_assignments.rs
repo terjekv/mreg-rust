@@ -12,7 +12,7 @@ use crate::{
     domain::{
         attachment::{AttachmentCommunityAssignment, CreateAttachmentCommunityAssignment},
         filters::AttachmentCommunityAssignmentFilter,
-        pagination::{PageRequest, PageResponse, SortDirection},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{CommunityName, NetworkPolicyName},
     },
     errors::AppError,
@@ -30,11 +30,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct AttachmentCommunityAssignmentQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     #[serde(flatten)]
@@ -44,12 +40,7 @@ pub struct AttachmentCommunityAssignmentQuery {
 impl AttachmentCommunityAssignmentQuery {
     fn into_parts(self) -> Result<(PageRequest, AttachmentCommunityAssignmentFilter), AppError> {
         Ok((
-            PageRequest {
-                after: self.after,
-                limit: self.limit,
-                sort_by: self.sort_by,
-                sort_dir: self.sort_dir,
-            },
+            PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir),
             AttachmentCommunityAssignmentFilter::from_query_params(self.filters)?,
         ))
     }
@@ -58,16 +49,18 @@ impl AttachmentCommunityAssignmentQuery {
 #[derive(Deserialize, ToSchema)]
 pub struct CreateAttachmentCommunityAssignmentRequest {
     attachment_id: Uuid,
-    policy_name: String,
-    community_name: String,
+    #[schema(value_type = String)]
+    policy_name: NetworkPolicyName,
+    #[schema(value_type = String)]
+    community_name: CommunityName,
 }
 
 impl CreateAttachmentCommunityAssignmentRequest {
     fn into_command(self) -> Result<CreateAttachmentCommunityAssignment, AppError> {
         Ok(CreateAttachmentCommunityAssignment::new(
             self.attachment_id,
-            NetworkPolicyName::new(self.policy_name)?,
-            CommunityName::new(self.community_name)?,
+            self.policy_name,
+            self.community_name,
         ))
     }
 }
@@ -175,8 +168,8 @@ pub(crate) async fn create_attachment_community_assignment(
         .attachments()
         .get_attachment(request.attachment_id)
         .await?;
-    let policy_name = NetworkPolicyName::new(&request.policy_name)?;
-    let community_name = CommunityName::new(&request.community_name)?;
+    let policy_name = request.policy_name.clone();
+    let community_name = request.community_name.clone();
     let community = state
         .services
         .communities()

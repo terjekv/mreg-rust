@@ -11,8 +11,8 @@ use crate::{
     authz::{self, AttrValue},
     domain::{
         filters::HostCommunityAssignmentFilter,
-        host_community_assignment::HostCommunityAssignment,
-        pagination::{PageRequest, PageResponse, SortDirection},
+        host_community_assignment::{CreateHostCommunityAssignment, HostCommunityAssignment},
+        pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{CommunityName, Hostname, IpAddressValue, NetworkPolicyName},
     },
     errors::AppError,
@@ -36,11 +36,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[derive(Deserialize)]
 pub struct HostCommunityAssignmentQuery {
     after: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::domain::pagination::deserialize_page_limit"
-    )]
-    limit: Option<u64>,
+    limit: Option<PageLimit>,
     sort_by: Option<String>,
     sort_dir: Option<SortDirection>,
     #[serde(flatten)]
@@ -49,12 +45,7 @@ pub struct HostCommunityAssignmentQuery {
 
 impl HostCommunityAssignmentQuery {
     fn into_parts(self) -> Result<(PageRequest, HostCommunityAssignmentFilter), AppError> {
-        let page = PageRequest {
-            after: self.after,
-            limit: self.limit,
-            sort_by: self.sort_by,
-            sort_dir: self.sort_dir,
-        };
+        let page = PageRequest::new(self.after, self.limit, self.sort_by, self.sort_dir);
         let filter = HostCommunityAssignmentFilter::from_query_params(self.filters)?;
         Ok((page, filter))
     }
@@ -62,25 +53,24 @@ impl HostCommunityAssignmentQuery {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateHostCommunityAssignmentRequest {
-    host_name: String,
-    address: String,
-    policy_name: String,
-    community_name: String,
+    #[schema(value_type = String)]
+    host_name: Hostname,
+    #[schema(value_type = String)]
+    address: IpAddressValue,
+    #[schema(value_type = String)]
+    policy_name: NetworkPolicyName,
+    #[schema(value_type = String)]
+    community_name: CommunityName,
 }
 
 impl CreateHostCommunityAssignmentRequest {
-    fn into_command(
-        self,
-    ) -> Result<crate::domain::host_community_assignment::CreateHostCommunityAssignment, AppError>
-    {
-        Ok(
-            crate::domain::host_community_assignment::CreateHostCommunityAssignment::new(
-                Hostname::new(self.host_name)?,
-                IpAddressValue::new(self.address)?,
-                NetworkPolicyName::new(self.policy_name)?,
-                CommunityName::new(self.community_name)?,
-            ),
-        )
+    fn into_command(self) -> Result<CreateHostCommunityAssignment, AppError> {
+        Ok(CreateHostCommunityAssignment::new(
+            self.host_name,
+            self.address,
+            self.policy_name,
+            self.community_name,
+        ))
     }
 }
 

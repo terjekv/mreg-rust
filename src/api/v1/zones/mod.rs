@@ -4,6 +4,8 @@ pub mod reverse;
 
 use actix_web::web;
 
+use crate::domain::types::{SerialNumber, SoaSeconds, Ttl};
+
 // Re-export all public types for backward compatibility
 pub use delegations::{
     CreateDelegationRequest, ForwardZoneDelegationResponse, ReverseZoneDelegationResponse,
@@ -28,26 +30,26 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 }
 
 // Shared default functions used by serde defaults in forward and reverse modules
-fn default_serial_no() -> u32 {
-    1
+fn default_serial_no() -> SerialNumber {
+    SerialNumber::new(1).expect("valid default serial_no")
 }
 
-fn default_refresh() -> u32 {
-    10_800
+fn default_refresh() -> SoaSeconds {
+    SoaSeconds::new(10_800).expect("valid default refresh")
 }
 
-fn default_retry() -> u32 {
-    3_600
+fn default_retry() -> SoaSeconds {
+    SoaSeconds::new(3_600).expect("valid default retry")
 }
 
-fn default_expire() -> u32 {
-    1_814_400
+fn default_expire() -> SoaSeconds {
+    SoaSeconds::new(1_814_400).expect("valid default expire")
 }
 
-fn default_ttl_value() -> u32 {
-    43_200
+fn default_ttl_value() -> Ttl {
+    Ttl::new(43_200).expect("valid default ttl_value")
 }
 
-fn default_negative_ttl() -> u32 {
-    3_600
+fn default_negative_ttl() -> Ttl {
+    Ttl::new(3_600).expect("valid default negative_ttl")
 }

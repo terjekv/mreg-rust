@@ -1,6 +1,8 @@
-use actix_web::web;
+use actix_web::{error::JsonPayloadError, web};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
+use crate::errors::AppError;
 
 pub mod v1;
 
@@ -282,7 +284,12 @@ pub mod v1;
 pub struct ApiDoc;
 
 pub fn json_config(limit_bytes: usize) -> web::JsonConfig {
-    web::JsonConfig::default().limit(limit_bytes)
+    web::JsonConfig::default()
+        .limit(limit_bytes)
+        .error_handler(|error, _| match error {
+            JsonPayloadError::Deserialize(error) => AppError::validation(error.to_string()).into(),
+            other => other.into(),
+        })
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig, trust_proxy_headers: bool) {

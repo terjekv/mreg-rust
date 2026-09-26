@@ -14,7 +14,7 @@ use crate::{
             UpdateHostPolicyAtom, UpdateHostPolicyRole,
         },
         pagination::{Page, PageRequest},
-        types::{HostPolicyName, Hostname},
+        types::{HostPolicyName, Hostname, LabelName},
     },
     errors::AppError,
     storage::HostPolicyStore,
@@ -398,7 +398,7 @@ impl PostgresStorage {
     pub(in crate::storage::postgres) fn add_host_to_role_in_conn(
         c: &mut diesel::PgConnection,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         sql_query(
             "INSERT INTO host_policy_role_hosts (role_id, host_id)
@@ -407,7 +407,7 @@ impl PostgresStorage {
              WHERE r.name = $1 AND h.name = $2",
         )
         .bind::<Text, _>(role_name.as_str())
-        .bind::<Text, _>(host_name)
+        .bind::<Text, _>(host_name.as_str())
         .execute(c)
         .map_err(map_fk_violation(
             "host or role not found, or already assigned",
@@ -418,7 +418,7 @@ impl PostgresStorage {
     pub(in crate::storage::postgres) fn remove_host_from_role_in_conn(
         c: &mut diesel::PgConnection,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         let deleted = sql_query(
             "DELETE FROM host_policy_role_hosts
@@ -426,7 +426,7 @@ impl PostgresStorage {
                AND host_id = (SELECT id FROM hosts WHERE name = $2)",
         )
         .bind::<Text, _>(role_name.as_str())
-        .bind::<Text, _>(host_name)
+        .bind::<Text, _>(host_name.as_str())
         .execute(c)?;
         if deleted == 0 {
             return Err(AppError::not_found(format!(
@@ -441,7 +441,7 @@ impl PostgresStorage {
     pub(in crate::storage::postgres) fn add_label_to_role_in_conn(
         c: &mut diesel::PgConnection,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         sql_query(
             "INSERT INTO host_policy_role_labels (role_id, label_id)
@@ -450,7 +450,7 @@ impl PostgresStorage {
              WHERE r.name = $1 AND l.name = $2",
         )
         .bind::<Text, _>(role_name.as_str())
-        .bind::<Text, _>(label_name)
+        .bind::<Text, _>(label_name.as_str())
         .execute(c)
         .map_err(map_fk_violation(
             "label or role not found, or already assigned",
@@ -461,7 +461,7 @@ impl PostgresStorage {
     pub(in crate::storage::postgres) fn remove_label_from_role_in_conn(
         c: &mut diesel::PgConnection,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         let deleted = sql_query(
             "DELETE FROM host_policy_role_labels
@@ -469,7 +469,7 @@ impl PostgresStorage {
                AND label_id = (SELECT id FROM labels WHERE name = $2)",
         )
         .bind::<Text, _>(role_name.as_str())
-        .bind::<Text, _>(label_name)
+        .bind::<Text, _>(label_name.as_str())
         .execute(c)?;
         if deleted == 0 {
             return Err(AppError::not_found(format!(
@@ -607,10 +607,10 @@ impl HostPolicyStore for PostgresStorage {
     async fn add_host_to_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         let role_name = role_name.clone();
-        let host_name = host_name.to_string();
+        let host_name = host_name.clone();
         self.database
             .run(move |c| Self::add_host_to_role_in_conn(c, &role_name, &host_name))
             .await
@@ -619,10 +619,10 @@ impl HostPolicyStore for PostgresStorage {
     async fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         let role_name = role_name.clone();
-        let host_name = host_name.to_string();
+        let host_name = host_name.clone();
         self.database
             .run(move |c| Self::remove_host_from_role_in_conn(c, &role_name, &host_name))
             .await
@@ -631,10 +631,10 @@ impl HostPolicyStore for PostgresStorage {
     async fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         let role_name = role_name.clone();
-        let label_name = label_name.to_string();
+        let label_name = label_name.clone();
         self.database
             .run(move |c| Self::add_label_to_role_in_conn(c, &role_name, &label_name))
             .await
@@ -643,10 +643,10 @@ impl HostPolicyStore for PostgresStorage {
     async fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         let role_name = role_name.clone();
-        let label_name = label_name.to_string();
+        let label_name = label_name.clone();
         self.database
             .run(move |c| Self::remove_label_from_role_in_conn(c, &role_name, &label_name))
             .await
@@ -659,7 +659,7 @@ fn build_role_from_row(
 ) -> Result<HostPolicyRole, AppError> {
     let role_id = row.id;
 
-    let atom_names: Vec<String> = sql_query(
+    let atom_names = sql_query(
         "SELECT a.name FROM host_policy_role_atoms ra
          JOIN host_policy_atoms a ON a.id = ra.atom_id
          WHERE ra.role_id = $1 ORDER BY a.name",
@@ -667,10 +667,10 @@ fn build_role_from_row(
     .bind::<SqlUuid, _>(role_id)
     .load::<NameRow>(c)?
     .into_iter()
-    .map(|r| r.name)
-    .collect();
+    .map(|r| HostPolicyName::new(r.name))
+    .collect::<Result<Vec<_>, _>>()?;
 
-    let host_names: Vec<String> = sql_query(
+    let host_names = sql_query(
         "SELECT h.name FROM host_policy_role_hosts rh
          JOIN hosts h ON h.id = rh.host_id
          WHERE rh.role_id = $1 ORDER BY h.name",
@@ -678,10 +678,10 @@ fn build_role_from_row(
     .bind::<SqlUuid, _>(role_id)
     .load::<NameRow>(c)?
     .into_iter()
-    .map(|r| r.name)
-    .collect();
+    .map(|r| Hostname::new(r.name))
+    .collect::<Result<Vec<_>, _>>()?;
 
-    let label_names: Vec<String> = sql_query(
+    let label_names = sql_query(
         "SELECT l.name FROM host_policy_role_labels rl
          JOIN labels l ON l.id = rl.label_id
          WHERE rl.role_id = $1 ORDER BY l.name",
@@ -689,8 +689,8 @@ fn build_role_from_row(
     .bind::<SqlUuid, _>(role_id)
     .load::<NameRow>(c)?
     .into_iter()
-    .map(|r| r.name)
-    .collect();
+    .map(|r| LabelName::new(r.name))
+    .collect::<Result<Vec<_>, _>>()?;
 
     Ok(HostPolicyRole::restore(
         row.id,
@@ -728,9 +728,12 @@ fn build_roles_from_rows(
         ))
         .load::<(Uuid, String)>(c)?;
 
-    let mut atom_map: HashMap<Uuid, Vec<String>> = HashMap::new();
+    let mut atom_map: HashMap<Uuid, Vec<HostPolicyName>> = HashMap::new();
     for (role_id, name) in atom_pairs {
-        atom_map.entry(role_id).or_default().push(name);
+        atom_map
+            .entry(role_id)
+            .or_default()
+            .push(HostPolicyName::new(name)?);
     }
 
     let host_pairs = host_policy_role_hosts::table
@@ -740,9 +743,12 @@ fn build_roles_from_rows(
         .order((host_policy_role_hosts::role_id.asc(), hosts::name.asc()))
         .load::<(Uuid, String)>(c)?;
 
-    let mut host_map: HashMap<Uuid, Vec<String>> = HashMap::new();
+    let mut host_map: HashMap<Uuid, Vec<Hostname>> = HashMap::new();
     for (role_id, name) in host_pairs {
-        host_map.entry(role_id).or_default().push(name);
+        host_map
+            .entry(role_id)
+            .or_default()
+            .push(Hostname::new(name)?);
     }
 
     let label_pairs = host_policy_role_labels::table
@@ -752,9 +758,12 @@ fn build_roles_from_rows(
         .order((host_policy_role_labels::role_id.asc(), labels::name.asc()))
         .load::<(Uuid, String)>(c)?;
 
-    let mut label_map: HashMap<Uuid, Vec<String>> = HashMap::new();
+    let mut label_map: HashMap<Uuid, Vec<LabelName>> = HashMap::new();
     for (role_id, name) in label_pairs {
-        label_map.entry(role_id).or_default().push(name);
+        label_map
+            .entry(role_id)
+            .or_default()
+            .push(LabelName::new(name)?);
     }
 
     rows.into_iter()

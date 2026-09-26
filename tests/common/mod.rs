@@ -412,6 +412,9 @@ impl TestCtx {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
+                .app_data(mreg_rust::api::json_config(
+                    self.state.config.json_payload_limit_bytes,
+                ))
                 .wrap(mreg_rust::middleware::Authn)
                 .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
         )
@@ -423,6 +426,9 @@ impl TestCtx {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
+                .app_data(mreg_rust::api::json_config(
+                    self.state.config.json_payload_limit_bytes,
+                ))
                 .wrap(mreg_rust::middleware::Authn)
                 .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
         )
@@ -521,7 +527,18 @@ pub async fn postgres_state() -> Option<AppState> {
                 false,
             );
             match result {
-                Ok(state) => Some(state),
+                Ok(state) => {
+                    // Finish built-in seeding before publishing the shared fixture.
+                    // Otherwise export tests depend on a concurrent DNS test or
+                    // health request having populated templates first.
+                    state
+                        .services
+                        .inner_storage()
+                        .health()
+                        .await
+                        .expect("seed PostgreSQL test fixtures");
+                    Some(state)
+                }
                 Err(error) => {
                     if std::env::var("CI").is_ok() {
                         panic!(
@@ -548,6 +565,7 @@ pub async fn postgres_state_with_auto_dhcp() -> Option<AppState> {
 
     PG_STATE_DHCP
         .get_or_init(|| async {
+            postgres_state().await?;
             let url = match postgres_test_database_url() {
                 Ok(Some(url)) => url,
                 Ok(None) => return None,
@@ -575,7 +593,18 @@ pub async fn postgres_state_with_auto_dhcp() -> Option<AppState> {
                 true,
             );
             match result {
-                Ok(state) => Some(state),
+                Ok(state) => {
+                    // Finish built-in seeding before publishing the shared fixture.
+                    // Otherwise export tests depend on a concurrent DNS test or
+                    // health request having populated templates first.
+                    state
+                        .services
+                        .inner_storage()
+                        .health()
+                        .await
+                        .expect("seed PostgreSQL test fixtures");
+                    Some(state)
+                }
                 Err(error) => {
                     if std::env::var("CI").is_ok() {
                         panic!(

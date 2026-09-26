@@ -840,28 +840,28 @@ impl<'tx> TxHostPolicyStore for MemTxStorage<'tx> {
     fn add_host_to_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         add_host_to_role_in_state(&mut self.state.borrow_mut(), role_name, host_name)
     }
     fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError> {
         remove_host_from_role_in_state(&mut self.state.borrow_mut(), role_name, host_name)
     }
     fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         add_label_to_role_in_state(&mut self.state.borrow_mut(), role_name, label_name)
     }
     fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError> {
         remove_label_from_role_in_state(&mut self.state.borrow_mut(), role_name, label_name)
     }

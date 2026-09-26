@@ -134,11 +134,11 @@ fn build_host_view(state: &MemoryState, host: &Host, expansions: HostViewExpansi
     if expansions.host_policy {
         let mut roles = Vec::new();
         let mut atoms = BTreeSet::new();
-        for role in state.host_policy_roles.values().filter(|role| {
-            role.hosts()
-                .iter()
-                .any(|value| value == host.name().as_str())
-        }) {
+        for role in state
+            .host_policy_roles
+            .values()
+            .filter(|role| role.hosts().contains(host.name()))
+        {
             roles.push(role.name().as_str().to_string());
             for atom in role.atoms() {
                 atoms.insert(atom.to_string());

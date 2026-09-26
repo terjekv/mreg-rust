@@ -7,7 +7,7 @@ use crate::{
             UpdateHostPolicyAtom, UpdateHostPolicyRole,
         },
         pagination::{Page, PageRequest},
-        types::{HostPolicyName, Hostname},
+        types::{HostPolicyName, Hostname, LabelName},
     },
     errors::AppError,
 };
@@ -56,21 +56,21 @@ pub trait HostPolicyStore: Send + Sync {
     async fn add_host_to_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError>;
     async fn remove_host_from_role(
         &self,
         role_name: &HostPolicyName,
-        host_name: &str,
+        host_name: &Hostname,
     ) -> Result<(), AppError>;
     async fn add_label_to_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError>;
     async fn remove_label_from_role(
         &self,
         role_name: &HostPolicyName,
-        label_name: &str,
+        label_name: &LabelName,
     ) -> Result<(), AppError>;
 }

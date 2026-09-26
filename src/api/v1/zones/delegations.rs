@@ -42,11 +42,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateDelegationRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: DnsName,
     #[serde(default)]
     comment: String,
     #[serde(default)]
-    nameservers: Vec<String>,
+    #[schema(value_type = Vec<String>)]
+    nameservers: Vec<DnsName>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -126,10 +128,10 @@ impl ReverseZoneDelegationResponse {
 pub(crate) async fn list_forward_zone_delegations(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<ZoneName>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let zone_name = ZoneName::new(path.into_inner())?;
+    let zone_name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -167,10 +169,10 @@ pub(crate) async fn list_forward_zone_delegations(
 pub(crate) async fn create_forward_zone_delegation(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<ZoneName>,
     payload: web::Json<CreateDelegationRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let zone_name = ZoneName::new(path.into_inner())?;
+    let zone_name = path.into_inner();
     let request = payload.into_inner();
     require(
         &state,
@@ -185,20 +187,12 @@ pub(crate) async fn create_forward_zone_delegation(
             AttrValue::String(zone_name.as_str().to_string()),
         )
         .attr("comment", AttrValue::String(request.comment.clone()))
-        .attr("nameservers", string_set(request.nameservers.clone())),
+        .attr("nameservers", string_set(&request.nameservers)),
     )
     .await?;
-    let nameservers = request
-        .nameservers
-        .into_iter()
-        .map(DnsName::new)
-        .collect::<Result<Vec<_>, _>>()?;
-    let command = CreateForwardZoneDelegation::new(
-        zone_name,
-        DnsName::new(request.name)?,
-        request.comment,
-        nameservers,
-    )?;
+    let nameservers = request.nameservers;
+    let command =
+        CreateForwardZoneDelegation::new(zone_name, request.name, request.comment, nameservers)?;
     let delegation = state
         .services
         .zones()
@@ -264,10 +258,10 @@ pub(crate) async fn delete_forward_zone_delegation(
 pub(crate) async fn list_reverse_zone_delegations(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<ZoneName>,
     query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let zone_name = ZoneName::new(path.into_inner())?;
+    let zone_name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -305,10 +299,10 @@ pub(crate) async fn list_reverse_zone_delegations(
 pub(crate) async fn create_reverse_zone_delegation(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<ZoneName>,
     payload: web::Json<CreateDelegationRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let zone_name = ZoneName::new(path.into_inner())?;
+    let zone_name = path.into_inner();
     let request = payload.into_inner();
     require(
         &state,
@@ -323,20 +317,12 @@ pub(crate) async fn create_reverse_zone_delegation(
             AttrValue::String(zone_name.as_str().to_string()),
         )
         .attr("comment", AttrValue::String(request.comment.clone()))
-        .attr("nameservers", string_set(request.nameservers.clone())),
+        .attr("nameservers", string_set(&request.nameservers)),
     )
     .await?;
-    let nameservers = request
-        .nameservers
-        .into_iter()
-        .map(DnsName::new)
-        .collect::<Result<Vec<_>, _>>()?;
-    let command = CreateReverseZoneDelegation::new(
-        zone_name,
-        DnsName::new(request.name)?,
-        request.comment,
-        nameservers,
-    )?;
+    let nameservers = request.nameservers;
+    let command =
+        CreateReverseZoneDelegation::new(zone_name, request.name, request.comment, nameservers)?;
     let delegation = state
         .services
         .zones()

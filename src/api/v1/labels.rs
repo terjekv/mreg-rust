@@ -33,13 +33,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateLabelRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: LabelName,
     description: String,
 }
 
 impl CreateLabelRequest {
     fn into_command(self) -> Result<CreateLabel, AppError> {
-        CreateLabel::new(LabelName::new(self.name)?, self.description)
+        CreateLabel::new(self.name, self.description)
     }
 }
 
@@ -119,7 +120,7 @@ pub(crate) async fn create_label(
             &req,
             authz::actions::label::CREATE,
             authz::actions::resource_kinds::LABEL,
-            request.name.clone(),
+            &request.name,
         ),
     )
     .await?;
@@ -146,9 +147,9 @@ pub(crate) async fn create_label(
 pub(crate) async fn get_label(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<LabelName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = LabelName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -184,10 +185,10 @@ pub struct UpdateLabelRequest {
 pub(crate) async fn update_label(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<LabelName>,
     payload: web::Json<UpdateLabelRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let name = LabelName::new(path.into_inner())?;
+    let name = path.into_inner();
     let request = payload.into_inner();
     let mut authz = authz_request(
         &req,
@@ -219,9 +220,9 @@ pub(crate) async fn update_label(
 pub(crate) async fn delete_label(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<LabelName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = LabelName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
