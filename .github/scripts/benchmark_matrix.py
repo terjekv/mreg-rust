@@ -16,6 +16,7 @@ SHARED_HARNESS_TARGETS = {
     "host_delete_ptr_cascade_criterion",
     "import_batch_run_criterion",
     "record_listing_criterion",
+    "wildcard_zone_match_criterion",
 }
 
 
