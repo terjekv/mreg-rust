@@ -14,7 +14,6 @@ use crate::{
         },
         bacnet::CreateBacnetIdAssignment,
         community::CreateCommunity,
-        host::AssignIpAddress,
         host_community_assignment::CreateHostCommunityAssignment,
         host_contact::CreateHostContact,
         host_group::CreateHostGroup,
@@ -41,8 +40,8 @@ use crate::{
     errors::AppError,
     storage::ImportStore,
     storage::import_helpers::{
-        resolve_bool, resolve_i32, resolve_optional_string, resolve_string, resolve_string_vec,
-        resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
+        resolve_bool, resolve_i32, resolve_ip_assignment, resolve_optional_string, resolve_string,
+        resolve_string_vec, resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
     },
 };
 
@@ -482,48 +481,8 @@ fn import_ip_address(
                 .ok_or_else(|| AppError::not_found("host attachment was not found"))
         })
         .transpose()?;
-    let address = resolve_optional_string(attributes, "address", refs)?
-        .map(IpAddressValue::new)
-        .transpose()?;
-    let network = resolve_optional_string(attributes, "network", refs)?
-        .map(CidrValue::new)
-        .transpose()?;
-    if let Some(attachment) = &attachment {
-        if let Some(explicit_network) = &network
-            && explicit_network != attachment.network_cidr()
-        {
-            return Err(AppError::validation(
-                "import ip_address network does not match referenced attachment",
-            ));
-        }
-        if let Some(explicit_host) = resolve_optional_string(attributes, "host_name", refs)?
-            && explicit_host != attachment.host_name().as_str()
-        {
-            return Err(AppError::validation(
-                "import ip_address host_name does not match referenced attachment",
-            ));
-        }
-    }
-    let assignment = assign_ip_in_state(
-        state,
-        AssignIpAddress::new(
-            attachment
-                .as_ref()
-                .map(|value| value.host_name().clone())
-                .unwrap_or(Hostname::new(resolve_string(
-                    attributes,
-                    "host_name",
-                    refs,
-                )?)?),
-            address,
-            network.or_else(|| {
-                attachment
-                    .as_ref()
-                    .map(|value| value.network_cidr().clone())
-            }),
-            attachment.and_then(|value| value.mac_address().cloned()),
-        )?,
-    )?;
+    let command = resolve_ip_assignment(attributes, refs, attachment.as_ref())?;
+    let assignment = assign_ip_in_state(state, command)?;
     Ok(Value::String(assignment.address().as_str()))
 }
 

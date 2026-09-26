@@ -19,7 +19,7 @@ use crate::{
         },
         bacnet::CreateBacnetIdAssignment,
         community::CreateCommunity,
-        host::{AssignIpAddress, CreateHost},
+        host::CreateHost,
         host_community_assignment::CreateHostCommunityAssignment,
         host_contact::CreateHostContact,
         host_group::CreateHostGroup,
@@ -48,9 +48,9 @@ use crate::{
     errors::AppError,
     storage::ImportStore,
     storage::import_helpers::{
-        resolve_bool, resolve_i32, resolve_one_of_string, resolve_optional_string,
-        resolve_required_one_of_string, resolve_string, resolve_string_vec, resolve_u32,
-        resolve_u64, resolve_uuid, stringify_ref_value,
+        resolve_bool, resolve_i32, resolve_ip_assignment, resolve_one_of_string,
+        resolve_optional_string, resolve_required_one_of_string, resolve_string,
+        resolve_string_vec, resolve_u32, resolve_u64, resolve_uuid, stringify_ref_value,
     },
 };
 
@@ -704,48 +704,7 @@ impl PostgresStorage {
         let attachment = resolve_uuid(attributes, "attachment_id", refs)?
             .map(|attachment_id| Self::query_attachment_by_id(connection, attachment_id))
             .transpose()?;
-        if let Some(attachment) = &attachment {
-            if let Some(explicit_network) = resolve_optional_string(attributes, "network", refs)?
-                && explicit_network != attachment.network_cidr().as_str()
-            {
-                return Err(AppError::validation(
-                    "import ip_address network does not match referenced attachment",
-                ));
-            }
-            if let Some(explicit_host) = resolve_optional_string(attributes, "host_name", refs)?
-                && explicit_host != attachment.host_name().as_str()
-            {
-                return Err(AppError::validation(
-                    "import ip_address host_name does not match referenced attachment",
-                ));
-            }
-        }
-        let host_name = attachment
-            .as_ref()
-            .map(|value| value.host_name().clone())
-            .unwrap_or(Hostname::new(resolve_string(
-                attributes,
-                "host_name",
-                refs,
-            )?)?);
-        let command = AssignIpAddress::new(
-            host_name,
-            resolve_optional_string(attributes, "address", refs)?
-                .map(IpAddressValue::new)
-                .transpose()?,
-            match attachment.as_ref() {
-                Some(value) => Some(value.network_cidr().clone()),
-                None => resolve_optional_string(attributes, "network", refs)?
-                    .map(CidrValue::new)
-                    .transpose()?,
-            },
-            match attachment.as_ref() {
-                Some(value) => value.mac_address().cloned(),
-                None => resolve_optional_string(attributes, "mac_address", refs)?
-                    .map(MacAddressValue::new)
-                    .transpose()?,
-            },
-        )?;
+        let command = resolve_ip_assignment(attributes, refs, attachment.as_ref())?;
         let assignment = Self::assign_ip_address_tx(connection, command)?;
         Ok(Value::String(assignment.address().as_str()))
     }

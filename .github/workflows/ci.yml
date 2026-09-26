@@ -52,3 +52,13 @@ jobs:
 
       - name: Compile benchmark targets
         run: cargo bench --no-run
+
+      - name: Smoke-test benchmark fixtures
+        run: >-
+          cargo bench
+          --bench record_listing_criterion
+          --bench attachment_graph_delete_criterion
+          --bench host_delete_ptr_cascade_criterion
+          --bench import_batch_run_criterion
+          --bench import_attachment_ip_criterion
+          -- --test
