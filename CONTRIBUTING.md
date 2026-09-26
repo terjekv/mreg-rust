@@ -32,7 +32,7 @@ DATABASE_URL="postgres://mreg:mreg@localhost:5433/mreg" diesel migration run
 cargo run
 ```
 
-The API serves at `http://localhost:8080/api/v1/` with Swagger UI at `http://localhost:8080/swagger-ui/`.
+The native API serves at `http://localhost:8080/api/v2/` with Swagger UI at `http://localhost:8080/docs/`.
 
 ## Running Tests
 
@@ -71,7 +71,7 @@ The codebase follows a five-layer architecture:
 
 | Layer | Location | Role |
 |-------|----------|------|
-| API | `src/api/v1/` | Actix-web handlers, request/response DTOs, OpenAPI docs |
+| API | `src/api/v2/` | Actix-web handlers, request/response DTOs, OpenAPI docs |
 | Service | `src/services/` | Audit recording, event emission, delegates to storage |
 | Storage | `src/storage/` | Trait definitions + memory and Postgres backends |
 | Domain | `src/domain/` | Value objects, entities, commands, validation |
@@ -79,18 +79,18 @@ The codebase follows a five-layer architecture:
 
 Request flow: API handler parses a domain command, calls the service layer, which delegates to a storage backend, records an audit event, and emits a domain event.
 
-See `CLAUDE.md` for detailed design patterns (type-driven domain, storage trait composition, cascading side-effects, pagination, error handling).
+See `AGENTS.md` for detailed design patterns (type-driven domain, storage trait composition, cascading side-effects, pagination, error handling).
 
 ## Adding a New Entity
 
-Follow the 9-step checklist in `CLAUDE.md`. The **labels** entity is the simplest working example:
+Follow the 9-step checklist in `AGENTS.md`. The **labels** entity is the simplest working example:
 
 - Domain: `src/domain/labels.rs`
 - Storage trait: `src/storage/labels.rs`
 - Memory backend: `src/storage/memory/labels.rs`
 - Postgres backend: `src/storage/postgres/labels.rs`
 - Service: `src/services/labels.rs`
-- API handler: `src/api/v1/labels.rs`
+- API handler: `src/api/v2/labels.rs`
 
 Every new entity needs a migration in `migrations/`, a model in `src/db/models.rs`, and registration in the relevant `mod.rs` files.
 

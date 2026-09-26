@@ -28,14 +28,14 @@ Supported modes:
 This is the current test and development mode.
 
 - Identity is taken directly from `X-Mreg-User` and `X-Mreg-Groups`.
-- `POST /api/v1/auth/login` is disabled.
+- `POST /api/v2/auth/login` is disabled.
 - No bearer token is required.
 - This mode is intended for tests, local development, and trusted proxy setups only.
 
 Example:
 
 ```http
-GET /api/v1/system/status
+GET /api/v2/system/status
 X-Mreg-User: alice
 X-Mreg-Groups: ops,net
 ```
@@ -102,7 +102,7 @@ LDAP support is compile-gated behind the `ldap` feature.
 
 Login flow:
 
-1. Client sends username/password to `POST /api/v1/auth/login`.
+1. Client sends username/password to `POST /api/v2/auth/login`.
 2. mreg-rust forwards the request to the configured remote scope login URL.
 3. The upstream service returns a JWT.
 4. mreg-rust validates that upstream JWT.
@@ -142,7 +142,7 @@ This avoids collisions between identities coming from different backends.
 
 ## HTTP API
 
-### `POST /api/v1/auth/login`
+### `POST /api/v2/auth/login`
 
 Request body:
 
@@ -202,7 +202,7 @@ Behavior notes:
 - malformed or unknown `identity_scope` values return `400`
 - invalid credentials for a known scope return `401`
 
-### `GET /api/v1/auth/providers`
+### `GET /api/v2/auth/providers`
 
 Returns safe metadata for configured authentication providers without requiring a
 bearer token. Provider results are ordered deterministically and include the identity
@@ -212,7 +212,7 @@ bind identities, search settings, and verification secrets are never exposed.
 In `none` mode, the endpoint reports `authentication_mode="none"` and an empty
 provider list.
 
-### `GET /api/v1/auth/me`
+### `GET /api/v2/auth/me`
 
 Returns the resolved principal for the current request.
 
@@ -228,7 +228,7 @@ In `scoped` mode, the response includes:
 
 In `none` mode, `identity_scope` and `auth_provider_kind` are `null`.
 
-### `POST /api/v1/auth/logout`
+### `POST /api/v2/auth/logout`
 
 Revokes the current bearer token.
 
@@ -236,7 +236,7 @@ Revokes the current bearer token.
 - returns `204 No Content` on success
 - is not meaningful in `auth_mode=none`, because there is no bearer token to revoke
 
-### `POST /api/v1/auth/logout-all`
+### `POST /api/v2/auth/logout-all`
 
 Revokes all existing tokens for a principal.
 
@@ -265,10 +265,10 @@ Authorization: Bearer <token>
 
 These endpoints remain unauthenticated:
 
-- `GET /api/v1/system/health`
-- `GET /api/v1/system/version`
-- `GET /api/v1/auth/providers`
-- `POST /api/v1/auth/login`
+- `GET /api/v2/system/health`
+- `GET /api/v2/system/version`
+- `GET /api/v2/auth/providers`
+- `POST /api/v2/auth/login`
 
 ## Identity headers
 

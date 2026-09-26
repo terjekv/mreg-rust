@@ -32,6 +32,11 @@ pub trait TxZoneStore {
         &self,
         command: CreateForwardZoneDelegation,
     ) -> Result<ForwardZoneDelegation, AppError>;
+    fn replace_forward_zone_delegation(
+        &self,
+        delegation_id: uuid::Uuid,
+        command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError>;
     fn delete_forward_zone_delegation(&self, delegation_id: uuid::Uuid) -> Result<(), AppError>;
 
     fn bump_forward_zone_serial(&self, zone_id: uuid::Uuid) -> Result<ForwardZone, AppError>;

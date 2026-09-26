@@ -48,6 +48,37 @@ pub async fn create_ptr_override(
     Ok(item)
 }
 
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "ptr_override"))]
+pub async fn replace_ptr_override(
+    storage: &DynStorage,
+    command: CreatePtrOverride,
+    events: &EventSinkClient,
+) -> Result<PtrOverride, AppError> {
+    let (item, history) = storage
+        .transaction(move |tx| {
+            let old = tx
+                .ptr_overrides()
+                .get_ptr_override_by_address(command.address())?;
+            let item = tx.ptr_overrides().replace_ptr_override(command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "ptr_override",
+                Some(item.id()),
+                item.address().as_str(),
+                actions::UPDATE,
+                json!({
+                    "old_host_name": old.host_name().as_str(),
+                    "host_name": item.host_name().as_str(),
+                    "address": item.address().as_str(),
+                }),
+            ))?;
+            Ok((item, event))
+        })
+        .await?;
+    events.emit(&DomainEvent::from(&history)).await;
+    Ok(item)
+}
+
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "ptr_override"))]
 pub async fn get_ptr_override(
     store: &(dyn PtrOverrideStore + Send + Sync),

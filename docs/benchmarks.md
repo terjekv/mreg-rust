@@ -10,6 +10,11 @@ storage teardown, and dropping the returned import summary happen outside the
 timed operation. The record-listing fixture creates its authoritative zone
 before inserting A records.
 
+The wildcard-zone benchmark inserts one wildcard A record into a fixed 50-zone
+inventory, then deletes it outside the timer. Records must not accumulate during
+warmup or sampling: record insertion scans existing records, so growth would
+change the workload on every iteration.
+
 The import workloads include:
 
 - The original mixed-entity canonical batch.
@@ -39,23 +44,27 @@ file into the temporary base checkout before compiling. The base application's
 `src/`, migrations, and Cargo manifest remain unchanged. This prevents comparing
 different workloads or re-running the known broken record-listing fixture.
 
-These four comparisons compile on their execution runners because their base
+These five comparisons compile on their execution runners because their base
 commands include the harness overlay. Other benchmarks retain the action's
 shared precompilation. New attachment-import benchmarks are not overlaid onto
 old revisions.
 
 ## Local checks
 
-CI runs the affected benchmark fixtures once in addition to compiling them:
+CI smoke-tests all Criterion targets with `--test`. To run the repaired fixtures:
 
 ```sh
 cargo bench --bench record_listing_criterion \
   --bench attachment_graph_delete_criterion \
   --bench host_delete_ptr_cascade_criterion \
   --bench import_batch_run_criterion \
-  --bench import_attachment_ip_criterion -- --test
+  --bench import_attachment_ip_criterion \
+  --bench wildcard_zone_match_criterion -- --test
 ```
 
 For timing measurements, replace `--test` with
 `--noplot --sample-size 80 --measurement-time 6`. Keep workload definitions,
 sampling arguments, toolchain, and dependencies consistent between revisions.
+
+The corrected timings are not directly comparable with reports from the old
+benchmark harnesses.

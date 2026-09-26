@@ -6,6 +6,7 @@ use super::sql::{SqlBindType, build_sql_conditions};
 use crate::domain::network::Network;
 use crate::domain::types::IpAddressValue;
 use crate::errors::AppError;
+use uuid::Uuid;
 
 // ─── NetworkFilter ──────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ pub struct NetworkFilter {
     // Special fields
     pub search: Option<String>,
     pub contains_ip: Option<IpAddressValue>,
+    pub policy_id: Option<Uuid>,
 }
 
 impl NetworkFilter {
@@ -86,6 +88,12 @@ impl NetworkFilter {
         {
             return false;
         }
+        if self
+            .policy_id
+            .is_some_and(|policy_id| network.policy_id() != Some(policy_id))
+        {
+            return false;
+        }
         if let Some(ref needle) = self.search {
             let needle = needle.to_ascii_lowercase();
             let cidr_match = network.cidr().as_str().contains(&needle);
@@ -117,6 +125,11 @@ impl NetworkFilter {
             let idx = values.len() + 1;
             clauses.push(format!("${idx}::inet <<= n.network"));
             values.push(ip.as_str().to_string());
+        }
+        if let Some(policy_id) = self.policy_id {
+            let idx = values.len() + 1;
+            clauses.push(format!("n.policy_id = ${idx}::uuid"));
+            values.push(policy_id.to_string());
         }
         (clauses, values)
     }

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     db::{
         models::{HostRow, IpAddressAssignmentRow},
-        schema::{forward_zones, hosts},
+        schema::{forward_zones, host_community_assignments, hosts},
     },
     domain::{
         attachment::{CreateAttachmentDhcpIdentifier, DhcpIdentifierFamily, DhcpIdentifierKind},
@@ -430,12 +430,14 @@ impl PostgresStorage {
             )?
         };
 
+        let assignment_id = Uuid::new_v4();
         let assignment = sql_query(
-            "INSERT INTO ip_addresses (host_id, attachment_id, address, family, mac_address)
-             VALUES ($1, $2, $3::inet, $4, $5)
-             RETURNING id, host_id, attachment_id, host(address) AS address, family::int AS family, $6 AS network_id,
+            "INSERT INTO ip_addresses (id, host_id, attachment_id, address, family, mac_address)
+             VALUES ($1, $2, $3, $4::inet, $5, $6)
+             RETURNING id, host_id, attachment_id, host(address) AS address, family::int AS family, $7 AS network_id,
                        mac_address, created_at, updated_at",
         )
+        .bind::<SqlUuid, _>(assignment_id)
         .bind::<SqlUuid, _>(host.id())
         .bind::<SqlUuid, _>(attachment.id())
         .bind::<Text, _>(address.as_str())
@@ -562,6 +564,7 @@ impl PostgresStorage {
                     ),
                 )?
             }
+
             crate::domain::resource_records::ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
         };
         let alias_owner_names = alias_lookup
@@ -1150,6 +1153,82 @@ impl PostgresStorage {
         Self::auto_create_forward_record(connection, &assignment)?;
         Self::auto_create_ptr_record(connection, &assignment)?;
         Ok(assignment)
+    }
+
+    pub(super) fn move_ip_address_in_conn(
+        connection: &mut PgConnection,
+        old_address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let old = Self::query_ip_address(connection, old_address)?;
+        let old_network = Self::query_network_by_id(connection, old.network_id())?;
+        if old_network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+        let host = Self::query_host_by_name(connection, command.host_name())?;
+        let new_address = command
+            .address()
+            .copied()
+            .ok_or_else(|| AppError::validation("IP address move requires an explicit address"))?;
+        let network = Self::query_network_containing_ip(connection, &new_address)?;
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+        if new_address != *old.address() {
+            Self::ensure_address_usable(connection, &network, &new_address)?;
+        }
+        if network.id() != old.network_id() {
+            let mapping_count = host_community_assignments::table
+                .filter(host_community_assignments::ip_address_id.eq(old.id()))
+                .count()
+                .get_result::<i64>(connection)?;
+            if mapping_count != 0 {
+                return Err(AppError::conflict(
+                    "cannot move an IP address to another network while it has community assignments",
+                ));
+            }
+        }
+        let attachment = Self::find_or_create_attachment(
+            connection,
+            host.name(),
+            network.cidr(),
+            command.mac_address(),
+        )?;
+        Self::delete_managed_ip_records(connection, old.id(), None)?;
+        let family = if new_address.as_inner().is_ipv4() {
+            4
+        } else {
+            6
+        };
+        let updated = sql_query(
+            "UPDATE ip_addresses
+             SET host_id = $1, attachment_id = $2, address = $3::inet, family = $4,
+                 mac_address = $5, updated_at = now()
+             WHERE id = $6
+             RETURNING id, host_id, attachment_id, host(address) AS address,
+                       family::int AS family, $7 AS network_id, mac_address,
+                       created_at, updated_at",
+        )
+        .bind::<SqlUuid, _>(host.id())
+        .bind::<SqlUuid, _>(attachment.id())
+        .bind::<Text, _>(new_address.as_str())
+        .bind::<Integer, _>(family)
+        .bind::<Nullable<Text>, _>(attachment.mac_address().map(|value| value.as_str()))
+        .bind::<SqlUuid, _>(old.id())
+        .bind::<SqlUuid, _>(network.id())
+        .get_result::<IpAddressAssignmentRow>(connection)
+        .map_err(map_unique("IP address is already allocated"))?
+        .into_domain()?;
+        sql_query(
+            "UPDATE host_community_assignments SET host_id = $1, updated_at = now()
+             WHERE ip_address_id = $2",
+        )
+        .bind::<SqlUuid, _>(host.id())
+        .bind::<SqlUuid, _>(old.id())
+        .execute(connection)?;
+        Self::auto_create_forward_record(connection, &updated)?;
+        Self::auto_create_ptr_record(connection, &updated)?;
+        Ok(updated)
     }
 
     pub(super) fn update_ip_address_in_conn(

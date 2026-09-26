@@ -13,6 +13,14 @@ use crate::{
     storage::{DynStorage, HostGroupStore},
 };
 
+pub struct HostGroupRelationMutation {
+    pub action: &'static str,
+    pub relation: &'static str,
+    pub member: String,
+    pub history_name: String,
+    pub history_id: uuid::Uuid,
+}
+
 #[tracing::instrument(level = "debug", skip(store), fields(resource_kind = "host_group"))]
 pub async fn list_host_groups(
     store: &(dyn HostGroupStore + Send + Sync),
@@ -82,4 +90,31 @@ pub async fn delete_host_group(
     events.emit(&DomainEvent::from(&history)).await;
 
     Ok(())
+}
+
+/// Atomically replace a host group while recording a legacy relation mutation.
+pub async fn replace_host_group_relation(
+    storage: &DynStorage,
+    old: &HostGroup,
+    command: CreateHostGroup,
+    mutation: HostGroupRelationMutation,
+    events: &EventSinkClient,
+) -> Result<HostGroup, AppError> {
+    let old = old.clone();
+    let (group, history) = storage
+        .transaction(move |tx| {
+            let group = tx.host_groups().replace_host_group(old.name(), command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "host_group",
+                Some(mutation.history_id),
+                mutation.history_name,
+                mutation.action,
+                json!({"relation": mutation.relation, "name": mutation.member}),
+            ))?;
+            Ok((group, event))
+        })
+        .await?;
+    events.emit(&DomainEvent::from(&history)).await;
+    Ok(group)
 }

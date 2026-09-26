@@ -76,9 +76,10 @@ impl CreateHostPolicyAtom {
     }
 }
 
-/// Partial update for an atom's description.
+/// Partial update for an atom's name or description.
 #[derive(Clone, Debug)]
 pub struct UpdateHostPolicyAtom {
+    pub name: Option<HostPolicyName>,
     pub description: Option<String>,
 }
 
@@ -177,8 +178,9 @@ impl CreateHostPolicyRole {
     }
 }
 
-/// Partial update for a role's description.
+/// Partial update for a role's name or description.
 #[derive(Clone, Debug)]
 pub struct UpdateHostPolicyRole {
+    pub name: Option<HostPolicyName>,
     pub description: Option<String>,
 }

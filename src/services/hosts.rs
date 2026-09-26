@@ -202,6 +202,38 @@ pub async fn update_ip_address(
 }
 
 #[tracing::instrument(skip(storage, events), fields(resource_kind = "ip_address"))]
+pub async fn move_ip_address(
+    storage: &DynStorage,
+    address: &IpAddressValue,
+    command: AssignIpAddress,
+    events: &EventSinkClient,
+) -> Result<IpAddressAssignment, AppError> {
+    let old_address = *address;
+    let (updated, history) = storage
+        .transaction(move |tx| {
+            let old = tx.hosts().get_ip_address(&old_address)?;
+            let updated = tx.hosts().move_ip_address(&old_address, command)?;
+            let event = tx.audit().record_event(CreateHistoryEvent::new(
+                actor::current(),
+                "ip_address",
+                Some(updated.id()),
+                updated.address().as_str(),
+                actions::UPDATE,
+                json!({
+                    "old_address": old.address().as_str(),
+                    "address": updated.address().as_str(),
+                    "old_host_id": old.host_id().to_string(),
+                    "host_id": updated.host_id().to_string(),
+                }),
+            ))?;
+            Ok((updated, event))
+        })
+        .await?;
+    events.emit(&DomainEvent::from(&history)).await;
+    Ok(updated)
+}
+
+#[tracing::instrument(skip(storage, events), fields(resource_kind = "ip_address"))]
 pub async fn unassign_ip_address(
     storage: &DynStorage,
     address: &IpAddressValue,

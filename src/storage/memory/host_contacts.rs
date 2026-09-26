@@ -118,6 +118,33 @@ pub(super) fn create_host_contact_in_state(
     Ok(contact)
 }
 
+pub(super) fn replace_host_contact_in_state(
+    state: &mut MemoryState,
+    command: CreateHostContact,
+) -> Result<HostContact, AppError> {
+    let old = get_host_contact_by_email_in_state(state, command.email())?;
+    for host in command.hosts() {
+        if !state.hosts.contains_key(host.as_str()) {
+            return Err(AppError::not_found(format!(
+                "host '{}' was not found",
+                host.as_str()
+            )));
+        }
+    }
+    let contact = HostContact::restore(
+        old.id(),
+        old.email().clone(),
+        command.display_name().map(str::to_string),
+        command.hosts().to_vec(),
+        old.created_at(),
+        Utc::now(),
+    )?;
+    state
+        .host_contacts
+        .insert(old.email().as_str().to_string(), contact.clone());
+    Ok(contact)
+}
+
 #[async_trait]
 impl HostContactStore for MemoryStorage {
     async fn list_host_contacts(
@@ -135,6 +162,14 @@ impl HostContactStore for MemoryStorage {
     ) -> Result<HostContact, AppError> {
         let mut state = self.state.write().await;
         create_host_contact_in_state(&mut state, command)
+    }
+
+    async fn replace_host_contact(
+        &self,
+        command: CreateHostContact,
+    ) -> Result<HostContact, AppError> {
+        let mut state = self.state.write().await;
+        replace_host_contact_in_state(&mut state, command)
     }
 
     async fn get_host_contact_by_email(

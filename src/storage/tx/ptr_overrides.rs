@@ -16,6 +16,7 @@ pub trait TxPtrOverrideStore {
         filter: &PtrOverrideFilter,
     ) -> Result<Page<PtrOverride>, AppError>;
     fn create_ptr_override(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError>;
+    fn replace_ptr_override(&self, command: CreatePtrOverride) -> Result<PtrOverride, AppError>;
     fn get_ptr_override_by_address(
         &self,
         address: &IpAddressValue,

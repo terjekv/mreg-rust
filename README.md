@@ -44,7 +44,7 @@ DATABASE_URL="postgres://mreg:mreg@localhost:5433/mreg" diesel migration run
 cargo run
 ```
 
-The API is available at `http://localhost:8080/api/v1/`. Swagger UI is at `http://localhost:8080/swagger-ui/`.
+The native API is available at `http://localhost:8080/api/v2/`. The original-mreg route bridge is under `/api/v1/`. Swagger UI is at `http://localhost:8080/docs/` (with `/swagger-ui/` retained as an alias).
 
 ### Run tests
 

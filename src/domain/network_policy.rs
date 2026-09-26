@@ -1,15 +1,154 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::{domain::types::NetworkPolicyName, errors::AppError};
+use crate::{
+    domain::types::{
+        CommunityTemplatePattern, NetworkPolicyAttributeName, NetworkPolicyName,
+        RequiredDescription, UpdateField,
+    },
+    errors::AppError,
+};
+
+/// Attribute definition that can be assigned a boolean value on a network policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkPolicyAttribute {
+    id: Uuid,
+    name: NetworkPolicyAttributeName,
+    description: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl NetworkPolicyAttribute {
+    pub fn restore(
+        id: Uuid,
+        name: NetworkPolicyAttributeName,
+        description: impl Into<String>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description: description.into(),
+            created_at,
+            updated_at,
+        }
+    }
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    pub fn name(&self) -> &NetworkPolicyAttributeName {
+        &self.name
+    }
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateNetworkPolicyAttribute {
+    name: NetworkPolicyAttributeName,
+    description: String,
+}
+
+impl CreateNetworkPolicyAttribute {
+    pub fn new(name: NetworkPolicyAttributeName, description: impl Into<String>) -> Self {
+        Self {
+            name,
+            description: description.into(),
+        }
+    }
+    pub fn name(&self) -> &NetworkPolicyAttributeName {
+        &self.name
+    }
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct UpdateNetworkPolicyAttribute {
+    pub name: Option<NetworkPolicyAttributeName>,
+    pub description: Option<String>,
+}
+
+/// Resolved value of an attribute on a policy. `false` is a meaningful value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkPolicyAttributeValue {
+    attribute_id: Uuid,
+    name: NetworkPolicyAttributeName,
+    value: bool,
+}
+
+impl NetworkPolicyAttributeValue {
+    pub fn restore(attribute_id: Uuid, name: NetworkPolicyAttributeName, value: bool) -> Self {
+        Self {
+            attribute_id,
+            name,
+            value,
+        }
+    }
+    pub fn attribute_id(&self) -> Uuid {
+        self.attribute_id
+    }
+    pub fn name(&self) -> &NetworkPolicyAttributeName {
+        &self.name
+    }
+    pub fn value(&self) -> bool {
+        self.value
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetNetworkPolicyAttributeValue {
+    name: NetworkPolicyAttributeName,
+    value: bool,
+}
+
+impl SetNetworkPolicyAttributeValue {
+    pub fn new(name: NetworkPolicyAttributeName, value: bool) -> Self {
+        Self { name, value }
+    }
+    pub fn name(&self) -> &NetworkPolicyAttributeName {
+        &self.name
+    }
+    pub fn value(&self) -> bool {
+        self.value
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkPolicyDetails {
+    policy: NetworkPolicy,
+    attributes: Vec<NetworkPolicyAttributeValue>,
+}
+
+impl NetworkPolicyDetails {
+    pub fn new(policy: NetworkPolicy, attributes: Vec<NetworkPolicyAttributeValue>) -> Self {
+        Self { policy, attributes }
+    }
+    pub fn policy(&self) -> &NetworkPolicy {
+        &self.policy
+    }
+    pub fn attributes(&self) -> &[NetworkPolicyAttributeValue] {
+        &self.attributes
+    }
+}
 
 /// Named network policy governing community creation and host placement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkPolicy {
     id: Uuid,
     name: NetworkPolicyName,
-    description: String,
-    community_template_pattern: Option<String>,
+    description: RequiredDescription,
+    community_template_pattern: Option<CommunityTemplatePattern>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -26,8 +165,10 @@ impl NetworkPolicy {
         Ok(Self {
             id,
             name,
-            description: normalize_required_text(description.into(), "network policy description")?,
-            community_template_pattern: normalize_optional_text(community_template_pattern),
+            description: RequiredDescription::new(description.into())?,
+            community_template_pattern: community_template_pattern
+                .map(CommunityTemplatePattern::new)
+                .transpose()?,
             created_at,
             updated_at,
         })
@@ -40,10 +181,12 @@ impl NetworkPolicy {
         &self.name
     }
     pub fn description(&self) -> &str {
-        &self.description
+        self.description.as_str()
     }
     pub fn community_template_pattern(&self) -> Option<&str> {
-        self.community_template_pattern.as_deref()
+        self.community_template_pattern
+            .as_ref()
+            .map(CommunityTemplatePattern::as_str)
     }
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
@@ -57,8 +200,9 @@ impl NetworkPolicy {
 #[derive(Clone, Debug)]
 pub struct CreateNetworkPolicy {
     name: NetworkPolicyName,
-    description: String,
-    community_template_pattern: Option<String>,
+    description: RequiredDescription,
+    community_template_pattern: Option<CommunityTemplatePattern>,
+    attributes: Vec<SetNetworkPolicyAttributeValue>,
 }
 
 impl CreateNetworkPolicy {
@@ -69,8 +213,11 @@ impl CreateNetworkPolicy {
     ) -> Result<Self, AppError> {
         Ok(Self {
             name,
-            description: normalize_required_text(description.into(), "network policy description")?,
-            community_template_pattern: normalize_optional_text(community_template_pattern),
+            description: RequiredDescription::new(description.into())?,
+            community_template_pattern: community_template_pattern
+                .map(CommunityTemplatePattern::new)
+                .transpose()?,
+            attributes: Vec::new(),
         })
     }
 
@@ -78,24 +225,61 @@ impl CreateNetworkPolicy {
         &self.name
     }
     pub fn description(&self) -> &str {
-        &self.description
+        self.description.as_str()
     }
     pub fn community_template_pattern(&self) -> Option<&str> {
-        self.community_template_pattern.as_deref()
+        self.community_template_pattern
+            .as_ref()
+            .map(CommunityTemplatePattern::as_str)
+    }
+    pub fn attributes(&self) -> &[SetNetworkPolicyAttributeValue] {
+        &self.attributes
+    }
+    pub fn with_attributes(mut self, attributes: Vec<SetNetworkPolicyAttributeValue>) -> Self {
+        self.attributes = attributes;
+        self
     }
 }
 
-fn normalize_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
+#[derive(Clone, Debug, Default)]
+pub struct UpdateNetworkPolicy {
+    pub name: Option<NetworkPolicyName>,
+    pub description: Option<RequiredDescription>,
+    pub community_template_pattern: UpdateField<CommunityTemplatePattern>,
+    /// `None` preserves memberships; `Some` replaces the complete set.
+    pub attributes: Option<Vec<SetNetworkPolicyAttributeValue>>,
 }
 
-fn normalize_required_text(value: String, label: &str) -> Result<String, AppError> {
-    let trimmed = value.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(AppError::validation(format!("{label} cannot be empty")));
+#[cfg(test)]
+mod strictness_tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    fn create_rejects_blank_description(#[case] value: &str) {
+        assert!(
+            CreateNetworkPolicy::new(NetworkPolicyName::new("campus").unwrap(), value, None)
+                .is_err()
+        );
     }
-    Ok(trimmed)
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    fn restore_rejects_blank_description(#[case] value: &str) {
+        let now = Utc::now();
+        assert!(
+            NetworkPolicy::restore(
+                Uuid::nil(),
+                NetworkPolicyName::new("campus").unwrap(),
+                value,
+                None,
+                now,
+                now
+            )
+            .is_err()
+        );
+    }
 }

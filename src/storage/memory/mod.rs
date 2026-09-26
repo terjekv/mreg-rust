@@ -22,7 +22,7 @@ mod transaction;
 mod zones;
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -50,13 +50,14 @@ use crate::{
         label::Label,
         nameserver::NameServer,
         network::{ExcludedRange, Network},
-        network_policy::NetworkPolicy,
+        network_policy::{NetworkPolicy, NetworkPolicyAttribute, NetworkPolicyAttributeValue},
         pagination::{Page, PageRequest, SortDirection, decode_cursor, encode_cursor},
         ptr_override::PtrOverride,
         resource_records::{
             RecordInstance, RecordRrset, RecordTypeDefinition, built_in_record_types,
         },
         tasks::TaskEnvelope,
+        types::{IpAddressValue, MacAddressValue, NetworkPolicyAttributeName},
         zone::{ForwardZone, ForwardZoneDelegation, ReverseZone, ReverseZoneDelegation},
     },
     errors::AppError,
@@ -125,6 +126,17 @@ fn paginate_keyset<T: HasId>(
     })
 }
 
+pub(super) fn host_address_filter_index(state: &MemoryState) -> HashMap<Uuid, Vec<IpAddressValue>> {
+    let mut index: HashMap<Uuid, Vec<IpAddressValue>> = HashMap::new();
+    for assignment in state.ip_addresses.values() {
+        index
+            .entry(assignment.host_id())
+            .or_default()
+            .push(*assignment.address());
+    }
+    index
+}
+
 pub(super) fn sort_items<T: HasId>(
     items: &mut [T],
     page: &PageRequest,
@@ -166,6 +178,35 @@ pub(super) struct StoredImportBatch {
     pub(super) summary: ImportBatchSummary,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct HostAttachmentKey {
+    host_id: Uuid,
+    network_id: Uuid,
+    mac_address: Option<MacAddressValue>,
+}
+
+impl HostAttachmentKey {
+    pub(super) fn new(
+        host_id: Uuid,
+        network_id: Uuid,
+        mac_address: Option<&MacAddressValue>,
+    ) -> Self {
+        Self {
+            host_id,
+            network_id,
+            mac_address: mac_address.cloned(),
+        }
+    }
+
+    pub(super) fn from_attachment(attachment: &HostAttachment) -> Self {
+        Self::new(
+            attachment.host_id(),
+            attachment.network_id(),
+            attachment.mac_address(),
+        )
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct MemoryState {
     pub(super) host_policy_atoms: BTreeMap<String, HostPolicyAtom>,
@@ -180,12 +221,15 @@ pub(super) struct MemoryState {
     pub(super) excluded_ranges: BTreeMap<String, Vec<ExcludedRange>>,
     pub(super) hosts: BTreeMap<String, Host>,
     pub(super) host_attachments: BTreeMap<Uuid, HostAttachment>,
-    pub(super) ip_addresses: BTreeMap<String, IpAddressAssignment>,
+    pub(super) host_attachment_keys: HashMap<HostAttachmentKey, Uuid>,
+    pub(super) ip_addresses: BTreeMap<IpAddressValue, IpAddressAssignment>,
     pub(super) host_contacts: BTreeMap<String, HostContact>,
     pub(super) host_groups: BTreeMap<String, HostGroup>,
     pub(super) bacnet_ids: BTreeMap<u32, BacnetIdAssignment>,
     pub(super) ptr_overrides: BTreeMap<String, PtrOverride>,
     pub(super) network_policies: BTreeMap<String, NetworkPolicy>,
+    pub(super) network_policy_attributes: BTreeMap<String, NetworkPolicyAttribute>,
+    pub(super) network_policy_attribute_values: BTreeMap<Uuid, Vec<NetworkPolicyAttributeValue>>,
     pub(super) communities: BTreeMap<Uuid, Community>,
     pub(super) attachment_community_assignments: BTreeMap<Uuid, AttachmentCommunityAssignment>,
     pub(super) host_community_assignments: BTreeMap<Uuid, HostCommunityAssignment>,
@@ -241,6 +285,17 @@ impl MemoryStorage {
                     .insert(definition.name().as_str().to_string(), definition);
             }
         }
+
+        let isolated = NetworkPolicyAttribute::restore(
+            Uuid::new_v4(),
+            NetworkPolicyAttributeName::new("isolated").expect("built-in attribute name is valid"),
+            "The network uses client isolation.",
+            now,
+            now,
+        );
+        state
+            .network_policy_attributes
+            .insert("isolated".to_string(), isolated);
 
         // Seed built-in export templates
         if let Ok(builtins) = crate::domain::builtin_export_templates::built_in_export_templates() {

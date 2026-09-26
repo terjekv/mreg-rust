@@ -38,6 +38,11 @@ pub trait TxHostStore {
     ) -> Result<Vec<IpAddressAssignment>, AppError>;
     fn get_ip_address(&self, address: &IpAddressValue) -> Result<IpAddressAssignment, AppError>;
     fn assign_ip_address(&self, command: AssignIpAddress) -> Result<IpAddressAssignment, AppError>;
+    fn move_ip_address(
+        &self,
+        address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError>;
     fn update_ip_address(
         &self,
         address: &IpAddressValue,

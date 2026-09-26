@@ -107,7 +107,7 @@ impl PostgresStorage {
     ) -> Result<(), AppError> {
         use crate::db::schema::record_types;
         use crate::domain::resource_records::built_in_record_types;
-        use diesel::ExpressionMethods;
+        use diesel::{ExpressionMethods, QueryDsl};
         for command in built_in_record_types()? {
             let (owner_kind, cardinality, validation_schema, rendering_schema, behavior_flags) =
                 record_type_storage_parts(command.schema());
@@ -122,19 +122,24 @@ impl PostgresStorage {
                     record_types::behavior_flags.eq(&behavior_flags),
                     record_types::built_in.eq(true),
                 ))
-                .on_conflict(record_types::name)
-                .do_update()
-                .set((
-                    record_types::dns_type.eq(command.dns_type().map(|v| v.as_i32())),
-                    record_types::owner_kind.eq(&owner_kind),
-                    record_types::cardinality.eq(&cardinality),
-                    record_types::validation_schema.eq(&validation_schema),
-                    record_types::rendering_schema.eq(&rendering_schema),
-                    record_types::behavior_flags.eq(&behavior_flags),
-                    record_types::built_in.eq(true),
-                    record_types::updated_at.eq(diesel::dsl::now),
-                ))
+                // Concurrent bootstrap can conflict on both name and DNS type.
+                // Cover both unique keys before refreshing the canonical schema.
+                .on_conflict_do_nothing()
                 .execute(connection)?;
+            diesel::update(
+                record_types::table.filter(record_types::name.eq(command.name().as_str())),
+            )
+            .set((
+                record_types::dns_type.eq(command.dns_type().map(|v| v.as_i32())),
+                record_types::owner_kind.eq(&owner_kind),
+                record_types::cardinality.eq(&cardinality),
+                record_types::validation_schema.eq(&validation_schema),
+                record_types::rendering_schema.eq(&rendering_schema),
+                record_types::behavior_flags.eq(&behavior_flags),
+                record_types::built_in.eq(true),
+                record_types::updated_at.eq(diesel::dsl::now),
+            ))
+            .execute(connection)?;
         }
         Self::ensure_builtin_export_templates(connection)?;
         Ok(())

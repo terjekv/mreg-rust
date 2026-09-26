@@ -4,7 +4,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ## Project
 
-Rust reimplementation of the Django-based [mreg](https://github.com/unioslo/mreg) — a DNS and network inventory management REST API. Manages zones, hosts, DNS records (18 built-in types with RFC validation), networks, and related infrastructure. Uses Rust 2024 edition.
+Rust reimplementation of the Django-based [mreg](https://github.com/unioslo/mreg) — a DNS and network inventory management REST API. Manages zones, hosts, DNS records (25 built-in types with RFC validation), networks, and related infrastructure. Uses Rust 2024 edition.
 
 ## Rust Standards
 
@@ -12,9 +12,18 @@ Rust reimplementation of the Django-based [mreg](https://github.com/unioslo/mreg
 - Prefer designs built around newtypes instead of passing primitive values through the domain unchecked.
 - Newtypes should usually have validating constructors, private fields, and explicit accessors or setters where mutation is part of the model.
 - Endpoints should accept newtypes whenever possible so validation happens at the boundary, as early as possible, with clear and actionable error messages.
+- Preserve validated facts as types through handlers, commands, services, filters, and storage. Parse raw API or database values once with fallible constructors; do not turn validated values back into primitives merely to pass them between layers. For example, a host-address filter accepts `&[IpAddressValue]`, not `&[String]`; format values only where text is required.
+- Use newtypes for scalar invariants, enums for mutually exclusive or correlated states, and small proof or capability types for resolved or authorized state. Avoid booleans that disable validation and combinations of optional fields that permit invalid states.
+- Apply the same invariants to constructors, deserialization, restoration from storage, and updates. Private fields and validating mutation APIs must prevent callers from bypassing those invariants. Deriving `Deserialize` must not bypass a validating constructor.
+- Compatibility adapters translate wire representations into the same validated domain types. Reject legacy input that violates domain invariants; do not weaken shared models, add validation escape hatches, or hide invalid data behind sentinel values to match an old client recording.
+- Normalize before equality, uniqueness, or membership checks. Keep canonical values typed in collection keys and indexes as well as in entities.
 - Put behavior on types with `impl` blocks when it naturally belongs to the type. Prefer this over collections of bare functions that operate on loosely related data.
 - Keep invariants close to the data they protect. Constructors and setters should reject invalid states rather than relying on callers to remember preconditions.
 - Use small, explicit APIs. Expose only what callers need, and keep representation details private unless there is a strong reason not to.
+- Prefer typed request structs or builders over long positional argument lists. Use typestate only when it prevents a meaningful invalid call order or missing required data; otherwise use a simpler builder with a validating terminal method.
+- Types complement database constraints and transactions. Enforce concurrent and cross-row invariants atomically in storage, consistently across both backends; handler-only or service-only checks cannot protect direct storage callers.
+- Keep transport and backend details at their boundaries. Domain types should not depend on Actix, Diesel, or global configuration; storage traits expose domain operations, and services own application orchestration, audit recording, and event emission.
+- Use Rust's conventional module discovery (`foo.rs` or `foo/mod.rs`); do not use `#[path = "..."]` overrides. Prefer clear, idiomatic code over clever abstractions and do not add unused code or blanket lint allowances to make checks pass.
 - Prefer `use` imports over inline fully qualified paths for functions, types, and macros. Only fully qualify a path inline when needed to resolve a genuine name ambiguity, or for a one-off reference where a `use` would mislead.
 - Prefer one assertion per test. Use `rstest` cases for multiple inputs or outcomes, and split unrelated response properties into separate tests unless they form one cohesive assertion.
 
@@ -41,7 +50,8 @@ DATABASE_URL="postgres://mreg:mreg@localhost:5433/mreg" diesel migration run
 Five-layer design with pluggable storage backends:
 
 ```
-src/api/v1/        → Actix-web HTTP handlers, request/response DTOs, OpenAPI via utoipa
+src/api/v1/        → Legacy wire-format adapters into the validated domain
+src/api/v2/        → Native Actix-web handlers, request/response DTOs, OpenAPI via utoipa
 src/authn/         → Authentication providers (none/forward/LDAP), JWT issuing/validation
 src/services/      → Audit recording + event emission on mutations, delegates to storage
 src/storage/       → Storage trait definitions + two backend implementations
@@ -55,7 +65,7 @@ src/db/            → Diesel schema.rs (auto-generated), models.rs (row types)
 
 ### Key design patterns
 
-**Type-driven domain:** All domain invariants are value objects in `src/domain/types.rs` (DnsName, Hostname, ZoneName, LabelName, CidrValue, etc.). They validate and normalize on construction (e.g., DNS names lowercased, trailing dots stripped). Private fields, no mutation — only `new()`, `restore()`, and accessor methods. Custom Serialize/Deserialize impls that go through validation.
+**Type-driven domain:** All domain invariants are value objects in `src/domain/types/` (DnsName, Hostname, ZoneName, LabelName, CidrValue, etc.). They validate and normalize on construction (e.g., DNS names lowercased, trailing dots stripped). Private fields, no mutation — only `new()`, `restore()`, and accessor methods. Custom Serialize/Deserialize impls that go through validation.
 
 **Storage trait composition:** The `Storage` trait in `src/storage/mod.rs` aggregates ~18 subsystem store traits (LabelStore, ZoneStore, HostStore, RecordStore, etc.). Each store trait defines CRUD + listing with filtering/pagination. Both backends implement all traits. Backend selected at runtime via `MREG_STORAGE_BACKEND` env var (auto/memory/postgres).
 
@@ -79,8 +89,8 @@ Follow the existing pattern across all layers (use labels as the simplest exampl
 3. Memory backend: `src/storage/memory/foo.rs`
 4. Postgres backend: `src/storage/postgres/foo.rs`
 5. Service: `src/services/foo.rs`
-6. API handler: `src/api/v1/foo.rs`
-7. Register in `src/api/mod.rs` (OpenAPI paths + schemas) and `src/api/v1/mod.rs` (routes)
+6. API handler: `src/api/v2/foo.rs`
+7. Register in `src/api/mod.rs` (OpenAPI paths + schemas) and `src/api/v2/mod.rs` (routes)
 8. Register store trait in `src/storage/mod.rs` and both backend mod.rs files
 9. DB migration in `migrations/` (schema.rs auto-regenerates), model in `src/db/models.rs`
 

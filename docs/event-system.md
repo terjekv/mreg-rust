@@ -9,7 +9,7 @@ These three systems serve different purposes and should not be confused:
 | Concern | Mechanism | Purpose | Audience |
 |---------|-----------|---------|----------|
 | **Logging** (`tracing`) | Structured log lines to stdout/stderr | Operational diagnostics — request tracing, error details, startup info | Operators, log aggregators (ELK, Datadog) |
-| **Audit** (`/api/v1/system/history`) | Immutable records in the database via `AuditStore` | Compliance and accountability — who changed what, when | Security teams, compliance audits, internal forensics |
+| **Audit** (`/api/v2/system/history`) | Immutable records in the database via `AuditStore` | Compliance and accountability — who changed what, when | Security teams, compliance audits, internal forensics |
 | **Events** (`EventSink`) | Durable at-least-once delivery to external systems | Real-time integration — trigger workflows, sync caches, notify downstream | External services, automation pipelines |
 
 **Logging** is about what the server is doing. It includes HTTP requests, SQL queries, startup messages, and errors. It is configured via `RUST_LOG` and `MREG_JSON_LOGS`.

@@ -1,7 +1,7 @@
 mod support;
 
 use std::hint::black_box;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use serde_json::json;
@@ -46,25 +46,30 @@ fn wildcard_zone_match(c: &mut Criterion) {
         }
     });
 
-    let counter = AtomicUsize::new(0);
-
     c.bench_function("wildcard_zone_match_50", |b| {
-        b.iter(|| {
-            let n = counter.fetch_add(1, Ordering::Relaxed);
-            // Always target the deepest-nested zone (z49.bench.test) so the
-            // longest-suffix match must compare against every seeded zone.
-            let owner = format!("h{n:08}.z49.bench.test");
-            let cmd = CreateRecordInstance::new_unanchored(
-                RecordTypeName::new("A").expect("type"),
-                owner,
-                None,
-                json!({"address": format!("10.0.0.{}", (n % 250) + 1)}),
-            )
-            .expect("record cmd");
-            let result = runtime
-                .block_on(storage.records().create_record(black_box(cmd)))
-                .expect("record create succeeds");
-            black_box(result);
+        b.iter_custom(|iterations| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..iterations {
+                let start = Instant::now();
+                let cmd = CreateRecordInstance::new_unanchored(
+                    RecordTypeName::new("A").expect("type"),
+                    "*.z49.bench.test",
+                    None,
+                    json!({"address": "10.0.0.1"}),
+                )
+                .expect("record cmd");
+                let record = runtime
+                    .block_on(storage.records().create_record(black_box(cmd)))
+                    .expect("record create succeeds");
+                elapsed += start.elapsed();
+
+                // Restore the record count outside the measured operation so
+                // warmup and sampling always use the same 50-zone inventory.
+                runtime
+                    .block_on(storage.records().delete_record(record.id()))
+                    .expect("record cleanup succeeds");
+            }
+            elapsed
         });
     });
 }

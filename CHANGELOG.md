@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A dedicated Django-mreg v1 compatibility API, including the stateful endpoint
+  adapters required by the pinned `mreg-cli` testsuite and an allowlisted CI
+  comparison job documenting strict validation differences and unsupported
+  permission data.
+- Network-policy attribute entities, protected attributes, community-template
+  patterns, and atomic policy-attribute membership management in both storage
+  backends and the native API.
 - EUI-48 and EUI-64 MAC address support across inventory APIs, storage backends, imports, and exports, with Ethernet-specific DHCP automation and matcher fallback limited to EUI-48 addresses.
 - Core DNS management with forward zones, reverse zones, zone delegations, nameservers, and hosts with IP address management.
 - DNS record system supporting 25 built-in record types (A, AAAA, NS, PTR, CNAME, MX, TXT, SRV, NAPTR, SSHFP, LOC, HINFO, DS, DNSKEY, CDS, CDNSKEY, CSYNC, CAA, TLSA, SVCB, HTTPS, DNAME, OPENPGPKEY, SMIMEA, URI) with RFC validation, plus runtime-defined types via RFC 3597 raw RDATA.
@@ -26,6 +33,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (legacy compatibility):** v1 now enforces the same domain validation
+  as v2. Correct invalid NAPTR/SSHFP data and blank network-policy or community
+  descriptions before retrying requests. Explicit IP assignments must use
+  allocatable space, and PTR overrides must refer to addresses owned by the
+  supplied host. Clients must unfreeze networks before compatibility mutations.
+  These rules also apply to direct service/storage callers; no compatibility
+  validation bypass is available.
+- **Breaking (validation):** network-policy names are limited to 100 characters.
+  Community template identifiers must contain 1 to 100 ASCII letters, digits, or
+  underscores. Correct invalid names and patterns before upgrading, and send
+  `null` to clear an optional pattern.
+- **Breaking (communities):** creating a community now requires its network to
+  have the requested policy assigned and to be below its community limit. Assign
+  `policy_name` on the network and adjust `max_communities` before creating new
+  communities where necessary.
+- **Breaking:** The native mreg-rust API and OpenAPI paths moved from `/api/v1`
+  to `/api/v2`; `/api/v1` now implements the original Django-mreg contract.
+  Upgrade by changing native client base URLs and regenerated SDKs to `/api/v2`
+  (including native auth and system endpoints) before deploying this release.
+- Legacy wildcard hosts are represented as unanchored DNS owners instead of
+  invalid native inventory hosts, so they remain manageable through v1 without
+  weakening v2 hostname invariants.
 - **Breaking (Rust API):** `MacAddressValue::as_inner()` now returns `macaddr::MacAddr` instead of `macaddr::MacAddr6` so it can represent both EUI-48 and EUI-64 values. Callers that require a fixed width must migrate to `as_eui48()` or `as_eui64()` and handle `None`; callers that support both widths can match on `MacAddr::V6` and `MacAddr::V8`.
 - **Breaking (API and database):** SOA record TTL is now `soa_record_ttl`; `negative_ttl` is only the RFC 2308 SOA minimum/negative-cache value. API clients and export templates must send/read both fields, and operators must run migration `00000000000003_enforce_domain_invariants` before starting the new server.
 - **Breaking (API and Rust API):** DNS SOA serials are unsigned 32-bit RFC 1982 values. Values outside `0..=4294967295` are rejected; the migration reduces legacy oversized values modulo 2^32 and secondaries must be forced to perform a full refresh after upgrade.
@@ -41,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rejected host-group parent cycles and invalid PTR ownership during legacy
+  replacements, and kept failed frozen-network mutations atomic across backends.
+- Avoided linear in-memory attachment lookups and retained validated IP
+  address values in host-filter indexes as inventories grow.
+- Kept v1 compatibility mutations isolated from native v2 semantics: host and
+  delegation cleanup is identity-based, relationship and record moves preserve
+  UUIDs where possible, and native duplicate-create conflict behavior remains
+  non-destructive.
 - Fixed attachment-based IP imports in both storage backends: derive the host from the attachment, infer its network only for automatic allocation, and preserve the exact attachment when assigning an address. Direct IP imports also retain MAC addresses consistently across backends.
 - Enforced RFC-correct CNAME/DNAME exclusivity and alias graphs, null MX semantics, RRset-wide TTL updates, authoritative owner containment, strict delegations, and zone serial bumps for generated records.
 - Added canonical DNS master-file rendering for all 25 built-in record types, including absolute domain names, escaped character strings, LOC, DNSSEC records, SVCB/HTTPS parameters, and RFC 3597 raw RDATA.
