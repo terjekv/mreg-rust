@@ -32,17 +32,17 @@ Treat an unexpected zero count as an invalid measurement, not an improvement.
 
 ## Matching the harness across revisions
 
-`.github/scripts/benchmark_matrix.py` discovers targets from `Cargo.toml`. For
-the existing targets whose fixtures or timing boundaries were repaired, it tells
-Rust PR Bench to restore the head revision's benchmark source and shared fixture
-file into the temporary base checkout before compiling. The base application's
-`src/`, migrations, and Cargo manifest remain unchanged. This prevents comparing
-different workloads or re-running the known broken record-listing fixture.
+`.github/scripts/benchmark_matrix.py` discovers targets from `Cargo.toml`. Rust
+PR Bench compiles each revision's harness against that revision's application
+using shared precompilation. Keep equivalent workloads and timing boundaries
+when adapting a harness to a changed Rust API.
 
-These four comparisons compile on their execution runners because their base
-commands include the harness overlay. Other benchmarks retain the action's
-shared precompilation. New attachment-import benchmarks are not overlaid onto
-old revisions.
+The temporary harness overlay used to compare the fixture repairs in PR #11 has
+been removed now that those repairs are on `main`. Copying current harness code
+onto older application code breaks comparisons when APIs change, such as the
+introduction of `PageLimit` and private `PageRequest` fields. Future fixture or
+timing-boundary repairs need an explicit comparison strategy that works with
+both revisions; do not leave migration overlays enabled for subsequent PRs.
 
 ## Local checks
 
