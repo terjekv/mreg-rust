@@ -57,7 +57,7 @@ use crate::{
 use super::PostgresStorage;
 use super::helpers::{map_unique, vec_to_page_by};
 
-use crate::db::models::{ForwardZoneRow, LabelRow, ReverseZoneRow};
+use crate::db::models::LabelRow;
 use crate::db::schema::labels;
 
 impl PostgresStorage {
@@ -434,33 +434,7 @@ impl PostgresStorage {
             Ttl::new(resolve_u32(attributes, "negative_ttl")?.unwrap_or(3_600))?,
             Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         );
-        let nameserver_ids = Self::lookup_nameserver_ids(connection, command.nameservers())?;
-        use crate::db::schema::{forward_zone_nameservers, forward_zones};
-        let row = diesel::insert_into(forward_zones::table)
-            .values((
-                forward_zones::name.eq(command.name().as_str()),
-                forward_zones::primary_ns.eq(command.primary_ns().as_str()),
-                forward_zones::email.eq(command.email().as_str()),
-                forward_zones::serial_no.eq(command.serial_no().as_i64()),
-                forward_zones::refresh.eq(command.refresh().as_i32()),
-                forward_zones::retry.eq(command.retry().as_i32()),
-                forward_zones::expire.eq(command.expire().as_i32()),
-                forward_zones::soa_record_ttl.eq(command.soa_record_ttl().as_i32()),
-                forward_zones::negative_ttl.eq(command.negative_ttl().as_i32()),
-                forward_zones::default_ttl.eq(command.default_ttl().as_i32()),
-            ))
-            .returning(ForwardZoneRow::as_returning())
-            .get_result(connection)
-            .map_err(map_unique("forward zone already exists"))?;
-        for nameserver_id in nameserver_ids {
-            diesel::insert_into(forward_zone_nameservers::table)
-                .values((
-                    forward_zone_nameservers::zone_id.eq(row.id()),
-                    forward_zone_nameservers::nameserver_id.eq(nameserver_id),
-                ))
-                .execute(connection)?;
-        }
-        let zone = row.into_domain(command.nameservers().to_vec())?;
+        let zone = Self::create_forward_zone_impl(connection, command)?;
         Ok(Value::String(zone.name().as_str().to_string()))
     }
 
@@ -491,40 +465,7 @@ impl PostgresStorage {
             Ttl::new(resolve_u32(attributes, "negative_ttl")?.unwrap_or(3_600))?,
             Ttl::new(resolve_u32(attributes, "default_ttl")?.unwrap_or(43_200))?,
         )?;
-        let nameserver_ids = Self::lookup_nameserver_ids(connection, command.nameservers())?;
-        let row = sql_query(
-            "INSERT INTO reverse_zones
-                (name, network, primary_ns, email, serial_no, refresh, retry, expire, soa_record_ttl, negative_ttl, default_ttl)
-             VALUES
-                ($1, $2::cidr, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             RETURNING id, name::text AS name, network::text AS network, updated,
-                       primary_ns::text AS primary_ns, email::text AS email, serial_no,
-                       serial_no_updated_at, refresh, retry, expire, soa_record_ttl, negative_ttl, default_ttl,
-                       created_at, updated_at",
-        )
-        .bind::<Text, _>(command.name().as_str())
-        .bind::<Nullable<Text>, _>(command.network().map(|value| value.as_str()))
-        .bind::<Text, _>(command.primary_ns().as_str())
-        .bind::<Text, _>(command.email().as_str())
-        .bind::<diesel::sql_types::BigInt, _>(command.serial_no().as_i64())
-        .bind::<Integer, _>(command.refresh().as_i32())
-        .bind::<Integer, _>(command.retry().as_i32())
-        .bind::<Integer, _>(command.expire().as_i32())
-        .bind::<Integer, _>(command.soa_record_ttl().as_i32())
-        .bind::<Integer, _>(command.negative_ttl().as_i32())
-        .bind::<Integer, _>(command.default_ttl().as_i32())
-        .get_result::<ReverseZoneRow>(connection)
-        .map_err(map_unique("reverse zone already exists"))?;
-        for nameserver_id in nameserver_ids {
-            sql_query(
-                "INSERT INTO reverse_zone_nameservers (zone_id, nameserver_id)
-                 VALUES ($1, $2)",
-            )
-            .bind::<SqlUuid, _>(row.id())
-            .bind::<SqlUuid, _>(nameserver_id)
-            .execute(connection)?;
-        }
-        let zone = row.into_domain(command.nameservers().to_vec())?;
+        let zone = Self::create_reverse_zone_impl(connection, command)?;
         Ok(Value::String(zone.name().as_str().to_string()))
     }
 
@@ -705,7 +646,7 @@ impl PostgresStorage {
             .map(|attachment_id| Self::query_attachment_by_id(connection, attachment_id))
             .transpose()?;
         let command = resolve_ip_assignment(attributes, refs, attachment.as_ref())?;
-        let assignment = Self::assign_ip_address_tx(connection, command)?;
+        let assignment = Self::assign_ip_address_in_conn(connection, command)?;
         Ok(Value::String(assignment.address().as_str()))
     }
 
