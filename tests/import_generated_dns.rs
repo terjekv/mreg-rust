@@ -461,9 +461,9 @@ async fn postgres_import_query_budget(
     // in the larger case.
     let per_host = match zones {
         DnsZones::None => 16,
-        DnsZones::Forward => 64,
-        DnsZones::Reverse => 66,
-        DnsZones::Both => 114,
+        DnsZones::Forward => 40,
+        DnsZones::Reverse => 42,
+        DnsZones::Both => 66,
     };
     assert!(
         (1..=8 + per_host * host_count).contains(&count),

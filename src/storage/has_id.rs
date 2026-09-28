@@ -36,6 +36,12 @@ pub(crate) trait HasId {
     fn id(&self) -> Uuid;
 }
 
+impl<T: HasId> HasId for &T {
+    fn id(&self) -> Uuid {
+        T::id(self)
+    }
+}
+
 macro_rules! impl_has_id {
     ($($type:ty),*$(,)?) => {
         $(

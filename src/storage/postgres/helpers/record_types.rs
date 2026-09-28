@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 
 use diesel::{
-    OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
+    Connection, ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, Queryable,
+    QueryableByName, RunQueryDsl, Selectable, SelectableHelper, sql_query,
     sql_types::{Bytea, Integer, Nullable, Text, Uuid as SqlUuid},
 };
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
+    db::schema::record_types,
     domain::resource_records::{
-        ExistingRecordSummary, RawRdataValue, RecordCardinality, RecordOwnerKind, RecordTypeSchema,
-        render_record_data as render_rdata,
+        CreateRecordTypeDefinition, ExistingRecordSummary, RawRdataValue, RecordCardinality,
+        RecordOwnerKind, RecordTypeSchema, render_record_data as render_rdata,
     },
     domain::types::{DnsName, RecordTypeName, Ttl},
     errors::AppError,
@@ -101,40 +103,89 @@ pub(in crate::storage::postgres) struct IntSentinelRow {
 // Builtin record types & export templates seeding
 // ---------------------------------------------------------------------------
 
+#[derive(PartialEq, Queryable, Selectable)]
+#[diesel(table_name = record_types)]
+struct BuiltinRecordType {
+    name: String,
+    dns_type: Option<i32>,
+    owner_kind: String,
+    cardinality: String,
+    validation_schema: Value,
+    rendering_schema: Value,
+    behavior_flags: Value,
+    built_in: bool,
+}
+
+impl BuiltinRecordType {
+    fn from_command(command: CreateRecordTypeDefinition) -> Self {
+        let (owner_kind, cardinality, validation_schema, rendering_schema, behavior_flags) =
+            record_type_storage_parts(command.schema());
+        Self {
+            name: command.name().as_str().to_owned(),
+            dns_type: command.dns_type().map(|value| value.as_i32()),
+            owner_kind,
+            cardinality,
+            validation_schema,
+            rendering_schema,
+            behavior_flags,
+            built_in: true,
+        }
+    }
+
+    fn all_current(connection: &mut PgConnection, expected: &[Self]) -> Result<bool, AppError> {
+        let stored = record_types::table
+            .filter(record_types::name.eq_any(expected.iter().map(|definition| &definition.name)))
+            .select(Self::as_select())
+            .load::<Self>(connection)?;
+        Ok(expected
+            .iter()
+            .all(|definition| stored.contains(definition)))
+    }
+
+    fn upsert(&self, connection: &mut PgConnection) -> Result<(), AppError> {
+        let values = (
+            record_types::dns_type.eq(self.dns_type),
+            record_types::owner_kind.eq(&self.owner_kind),
+            record_types::cardinality.eq(&self.cardinality),
+            record_types::validation_schema.eq(&self.validation_schema),
+            record_types::rendering_schema.eq(&self.rendering_schema),
+            record_types::behavior_flags.eq(&self.behavior_flags),
+            record_types::built_in.eq(self.built_in),
+        );
+        diesel::insert_into(record_types::table)
+            .values((record_types::name.eq(&self.name), values))
+            .on_conflict(record_types::name)
+            .do_update()
+            .set((values, record_types::updated_at.eq(diesel::dsl::now)))
+            .execute(connection)?;
+        Ok(())
+    }
+}
+
 impl PostgresStorage {
     pub(in crate::storage::postgres) fn ensure_builtin_record_types(
         connection: &mut PgConnection,
     ) -> Result<(), AppError> {
-        use crate::db::schema::record_types;
         use crate::domain::resource_records::built_in_record_types;
-        use diesel::ExpressionMethods;
-        for command in built_in_record_types()? {
-            let (owner_kind, cardinality, validation_schema, rendering_schema, behavior_flags) =
-                record_type_storage_parts(command.schema());
-            diesel::insert_into(record_types::table)
-                .values((
-                    record_types::name.eq(command.name().as_str()),
-                    record_types::dns_type.eq(command.dns_type().map(|v| v.as_i32())),
-                    record_types::owner_kind.eq(&owner_kind),
-                    record_types::cardinality.eq(&cardinality),
-                    record_types::validation_schema.eq(&validation_schema),
-                    record_types::rendering_schema.eq(&rendering_schema),
-                    record_types::behavior_flags.eq(&behavior_flags),
-                    record_types::built_in.eq(true),
-                ))
-                .on_conflict(record_types::name)
-                .do_update()
-                .set((
-                    record_types::dns_type.eq(command.dns_type().map(|v| v.as_i32())),
-                    record_types::owner_kind.eq(&owner_kind),
-                    record_types::cardinality.eq(&cardinality),
-                    record_types::validation_schema.eq(&validation_schema),
-                    record_types::rendering_schema.eq(&rendering_schema),
-                    record_types::behavior_flags.eq(&behavior_flags),
-                    record_types::built_in.eq(true),
-                    record_types::updated_at.eq(diesel::dsl::now),
-                ))
-                .execute(connection)?;
+        let expected = built_in_record_types()?
+            .into_iter()
+            .map(BuiltinRecordType::from_command)
+            .collect::<Vec<_>>();
+        if !BuiltinRecordType::all_current(connection, &expected)? {
+            connection.transaction::<_, AppError, _>(|connection| {
+                // Both name and dns_type are unique. Concurrent UPSERTs targeting
+                // only name can fail on the other index, even for identical data.
+                // Lock only initialization/refresh; ordinary reads never rewrite
+                // definitions. The transaction also makes initialization atomic.
+                sql_query("SELECT pg_advisory_xact_lock(hashtext('mreg.builtin_record_types'), hashtext(current_schema()))")
+                    .execute(connection)?;
+                if !BuiltinRecordType::all_current(connection, &expected)? {
+                    for definition in &expected {
+                        definition.upsert(connection)?;
+                    }
+                }
+                Ok(())
+            })?;
         }
         Self::ensure_builtin_export_templates(connection)?;
         Ok(())
@@ -145,7 +196,6 @@ impl PostgresStorage {
     ) -> Result<(), AppError> {
         use crate::db::schema::export_templates;
         use crate::domain::builtin_export_templates::built_in_export_templates;
-        use diesel::ExpressionMethods;
         for (command, _built_in) in built_in_export_templates()? {
             diesel::insert_into(export_templates::table)
                 .values((

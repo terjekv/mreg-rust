@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed intermittent PostgreSQL DNS reads failing under concurrent imports: current built-in record definitions are no longer rewritten on reads, and initialization or refresh is serialized within a transaction.
+- Reduced memory-backend host-filter and record-listing work by evaluating address conditions once per inventory and cloning only the requested page.
 - **Breaking (import batches):** bulk imports consistently generate eligible managed A/AAAA/PTR records and zone-apex NS records across supported storage backends, using the same creation paths as normal API calls. Zone creation also backfills records for earlier assignments in the batch, and generated records participate in rollback and assignment cleanup. Imported hosts retain their configured TTL. Imports without relevant DNS zones skip DNS-generation work. Import batches must omit explicit copies of synthesized records; previously completed imports need separate DNS verification or a fresh import into an empty destination. No database migration is required.
 - **Breaking (pagination API):** public page sizes, including `18446744073709551615`, now remain capped at 1000; clients using that value for unbounded listing must follow pagination cursors. Internal fetch-all requests remain explicit.
 - Closed constructor-validation bypasses in deserialization of import batches/items, record field/type schemas, and raw RDATA.

@@ -381,13 +381,8 @@ pub(super) fn list_hosts_in_state(
     page: &PageRequest,
     filter: &HostFilter,
 ) -> Result<Page<Host>, AppError> {
-    let items: Vec<Host> = state
-        .hosts
-        .values()
-        .filter(|host| filter.matches(host, &state.ip_addresses))
-        .cloned()
-        .collect();
-    sort_and_paginate(
+    let items = filter.matching_hosts(state.hosts.values(), &state.ip_addresses);
+    let result = sort_and_paginate(
         items,
         page,
         &["name", "comment", "created_at", "updated_at"],
@@ -397,7 +392,12 @@ pub(super) fn list_hosts_in_state(
             "updated_at" => host.updated_at().to_rfc3339(),
             _ => host.name().as_str().to_string(),
         },
-    )
+    )?;
+    Ok(Page {
+        items: result.items.into_iter().cloned().collect(),
+        total: result.total,
+        next_cursor: result.next_cursor,
+    })
 }
 
 pub(super) fn create_host_in_state(
