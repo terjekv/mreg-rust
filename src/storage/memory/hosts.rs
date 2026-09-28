@@ -31,7 +31,10 @@ use super::{
     MemoryState, MemoryStorage,
     attachments::{create_attachment_dhcp_identifier_in_state, find_or_create_attachment_in_state},
     bump_zone_serial_in_state, delete_records_by_owner_in_state, paginate_by_cursor,
-    records::{create_record_with_serial_bump_in_state, delete_record_in_state},
+    records::{
+        best_matching_zone_for_owner_name, create_record_with_serial_bump_in_state,
+        delete_record_in_state,
+    },
     sort_and_paginate,
 };
 
@@ -65,9 +68,9 @@ fn insert_host_record_in_state(
     Ok(host)
 }
 
-pub(super) fn assign_ip_in_state(
+fn assign_ip_in_state(
     state: &mut MemoryState,
-    command: AssignIpAddress,
+    command: &AssignIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
     let host = state
         .hosts
@@ -780,11 +783,11 @@ pub(super) fn assign_ip_address_in_state(
     state: &mut MemoryState,
     command: AssignIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
-    let assignment = assign_ip_in_state(state, command)?;
+    let assignment = assign_ip_in_state(state, &command)?;
 
-    create_managed_forward_record_in_state(state, &assignment)?;
+    create_managed_forward_record_in_state(state, &assignment, command.host_name())?;
 
-    create_managed_ptr_record_in_state(state, &assignment)?;
+    create_managed_ptr_record_in_state(state, &assignment, command.host_name())?;
 
     Ok(assignment)
 }
@@ -792,15 +795,12 @@ pub(super) fn assign_ip_address_in_state(
 pub(super) fn create_managed_forward_record_in_state(
     state: &mut MemoryState,
     assignment: &IpAddressAssignment,
+    host_name: &Hostname,
 ) -> Result<(), AppError> {
-    let host_name = state
-        .hosts
-        .values()
-        .find(|host| host.id() == assignment.host_id())
-        .map(|host| host.name().clone())
-        .ok_or_else(|| AppError::not_found("assignment host was not found"))?;
-    let owner = DnsName::new(host_name.as_str())?;
-    let Some(zone_id) = super::records::best_matching_zone_for_owner_name(state, &owner) else {
+    if state.forward_zones.is_empty() {
+        return Ok(());
+    }
+    let Some(zone_id) = best_matching_zone_for_owner_name(state, host_name.as_dns_name()) else {
         return Ok(());
     };
     if !state
@@ -853,16 +853,14 @@ pub(super) fn delete_managed_forward_records_in_state(
 pub(super) fn create_managed_ptr_record_in_state(
     state: &mut MemoryState,
     assignment: &IpAddressAssignment,
+    host_name: &Hostname,
 ) -> Result<(), AppError> {
-    let host_name = state
-        .hosts
-        .values()
-        .find(|host| host.id() == assignment.host_id())
-        .map(|host| host.name().clone())
-        .ok_or_else(|| AppError::not_found("assignment host was not found"))?;
+    if state.reverse_zones.is_empty() {
+        return Ok(());
+    }
     let ptr_name = ip_to_ptr_name(assignment.address());
     let ptr_owner = DnsName::new(&ptr_name)?;
-    let zone_id = super::records::best_matching_zone_for_owner_name(state, &ptr_owner);
+    let zone_id = best_matching_zone_for_owner_name(state, &ptr_owner);
     if zone_id.is_some_and(|id| state.reverse_zones.values().any(|zone| zone.id() == id)) {
         let target_name = match state.ptr_overrides.get(&assignment.address().as_str()) {
             Some(override_record) => match override_record.target_name() {

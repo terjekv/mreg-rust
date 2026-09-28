@@ -68,6 +68,14 @@ fn import_batch_run(c: &mut Criterion) {
         }
     }
     group.finish();
+    support::import_dns::bench(
+        c,
+        "import_dns_direct",
+        &[
+            IpImportScenario::DirectManual,
+            IpImportScenario::DirectAutomatic,
+        ],
+    );
 }
 
 criterion_group!(benches, import_batch_run);

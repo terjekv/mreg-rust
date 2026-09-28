@@ -3,7 +3,13 @@ mod common;
 use std::collections::BTreeSet;
 
 use actix_web::http::StatusCode;
-use mreg_rust::domain::types::{IpAddressValue, ip_to_ptr_name};
+use mreg_rust::{
+    db::{take_query_capture, with_query_capture},
+    domain::{
+        host::UpdateHost,
+        types::{Hostname, IpAddressValue, UpdateField, ip_to_ptr_name},
+    },
+};
 use rstest::rstest;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -17,6 +23,24 @@ async fn context(backend: TestBackend) -> Option<TestCtx> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DnsZones {
+    None,
+    Forward,
+    Reverse,
+    Both,
+}
+
+impl DnsZones {
+    fn forward(self) -> bool {
+        matches!(self, Self::Forward | Self::Both)
+    }
+
+    fn reverse(self) -> bool {
+        matches!(self, Self::Reverse | Self::Both)
+    }
+}
+
 struct Fixture {
     items: Vec<Value>,
     host: String,
@@ -26,6 +50,57 @@ struct Fixture {
     ptr_owner: String,
     nameserver: String,
     address_type: &'static str,
+}
+
+impl Fixture {
+    fn with_zones(mut self, zones: DnsZones) -> Self {
+        self.items
+            .retain(|item| match item["kind"].as_str().unwrap() {
+                "forward_zone" => zones.forward(),
+                "reverse_zone" => zones.reverse(),
+                _ => true,
+            });
+        if !zones.forward() {
+            for item in &mut self.items {
+                if item["kind"] == "host" {
+                    item["attributes"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("zone_ref");
+                }
+            }
+        }
+        self
+    }
+
+    fn expected_records(&self, zones: DnsZones) -> BTreeSet<(String, String, String)> {
+        let mut expected = BTreeSet::new();
+        if zones.forward() {
+            expected.insert((
+                self.address_type.into(),
+                self.host.clone(),
+                json!({"address":self.address}).to_string(),
+            ));
+            expected.insert((
+                "NS".into(),
+                self.zone.clone(),
+                json!({"nsdname":self.nameserver}).to_string(),
+            ));
+        }
+        if zones.reverse() {
+            expected.insert((
+                "PTR".into(),
+                self.ptr_owner.clone(),
+                json!({"ptrdname":self.host}).to_string(),
+            ));
+            expected.insert((
+                "NS".into(),
+                self.reverse_zone.clone(),
+                json!({"nsdname":self.nameserver}).to_string(),
+            ));
+        }
+        expected
+    }
 }
 
 fn fixture(ctx: &TestCtx, ipv6: bool, ip_before_zones: bool) -> Fixture {
@@ -98,7 +173,17 @@ async fn stage(ctx: &TestCtx, items: &[Value]) -> Uuid {
 }
 
 async fn records(ctx: &TestCtx, fixture: &Fixture) -> BTreeSet<(String, String, String)> {
-    let result = ctx.get_json("/dns/records?limit=1000").await;
+    let owners = [
+        &fixture.host,
+        &fixture.ptr_owner,
+        &fixture.zone,
+        &fixture.reverse_zone,
+    ]
+    .map(String::as_str)
+    .join(",");
+    let result = ctx
+        .get_json(&format!("/dns/records?owner_name__in={owners}&limit=1000"))
+        .await;
     result["items"]
         .as_array()
         .unwrap()
@@ -124,7 +209,34 @@ async fn records(ctx: &TestCtx, fixture: &Fixture) -> BTreeSet<(String, String, 
 
 #[rstest]
 #[actix_web::test]
-async fn imports_generate_addresses_ptrs_and_apex_nameservers(
+async fn imports_generate_only_records_with_matching_zones(
+    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[values(false, true)] ipv6: bool,
+    #[values(false, true)] ip_before_zones: bool,
+    #[values(DnsZones::None, DnsZones::Forward, DnsZones::Reverse, DnsZones::Both)] zones: DnsZones,
+    #[values(false, true)] direct: bool,
+) {
+    let Some(ctx) = context(backend).await else {
+        return;
+    };
+    let mut f = fixture(&ctx, ipv6, ip_before_zones).with_zones(zones);
+    if direct {
+        f.items.retain(|item| item["kind"] != "host_attachment");
+        let ip = f
+            .items
+            .iter_mut()
+            .find(|item| item["kind"] == "ip_address")
+            .unwrap();
+        ip["attributes"] = json!({"host_name_ref":"host", "address":f.address});
+    }
+    let id = stage(&ctx, &f.items).await;
+    ctx.storage().imports().run_import_batch(id).await.unwrap();
+    assert_eq!(records(&ctx, &f).await, f.expected_records(zones));
+}
+
+#[rstest]
+#[actix_web::test]
+async fn generated_import_records_are_removed_with_the_assignment(
     #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
     #[values(false, true)] ipv6: bool,
     #[values(false, true)] ip_before_zones: bool,
@@ -133,44 +245,6 @@ async fn imports_generate_addresses_ptrs_and_apex_nameservers(
         return;
     };
     let f = fixture(&ctx, ipv6, ip_before_zones);
-    let id = stage(&ctx, &f.items).await;
-    ctx.storage().imports().run_import_batch(id).await.unwrap();
-    assert_eq!(
-        records(&ctx, &f).await,
-        BTreeSet::from([
-            (
-                f.address_type.into(),
-                f.host.clone(),
-                json!({"address":f.address}).to_string()
-            ),
-            (
-                "PTR".into(),
-                f.ptr_owner.clone(),
-                json!({"ptrdname":f.host}).to_string()
-            ),
-            (
-                "NS".into(),
-                f.zone.clone(),
-                json!({"nsdname":f.nameserver}).to_string()
-            ),
-            (
-                "NS".into(),
-                f.reverse_zone.clone(),
-                json!({"nsdname":f.nameserver}).to_string()
-            ),
-        ])
-    );
-}
-
-#[rstest]
-#[actix_web::test]
-async fn generated_import_records_are_removed_with_the_assignment(
-    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
-) {
-    let Some(ctx) = context(backend).await else {
-        return;
-    };
-    let f = fixture(&ctx, false, false);
     let id = stage(&ctx, &f.items).await;
     ctx.storage().imports().run_import_batch(id).await.unwrap();
     ctx.storage()
@@ -199,11 +273,13 @@ async fn generated_import_records_are_removed_with_the_assignment(
 #[actix_web::test]
 async fn generated_import_records_roll_back_on_late_failure(
     #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[values(false, true)] ipv6: bool,
+    #[values(false, true)] ip_before_zones: bool,
 ) {
     let Some(ctx) = context(backend).await else {
         return;
     };
-    let mut f = fixture(&ctx, false, false);
+    let mut f = fixture(&ctx, ipv6, ip_before_zones);
     f.items.push(
         json!({"ref":"bad","kind":"record","operation":"create","attributes":{
             "type_name":"UNKNOWN","owner_name":f.host,"data":{}
@@ -231,4 +307,167 @@ async fn imports_preserve_host_ttl(
     ctx.storage().imports().run_import_batch(id).await.unwrap();
     let host = ctx.get_json(&format!("/inventory/hosts/{}", f.host)).await;
     assert_eq!(host["ttl"], 600);
+}
+
+#[rstest]
+#[actix_web::test]
+async fn imported_ptr_overrides_survive_generation_and_backfill(
+    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[values(false, true)] ipv6: bool,
+    #[values(false, true)] ip_before_zones: bool,
+    #[values(false, true)] suppress: bool,
+) {
+    let Some(ctx) = context(backend).await else {
+        return;
+    };
+    let mut f = fixture(&ctx, ipv6, ip_before_zones);
+    let target = ctx.host("ptr-target");
+    let ip_position = f
+        .items
+        .iter()
+        .position(|item| item["kind"] == "ip_address")
+        .unwrap();
+    let mut attributes = json!({"host_name_ref":"host", "address_ref":"ip"});
+    if !suppress {
+        attributes["target_name"] = json!(target);
+    }
+    f.items.insert(
+        ip_position + 1,
+        json!({
+            "ref":"override", "kind":"ptr_override", "operation":"create", "attributes":attributes
+        }),
+    );
+    let id = stage(&ctx, &f.items).await;
+    ctx.storage().imports().run_import_batch(id).await.unwrap();
+    let ptrs = records(&ctx, &f)
+        .await
+        .into_iter()
+        .filter(|(kind, _, _)| kind == "PTR")
+        .collect::<BTreeSet<_>>();
+    let expected = if suppress {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([(
+            "PTR".into(),
+            f.ptr_owner,
+            json!({"ptrdname":target}).to_string(),
+        )])
+    };
+    assert_eq!(ptrs, expected);
+}
+
+#[rstest]
+#[actix_web::test]
+async fn removing_imported_ptr_override_uses_renamed_host(
+    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[values(false, true)] ipv6: bool,
+) {
+    let Some(ctx) = context(backend).await else {
+        return;
+    };
+    let mut f = fixture(&ctx, ipv6, false);
+    f.items.push(json!({
+        "ref":"override", "kind":"ptr_override", "operation":"create",
+        "attributes":{"host_name_ref":"host", "address_ref":"ip", "target_name":ctx.host("ptr-target")}
+    }));
+    let id = stage(&ctx, &f.items).await;
+    ctx.storage().imports().run_import_batch(id).await.unwrap();
+    let name = Hostname::new(ctx.host_in_zone("renamed", &f.zone)).unwrap();
+    ctx.storage()
+        .hosts()
+        .update_host(
+            &Hostname::new(&f.host).unwrap(),
+            UpdateHost {
+                name: Some(name.clone()),
+                ttl: UpdateField::Unchanged,
+                comment: None,
+                zone: UpdateField::Unchanged,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.storage()
+        .ptr_overrides()
+        .delete_ptr_override(&IpAddressValue::new(&f.address).unwrap())
+        .await
+        .unwrap();
+    let ptrs = records(&ctx, &f)
+        .await
+        .into_iter()
+        .filter(|(kind, _, _)| kind == "PTR")
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        ptrs,
+        BTreeSet::from([(
+            "PTR".into(),
+            f.ptr_owner,
+            json!({"ptrdname":name}).to_string()
+        )])
+    );
+}
+
+#[rstest]
+#[actix_web::test]
+async fn postgres_import_query_budget(
+    #[values(DnsZones::None, DnsZones::Forward, DnsZones::Reverse, DnsZones::Both)] zones: DnsZones,
+    #[values(2, 32)] host_count: usize,
+) {
+    let Some(ctx) = TestCtx::postgres().await else {
+        return;
+    };
+    let mut f = fixture(&ctx, false, false).with_zones(zones);
+    // Set up zones outside capture: zone backfill intentionally visits existing
+    // assignments, whose count depends on other tests sharing this database.
+    let first_host = f
+        .items
+        .iter()
+        .position(|item| item["kind"] == "host")
+        .unwrap();
+    let inventory = f.items.split_off(first_host);
+    let setup = stage(&ctx, &f.items).await;
+    ctx.storage()
+        .imports()
+        .run_import_batch(setup)
+        .await
+        .unwrap();
+    f.items = inventory;
+    for index in 1..host_count {
+        let host_ref = format!("host-{index}");
+        let attachment_ref = format!("attachment-{index}");
+        f.items.extend([
+            json!({"ref":host_ref, "kind":"host", "operation":"create", "attributes":{"name":ctx.host_in_zone(&format!("app-{index}"), &f.zone)}}),
+            json!({"ref":attachment_ref, "kind":"host_attachment", "operation":"create", "attributes":{"host_name_ref":host_ref,"network_ref":"network"}}),
+            json!({"ref":format!("ip-{index}"), "kind":"ip_address", "operation":"create", "attributes":{"attachment_id_ref":attachment_ref,"address":ctx.ip_in_cidr(&ctx.cidr(0), 20 + index as u8)}}),
+        ]);
+    }
+    for item in &mut f.items {
+        let attributes = item["attributes"].as_object_mut().unwrap();
+        if attributes.remove("network_ref").is_some() {
+            attributes.insert("network".into(), json!(ctx.cidr(0)));
+        }
+        if attributes.remove("zone_ref").is_some() {
+            attributes.insert("zone".into(), json!(f.zone));
+        }
+    }
+    let id = stage(&ctx, &f.items).await;
+    let capture_id = format!("{}-import-budget", ctx.namespace());
+    with_query_capture(&capture_id, ctx.storage().imports().run_import_batch(id))
+        .await
+        .unwrap();
+    let queries = take_query_capture(&capture_id);
+    let count = queries.total_queries();
+    // Allow the transaction/status queries and a connection health check in
+    // addition to the per-host work; an extra query per host exceeds the budget
+    // in the larger case.
+    let per_host = match zones {
+        DnsZones::None => 16,
+        DnsZones::Forward => 64,
+        DnsZones::Reverse => 66,
+        DnsZones::Both => 114,
+    };
+    assert!(
+        (1..=8 + per_host * host_count).contains(&count),
+        "import query budget exceeded: {count}, {:?}",
+        queries.query_counts()
+    );
 }

@@ -126,7 +126,9 @@ Characteristics:
 - pagination, sorting, and filtering usually happen in Rust
 - good for handler and orchestration tests
 
-This backend intentionally prioritizes simplicity over production-grade semantics.
+Supported operations follow the shared storage contract, including validation,
+generated DNS records, and import atomicity. Durability and production task
+claiming are separate backend capabilities.
 
 ### PostgreSQL backend
 
@@ -273,11 +275,17 @@ The test harness in `tests/common/mod.rs` uses that to assert:
 
 These tests are the main guard against reintroducing N+1 behavior on rich endpoints.
 
-## Important Non-Goal
+## Shared Contract and Backend Capabilities
 
-The storage abstraction does not promise perfect backend equivalence for every edge case.
+Supported operations must preserve the same domain invariants and observable
+behavior across storage backends. This includes generated DNS records, assignment
+cleanup, and atomic import rollback. Dual-backend conformance tests protect that
+contract.
 
-The project is designed around PostgreSQL as the canonical production backend. Memory exists to support fast tests and local development, not to replace PostgreSQL as the semantic reference.
+Backend capabilities can differ: PostgreSQL provides durable persistence and
+production task claiming, while memory supports fast tests and local development.
+Import kind support is documented in [import-format.md](import-format.md#backend-capabilities).
+Backend-specific implementation details must not redefine the shared contract.
 
 ## Related Documents
 
