@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
@@ -163,18 +165,22 @@ pub(super) fn create_forward_zone_in_state(
             create_record_in_state(state, cmd)?;
         }
         let assignments = state.ip_addresses.values().cloned().collect::<Vec<_>>();
+        if assignments.is_empty() {
+            return Ok(zone);
+        }
+        let host_names = state
+            .hosts
+            .values()
+            .map(|host| (host.id(), host.name().clone()))
+            .collect::<BTreeMap<_, _>>();
         for assignment in assignments {
-            let Some(host) = state
-                .hosts
-                .values()
-                .find(|host| host.id() == assignment.host_id())
-            else {
+            let Some(host_name) = host_names.get(&assignment.host_id()) else {
                 continue;
             };
-            let owner = DnsName::new(host.name().as_str())?;
-            if best_matching_zone_for_owner_name(state, &owner) == Some(zone.id()) {
+            if best_matching_zone_for_owner_name(state, host_name.as_dns_name()) == Some(zone.id())
+            {
                 delete_managed_forward_records_in_state(state, assignment.id())?;
-                create_managed_forward_record_in_state(state, &assignment)?;
+                create_managed_forward_record_in_state(state, &assignment, host_name)?;
             }
         }
         Ok(zone)
@@ -423,11 +429,22 @@ pub(super) fn create_reverse_zone_in_state(
             create_record_in_state(state, cmd)?;
         }
         let assignments = state.ip_addresses.values().cloned().collect::<Vec<_>>();
+        if assignments.is_empty() {
+            return Ok(zone);
+        }
+        let host_names = state
+            .hosts
+            .values()
+            .map(|host| (host.id(), host.name().clone()))
+            .collect::<BTreeMap<_, _>>();
         for assignment in assignments {
             let ptr_owner = DnsName::new(ip_to_ptr_name(assignment.address()))?;
             if best_matching_zone_for_owner_name(state, &ptr_owner) == Some(zone.id()) {
+                let host_name = host_names
+                    .get(&assignment.host_id())
+                    .ok_or_else(|| AppError::not_found("assignment host was not found"))?;
                 delete_managed_ptr_records_in_state(state, assignment.id())?;
-                create_managed_ptr_record_in_state(state, &assignment)?;
+                create_managed_ptr_record_in_state(state, &assignment, host_name)?;
             }
         }
         Ok(zone)

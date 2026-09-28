@@ -46,6 +46,14 @@ fn import_attachment_ip(c: &mut Criterion) {
         }
     }
     group.finish();
+    support::import_dns::bench(
+        c,
+        "import_dns_attachment",
+        &[
+            IpImportScenario::AttachmentManual,
+            IpImportScenario::AttachmentAutomatic,
+        ],
+    );
 }
 
 criterion_group!(benches, import_attachment_ip);

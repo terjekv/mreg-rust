@@ -66,7 +66,7 @@ pub(super) fn create_ptr_override_in_state(
     );
     state.ptr_overrides.insert(key, override_record.clone());
     delete_managed_ptr_records_in_state(state, assignment.id())?;
-    create_managed_ptr_record_in_state(state, &assignment)?;
+    create_managed_ptr_record_in_state(state, &assignment, host.name())?;
     Ok(override_record)
 }
 
@@ -121,8 +121,16 @@ pub(super) fn delete_ptr_override_in_state(
         .get(&address.as_str())
         .cloned()
         .ok_or_else(|| AppError::not_found("IP address assignment was not found"))?;
+    // The stored override name can predate a host rename. Restore the PTR using
+    // the assignment's current host, not the override's historical name.
+    let host_name = state
+        .hosts
+        .values()
+        .find(|host| host.id() == assignment.host_id())
+        .map(|host| host.name().clone())
+        .ok_or_else(|| AppError::not_found("assignment host was not found"))?;
     delete_managed_ptr_records_in_state(state, assignment.id())?;
-    if let Err(error) = create_managed_ptr_record_in_state(state, &assignment) {
+    if let Err(error) = create_managed_ptr_record_in_state(state, &assignment, &host_name) {
         state.ptr_overrides.insert(address.as_str(), removed);
         return Err(error);
     }

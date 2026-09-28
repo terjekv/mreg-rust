@@ -54,7 +54,7 @@ use super::communities::create_community_in_state;
 use super::host_community_assignments::create_host_community_assignment_in_state;
 use super::host_contacts::create_host_contact_in_state;
 use super::host_groups::create_host_group_in_state;
-use super::hosts::assign_ip_in_state;
+use super::hosts::assign_ip_address_in_state;
 use super::labels::create_label_in_state;
 use super::nameservers::create_nameserver_in_state;
 use super::network_policies::create_network_policy_in_state;
@@ -441,7 +441,7 @@ fn import_host(
         crate::domain::host::CreateHost::new(
             Hostname::new(resolve_string(attributes, "name", refs)?)?,
             zone,
-            None,
+            resolve_u32(attributes, "ttl")?.map(Ttl::new).transpose()?,
             resolve_optional_string(attributes, "comment", refs)?.unwrap_or_default(),
         )?,
     )?;
@@ -482,7 +482,7 @@ fn import_ip_address(
         })
         .transpose()?;
     let command = resolve_ip_assignment(attributes, refs, attachment.as_ref())?;
-    let assignment = assign_ip_in_state(state, command)?;
+    let assignment = assign_ip_address_in_state(state, command)?;
     Ok(Value::String(assignment.address().as_str()))
 }
 

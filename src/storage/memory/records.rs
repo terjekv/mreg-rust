@@ -368,13 +368,12 @@ pub(super) fn list_records_in_state(
     page: &PageRequest,
     filter: &RecordFilter,
 ) -> Result<Page<RecordInstance>, AppError> {
-    let items: Vec<RecordInstance> = state
+    let items: Vec<&RecordInstance> = state
         .records
         .iter()
         .filter(|record| filter.matches(record))
-        .cloned()
         .collect();
-    sort_and_paginate(
+    let result = sort_and_paginate(
         items,
         page,
         &["owner_name", "created_at"],
@@ -383,7 +382,12 @@ pub(super) fn list_records_in_state(
             "created_at" => record.created_at().to_rfc3339(),
             _ => record.type_name().as_str().to_string(),
         },
-    )
+    )?;
+    Ok(Page {
+        items: result.items.into_iter().cloned().collect(),
+        total: result.total,
+        next_cursor: result.next_cursor,
+    })
 }
 
 pub(super) fn create_record_type_in_state(

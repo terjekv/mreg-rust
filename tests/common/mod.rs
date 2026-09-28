@@ -183,7 +183,11 @@ impl TestCtx {
         let (status, body) = self
             .call_json(test::TestRequest::get().uri(uri).to_request())
             .await;
-        assert_eq!(status, StatusCode::OK, "GET {uri} failed with {status}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "GET {uri} failed with {status}: {body}"
+        );
         body
     }
 
@@ -207,7 +211,11 @@ impl TestCtx {
             self.call_json(test::TestRequest::get().uri(uri).to_request()),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "GET {uri} failed with {status}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "GET {uri} failed with {status}: {body}"
+        );
         (body, take_query_capture(&capture_id))
     }
 

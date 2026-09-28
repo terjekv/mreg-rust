@@ -50,7 +50,7 @@ use mreg_rust::{
     storage::ReadableStorage,
     storage::build_storage,
 };
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_value};
 use tokio::sync::Mutex;
 
 use common::TestCtx;
@@ -2576,6 +2576,47 @@ async fn postgres_network_delete_rejects_related_attachment_state()
     );
 
     Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_record_reads_do_not_rewrite_current_builtin_definitions() {
+    let Some(ctx) = postgres_ctx("read-only built-in definitions").await else {
+        return;
+    };
+    let storage = ctx.storage();
+    let before = storage
+        .records()
+        .list_record_types(&PageRequest::all())
+        .await
+        .expect("definitions");
+    storage
+        .records()
+        .list_records(&PageRequest::default(), &RecordFilter::default())
+        .await
+        .expect("records");
+    let after = storage
+        .records()
+        .list_record_types(&PageRequest::all())
+        .await
+        .expect("definitions");
+    assert_eq!(
+        to_value(
+            before
+                .items
+                .into_iter()
+                .filter(|item| item.built_in())
+                .collect::<Vec<_>>()
+        )
+        .unwrap(),
+        to_value(
+            after
+                .items
+                .into_iter()
+                .filter(|item| item.built_in())
+                .collect::<Vec<_>>()
+        )
+        .unwrap()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

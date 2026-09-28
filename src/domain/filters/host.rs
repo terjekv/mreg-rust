@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use uuid::Uuid;
 
 use super::apply::{apply_datetime_filter, apply_optional_string_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
@@ -30,6 +32,47 @@ impl HostFilter {
         host: &Host,
         ip_addresses: &BTreeMap<String, IpAddressAssignment>,
     ) -> bool {
+        self.matches_fields(host)
+            && self.address.iter().all(|cond| {
+                ip_addresses.values().any(|assignment| {
+                    assignment.host_id() == host.id()
+                        && apply_string_filter(&assignment.address().as_str(), cond)
+                })
+            })
+    }
+
+    /// Evaluate each address condition once over the inventory. Each condition
+    /// is an independent EXISTS, so different addresses may satisfy them.
+    pub(crate) fn matching_hosts<'a>(
+        &self,
+        hosts: impl Iterator<Item = &'a Host>,
+        ip_addresses: &BTreeMap<String, IpAddressAssignment>,
+    ) -> Vec<&'a Host> {
+        let address_matches = self
+            .address
+            .iter()
+            .map(|cond| {
+                ip_addresses
+                    .values()
+                    .filter(|assignment| apply_string_filter(&assignment.address().as_str(), cond))
+                    .map(IpAddressAssignment::host_id)
+                    .collect::<HashSet<Uuid>>()
+            })
+            .reduce(|mut matches, next| {
+                matches.retain(|id| next.contains(id));
+                matches
+            });
+        hosts
+            .filter(|host| {
+                address_matches
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&host.id()))
+                    && self.matches_fields(host)
+            })
+            .collect()
+    }
+
+    fn matches_fields(&self, host: &Host) -> bool {
         for cond in &self.name {
             if !apply_string_filter(host.name().as_str(), cond) {
                 return false;
@@ -52,16 +95,6 @@ impl HostFilter {
         }
         for cond in &self.updated_at {
             if !apply_datetime_filter(host.updated_at(), cond) {
-                return false;
-            }
-        }
-        for cond in &self.address {
-            let host_ips: Vec<String> = ip_addresses
-                .values()
-                .filter(|a| a.host_id() == host.id())
-                .map(|a| a.address().as_str().to_string())
-                .collect();
-            if !host_ips.iter().any(|ip| apply_string_filter(ip, cond)) {
                 return false;
             }
         }
