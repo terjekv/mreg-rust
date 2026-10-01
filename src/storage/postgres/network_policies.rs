@@ -242,7 +242,8 @@ pub(super) fn delete(connection: &mut PgConnection, name: &str) -> Result<(), Ap
         .execute(connection)
         .map_err(|error| match error {
             diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                diesel::result::DatabaseErrorKind::ForeignKeyViolation
+                | diesel::result::DatabaseErrorKind::CheckViolation,
                 _,
             ) => AppError::conflict("network policy is still referenced by other resources"),
             other => AppError::internal(other),

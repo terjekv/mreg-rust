@@ -708,3 +708,29 @@ dual_backend_test!(
         );
     }
 );
+
+dual_backend_test!(
+    referenced_policy_deletion_returns_conflict_without_cascade,
+    |ctx| {
+        let (policy, cidr) = policy_network(&ctx, 1).await;
+        let storage = ctx.storage();
+        let community = storage
+            .communities()
+            .create_community(community_command(&ctx, &policy, &cidr, "referenced"))
+            .await
+            .unwrap();
+        let rejected = matches!(
+            storage
+                .network_policies()
+                .delete_network_policy(&policy)
+                .await,
+            Err(AppError::Conflict(_))
+        );
+        let current = storage
+            .communities()
+            .get_community(community.id())
+            .await
+            .unwrap();
+        assert_eq!((rejected, current.id()), (true, community.id()));
+    }
+);
