@@ -663,7 +663,7 @@ dual_backend_test!(
     explicit_attachment_retains_network_on_reload_and_move,
     |ctx| {
         let narrow = CidrValue::new(ctx.cidr(8)).unwrap();
-        let broad = CidrValue::new(ctx.cidr(8).replace("/24", "/23")).unwrap();
+        let broad = CidrValue::new(narrow.as_inner().supernet().unwrap().to_string()).unwrap();
         ctx.seed_network(&broad.as_str()).await;
         ctx.seed_network(&narrow.as_str()).await;
         let storage = ctx.storage();
