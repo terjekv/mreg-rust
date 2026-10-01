@@ -212,7 +212,7 @@ impl<'de> Deserialize<'de> for Ipv6AddrValue {
 }
 
 /// Validated IPv4 or IPv6 address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IpAddressValue(IpAddr);
 
 impl IpAddressValue {
@@ -223,6 +223,10 @@ impl IpAddressValue {
             .parse::<IpAddr>()
             .map_err(|error| AppError::validation(format!("invalid IP address: {error}")))?;
         Ok(Self(parsed))
+    }
+
+    pub fn from_addr(value: IpAddr) -> Self {
+        Self(value)
     }
 
     pub fn as_inner(&self) -> IpAddr {

@@ -31,6 +31,11 @@ pub trait TxNetworkStore {
         network: &CidrValue,
         command: CreateExcludedRange,
     ) -> Result<ExcludedRange, AppError>;
+    fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: uuid::Uuid,
+    ) -> Result<(), AppError>;
     fn list_used_addresses(&self, cidr: &CidrValue) -> Result<Vec<IpAddressAssignment>, AppError>;
     fn list_unused_addresses(
         &self,

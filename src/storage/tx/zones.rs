@@ -1,3 +1,4 @@
+use crate::domain::zone::UpdateForwardZoneDelegation;
 use crate::{
     domain::{
         pagination::{Page, PageRequest},
@@ -31,6 +32,11 @@ pub trait TxZoneStore {
     fn create_forward_zone_delegation(
         &self,
         command: CreateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError>;
+    fn update_forward_zone_delegation(
+        &self,
+        delegation_id: uuid::Uuid,
+        command: UpdateForwardZoneDelegation,
     ) -> Result<ForwardZoneDelegation, AppError>;
     fn delete_forward_zone_delegation(&self, delegation_id: uuid::Uuid) -> Result<(), AppError>;
 

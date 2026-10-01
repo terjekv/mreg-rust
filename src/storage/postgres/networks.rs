@@ -33,9 +33,29 @@ struct BigIntValueRow {
 }
 
 impl PostgresStorage {
+    pub(in crate::storage::postgres) fn delete_excluded_range_in_conn(
+        connection: &mut PgConnection,
+        network: &CidrValue,
+        range_id: uuid::Uuid,
+    ) -> Result<(), AppError> {
+        let network_row = Self::query_network_by_cidr(connection, network)?;
+        if network_row.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+        let deleted =
+            sql_query("DELETE FROM network_excluded_ranges WHERE id = $1 AND network_id = $2")
+                .bind::<SqlUuid, _>(range_id)
+                .bind::<SqlUuid, _>(network_row.id())
+                .execute(connection)?;
+        if deleted == 0 {
+            return Err(AppError::not_found("excluded range was not found"));
+        }
+        Ok(())
+    }
+
     pub(super) fn query_networks(connection: &mut PgConnection) -> Result<Vec<Network>, AppError> {
         let rows = sql_query(
-            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at
+            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at
              FROM networks
              ORDER BY network",
         )
@@ -43,12 +63,24 @@ impl PostgresStorage {
         rows.into_iter().map(NetworkRow::into_domain).collect()
     }
 
+    pub(super) fn lock_network_by_cidr(
+        connection: &mut PgConnection,
+        cidr: &CidrValue,
+    ) -> Result<Network, AppError> {
+        sql_query("SELECT id FROM networks WHERE network = $1::cidr FOR NO KEY UPDATE")
+            .bind::<Text, _>(cidr.as_str())
+            .get_result::<UuidRow>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found(format!("network '{}' was not found", cidr)))?;
+        Self::query_network_by_cidr(connection, cidr)
+    }
+
     pub(super) fn query_network_by_cidr(
         connection: &mut PgConnection,
         cidr: &CidrValue,
     ) -> Result<Network, AppError> {
         sql_query(
-            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at
+            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at
              FROM networks
              WHERE network = $1::cidr",
         )
@@ -63,7 +95,7 @@ impl PostgresStorage {
         network_id: uuid::Uuid,
     ) -> Result<Network, AppError> {
         sql_query(
-            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at
+            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at
              FROM networks
              WHERE id = $1",
         )
@@ -78,7 +110,7 @@ impl PostgresStorage {
         address: &IpAddressValue,
     ) -> Result<Network, AppError> {
         sql_query(
-            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at
+            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at
              FROM networks
              WHERE $1::inet <<= network
              ORDER BY masklen(network) DESC
@@ -100,7 +132,7 @@ impl PostgresStorage {
         network: &CidrValue,
     ) -> Result<Vec<ExcludedRange>, AppError> {
         let network_row = sql_query(
-            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at
+            "SELECT id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at
              FROM networks
              WHERE network = $1::cidr",
         )
@@ -159,7 +191,7 @@ impl PostgresStorage {
         Ok(row.value.max(0) as u64)
     }
 
-    pub(super) fn ensure_address_usable(
+    pub(super) fn ensure_address_eligible(
         connection: &mut PgConnection,
         network: &Network,
         address: &IpAddressValue,
@@ -199,6 +231,15 @@ impl PostgresStorage {
             ));
         }
 
+        Ok(())
+    }
+
+    pub(super) fn ensure_address_usable(
+        connection: &mut PgConnection,
+        network: &Network,
+        address: &IpAddressValue,
+    ) -> Result<(), AppError> {
+        Self::ensure_address_eligible(connection, network, address)?;
         let existing = sql_query("SELECT id FROM ip_addresses WHERE address = $1::inet")
             .bind::<Text, _>(address.as_str())
             .get_result::<UuidRow>(connection)
@@ -263,7 +304,7 @@ impl PostgresStorage {
     ) -> Result<Page<Network>, AppError> {
         let base = "SELECT n.id, n.network::text AS network, n.description, \
                 n.vlan, n.dns_delegated, n.category, n.location, n.frozen, \
-                n.reserved, n.created_at, n.updated_at \
+                n.reserved, n.max_communities, n.policy_id, n.created_at, n.updated_at \
                 FROM networks n";
 
         let (clauses, mut values) = filter.sql_conditions();
@@ -317,12 +358,13 @@ impl PostgresStorage {
             "WITH ranked AS (
                  SELECT n.id, n.network::text AS network, n.description, n.vlan,
                         n.dns_delegated, n.category, n.location, n.frozen, n.reserved,
+                        n.max_communities, n.policy_id,
                         n.created_at, n.updated_at,
                         {order_col} AS _sort_key
                  FROM networks n {where_str}
              )
              SELECT id, network, description, vlan, dns_delegated, category, location,
-                    frozen, reserved, created_at, updated_at
+                    frozen, reserved, max_communities, policy_id, created_at, updated_at
              FROM ranked{cursor_clause} ORDER BY _sort_key {order_dir}, id{limit_clause}"
         );
 
@@ -359,10 +401,17 @@ impl PostgresStorage {
         let location = command.location().to_string();
         let frozen = command.frozen();
         let reserved = command.reserved().as_i32();
+        let policy_id = command
+            .policy()
+            .map(|name| Self::resolve_network_policy_id(connection, name))
+            .transpose()?;
+        let max_communities = policy_id
+            .and(command.max_communities())
+            .map(|value| value.as_i32());
         sql_query(
-            "INSERT INTO networks (network, description, vlan, dns_delegated, category, location, frozen, reserved)
-             VALUES ($1::cidr, $2, $3, $4, $5, $6, $7, $8)
-             RETURNING id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, created_at, updated_at",
+            "INSERT INTO networks (network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id)
+             VALUES ($1::cidr, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING id, network::text AS network, description, vlan, dns_delegated, category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at",
         )
         .bind::<Text, _>(cidr)
         .bind::<Text, _>(description)
@@ -372,6 +421,8 @@ impl PostgresStorage {
         .bind::<Text, _>(location)
         .bind::<diesel::sql_types::Bool, _>(frozen)
         .bind::<Integer, _>(reserved)
+        .bind::<Nullable<Integer>, _>(max_communities)
+        .bind::<Nullable<SqlUuid>, _>(policy_id)
         .get_result::<NetworkRow>(connection)
         .map_err(map_unique("network already exists"))?
         .into_domain()
@@ -383,7 +434,7 @@ impl PostgresStorage {
         command: UpdateNetwork,
     ) -> Result<Network, AppError> {
         connection.transaction::<Network, AppError, _>(|connection| {
-            let old = Self::query_network_by_cidr(connection, cidr)?;
+            let old = Self::lock_network_by_cidr(connection, cidr)?;
             if old.frozen() && command.frozen != Some(false) {
                 return Err(AppError::conflict(
                     "network is frozen; unfreeze it before changing it",
@@ -402,26 +453,58 @@ impl PostgresStorage {
                     "reserved space would include an allocated IP address",
                 ));
             }
-            let description = command
-                .description
-                .unwrap_or_else(|| old.description().to_string());
-            let vlan: Option<i32> = command.vlan.resolve(old.vlan()).map(|v| v.as_i32());
-            let dns_delegated = command.dns_delegated.unwrap_or(old.dns_delegated());
-            let category = command
-                .category
-                .unwrap_or_else(|| old.category().to_string());
-            let location = command
-                .location
-                .unwrap_or_else(|| old.location().to_string());
-            let frozen = command.frozen.unwrap_or(old.frozen());
-            let reserved: i32 = reserved_value.as_i32();
+            let UpdateNetwork {
+                description,
+                vlan,
+                dns_delegated,
+                category,
+                location,
+                frozen,
+                reserved,
+                max_communities,
+                policy,
+            } = command;
+            let description = description.unwrap_or_else(|| old.description().to_string());
+            let vlan: Option<i32> = vlan.resolve(old.vlan()).map(|v| v.as_i32());
+            let dns_delegated = dns_delegated.unwrap_or(old.dns_delegated());
+            let category = category.unwrap_or_else(|| old.category().to_string());
+            let location = location.unwrap_or_else(|| old.location().to_string());
+            let frozen = frozen.unwrap_or(old.frozen());
+            let reserved: i32 = reserved.unwrap_or(old.reserved()).as_i32();
+            let policy_id = match policy {
+                crate::domain::types::UpdateField::Unchanged => old.policy_id(),
+                crate::domain::types::UpdateField::Clear => None,
+                crate::domain::types::UpdateField::Set(name) => {
+                    Some(Self::resolve_network_policy_id(connection, &name)?)
+                }
+            };
+            let max_communities = if policy_id.is_none() {
+                None
+            } else {
+                max_communities
+                    .resolve(old.max_communities())
+                    .map(|value| value.as_i32())
+            };
 
+            let communities = run_count_query(connection, "SELECT COUNT(*) AS count FROM communities WHERE network_id = $1::uuid", &[old.id().to_string()])?;
+            let mismatches = match policy_id {
+                Some(id) => run_count_query(connection, "SELECT COUNT(*) AS count FROM communities WHERE network_id = $1::uuid AND policy_id <> $2::uuid", &[old.id().to_string(), id.to_string()])?,
+                None => communities,
+            };
+            // A missing policy cannot own existing communities.
+            if mismatches != 0 {
+                return Err(AppError::conflict("network policy is still referenced by communities"));
+            }
+            if max_communities.is_some_and(|limit| communities > limit as u64) {
+                return Err(AppError::conflict("network community limit is below the existing community count"));
+            }
             sql_query(
                 "UPDATE networks SET description = $1, vlan = $2, dns_delegated = $3, \
-                 category = $4, location = $5, frozen = $6, reserved = $7, updated_at = now() \
-                 WHERE network = $8::cidr \
+                 category = $4, location = $5, frozen = $6, reserved = $7, \
+                 max_communities = $8, policy_id = $9, updated_at = now() \
+                 WHERE network = $10::cidr \
                  RETURNING id, network::text AS network, description, vlan, dns_delegated, \
-                 category, location, frozen, reserved, created_at, updated_at",
+                 category, location, frozen, reserved, max_communities, policy_id, created_at, updated_at",
             )
             .bind::<Text, _>(description)
             .bind::<Nullable<Integer>, _>(vlan)
@@ -430,6 +513,8 @@ impl PostgresStorage {
             .bind::<Text, _>(location)
             .bind::<diesel::sql_types::Bool, _>(frozen)
             .bind::<Integer, _>(reserved)
+            .bind::<Nullable<Integer>, _>(max_communities)
+            .bind::<Nullable<SqlUuid>, _>(policy_id)
             .bind::<Text, _>(cidr.as_str())
             .get_result::<NetworkRow>(connection)
             .map_err(|_| AppError::not_found(format!("network '{}' was not found", cidr.as_str())))?
@@ -809,6 +894,19 @@ impl NetworkStore for PostgresStorage {
                     .map_err(map_unique("excluded range already exists"))?
                     .into_domain()
                 })
+            })
+            .await
+    }
+
+    async fn delete_excluded_range(
+        &self,
+        network: &CidrValue,
+        range_id: uuid::Uuid,
+    ) -> Result<(), AppError> {
+        let network = network.clone();
+        self.database
+            .run(move |connection| {
+                Self::delete_excluded_range_in_conn(connection, &network, range_id)
             })
             .await
     }

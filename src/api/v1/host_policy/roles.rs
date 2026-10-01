@@ -226,6 +226,7 @@ pub(crate) async fn update_role(
     }
     require(&state, authz).await?;
     let command = UpdateHostPolicyRole {
+        name: None,
         description: request.description,
     };
     let role = state

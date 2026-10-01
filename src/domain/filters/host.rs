@@ -5,7 +5,10 @@ use uuid::Uuid;
 use super::apply::{apply_datetime_filter, apply_optional_string_filter, apply_string_filter};
 use super::operators::{FieldType, FilterCondition, parse_filter_key, validate_op};
 use super::sql::{SqlBindType, build_sql_conditions, op_to_sql};
-use crate::domain::host::{Host, IpAddressAssignment};
+use crate::domain::{
+    host::{Host, IpAddressAssignment},
+    types::IpAddressValue,
+};
 use crate::errors::AppError;
 
 // ─── HostFilter ─────────────────────────────────────────────────────
@@ -27,17 +30,12 @@ pub struct HostFilter {
 }
 
 impl HostFilter {
-    pub fn matches(
-        &self,
-        host: &Host,
-        ip_addresses: &BTreeMap<String, IpAddressAssignment>,
-    ) -> bool {
+    pub fn matches(&self, host: &Host, ip_addresses: &[IpAddressValue]) -> bool {
         self.matches_fields(host)
             && self.address.iter().all(|cond| {
-                ip_addresses.values().any(|assignment| {
-                    assignment.host_id() == host.id()
-                        && apply_string_filter(&assignment.address().as_str(), cond)
-                })
+                ip_addresses
+                    .iter()
+                    .any(|address| apply_string_filter(&address.as_str(), cond))
             })
     }
 
@@ -46,7 +44,7 @@ impl HostFilter {
     pub(crate) fn matching_hosts<'a>(
         &self,
         hosts: impl Iterator<Item = &'a Host>,
-        ip_addresses: &BTreeMap<String, IpAddressAssignment>,
+        ip_addresses: &BTreeMap<IpAddressValue, IpAddressAssignment>,
     ) -> Vec<&'a Host> {
         let address_matches = self
             .address

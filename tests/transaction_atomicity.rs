@@ -164,6 +164,10 @@ struct FailingAuditTxStorage<'a> {
 }
 
 impl<'a> TxStorage for FailingAuditTxStorage<'a> {
+    fn lock_seed_data(&self) -> Result<(), AppError> {
+        self.inner.lock_seed_data()
+    }
+
     fn labels(&self) -> &dyn TxLabelStore {
         self.inner.labels()
     }

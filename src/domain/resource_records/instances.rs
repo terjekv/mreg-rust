@@ -270,6 +270,26 @@ impl CreateRecordInstance {
         })
     }
 
+    pub fn new_anchored(
+        type_name: RecordTypeName,
+        owner_kind: RecordOwnerKind,
+        owner_name: impl Into<String>,
+        anchor_name: impl Into<String>,
+        ttl: Option<Ttl>,
+        data: Value,
+    ) -> Result<Self, AppError> {
+        let owner_name = owner_name.into();
+        Ok(Self {
+            type_name,
+            owner_kind: Some(owner_kind),
+            anchor_name: Some(anchor_name.into().trim().to_string()),
+            owner_name: DnsName::new(&owner_name)?,
+            ttl,
+            data: Some(data),
+            raw_rdata: None,
+        })
+    }
+
     pub fn new_raw(
         type_name: RecordTypeName,
         owner_kind: Option<RecordOwnerKind>,

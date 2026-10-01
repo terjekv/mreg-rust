@@ -17,6 +17,9 @@ pub enum AppError {
     /// Write would violate a uniqueness or integrity constraint (HTTP 409).
     #[error("conflict: {0}")]
     Conflict(String),
+    /// Request is well-formed but violates a resource policy (HTTP 406).
+    #[error("not acceptable: {0}")]
+    NotAcceptable(String),
     /// Caller lacks permission for the requested action (HTTP 403).
     #[error("forbidden: {0}")]
     Forbidden(String),
@@ -53,6 +56,11 @@ impl AppError {
     /// Create a conflict error.
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::Conflict(message.into())
+    }
+
+    /// Create a not-acceptable error.
+    pub fn not_acceptable(message: impl Into<String>) -> Self {
+        Self::NotAcceptable(message.into())
     }
 
     /// Create a forbidden error.
@@ -100,6 +108,7 @@ impl ResponseError for AppError {
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::NotAcceptable(_) => StatusCode::NOT_ACCEPTABLE,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             AppError::Authz(_) => StatusCode::BAD_GATEWAY,
@@ -114,6 +123,7 @@ impl ResponseError for AppError {
             AppError::Validation(_) => "validation_error",
             AppError::NotFound(_) => "not_found",
             AppError::Conflict(_) => "conflict",
+            AppError::NotAcceptable(_) => "not_acceptable",
             AppError::Forbidden(_) => "forbidden",
             AppError::Unauthorized(_) => "unauthorized",
             AppError::Authz(_) => "authz_error",

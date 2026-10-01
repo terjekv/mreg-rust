@@ -98,6 +98,7 @@ pub mod zone {
         pub mod delegation {
             pub const LIST: &str = "zone.forward.delegation.list";
             pub const CREATE: &str = "zone.forward.delegation.create";
+            pub const UPDATE: &str = "zone.forward.delegation.update";
             pub const DELETE: &str = "zone.forward.delegation.delete";
         }
     }
@@ -131,6 +132,8 @@ pub mod network {
     pub const UPDATE_LOCATION: &str = "network.update.location";
     pub const UPDATE_FROZEN: &str = "network.update.frozen";
     pub const UPDATE_RESERVED: &str = "network.update.reserved";
+    pub const UPDATE_POLICY: &str = "network.update.policy";
+    pub const UPDATE_MAX_COMMUNITIES: &str = "network.update.max_communities";
     pub const DELETE: &str = "network.delete";
     pub const EXCLUDED_RANGE_LIST: &str = "network.excluded_range.list";
     pub const EXCLUDED_RANGE_CREATE: &str = "network.excluded_range.create";
@@ -192,6 +195,7 @@ pub mod network_policy {
     pub const LIST: &str = "network_policy.list";
     pub const GET: &str = "network_policy.get";
     pub const CREATE: &str = "network_policy.create";
+    pub const UPDATE: &str = "network_policy.update";
     pub const DELETE: &str = "network_policy.delete";
 }
 
@@ -199,6 +203,7 @@ pub mod community {
     pub const LIST: &str = "community.list";
     pub const GET: &str = "community.get";
     pub const CREATE: &str = "community.create";
+    pub const UPDATE: &str = "community.update";
     pub const DELETE: &str = "community.delete";
 }
 

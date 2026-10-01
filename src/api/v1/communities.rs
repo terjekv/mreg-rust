@@ -1,6 +1,7 @@
+use crate::domain::types::RequiredDescription;
 use std::collections::HashMap;
 
-use actix_web::{HttpRequest, HttpResponse, delete, get, post, web};
+use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -10,7 +11,7 @@ use crate::{
     AppState,
     authz::{self, AttrValue},
     domain::{
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
         types::{CidrValue, CommunityName, NetworkPolicyName},
@@ -30,6 +31,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(list_communities)
         .service(create_community)
         .service(get_community)
+        .service(update_community)
         .service(delete_community);
 }
 
@@ -61,13 +63,27 @@ pub struct CreateCommunityRequest {
     network: CidrValue,
     #[schema(value_type = String)]
     name: CommunityName,
-    description: String,
+    #[schema(value_type = String)]
+    description: RequiredDescription,
 }
 
 impl CreateCommunityRequest {
     fn into_command(self) -> Result<CreateCommunity, AppError> {
-        CreateCommunity::new(self.policy_name, self.network, self.name, self.description)
+        CreateCommunity::new(
+            self.policy_name,
+            self.network,
+            self.name,
+            self.description.as_str(),
+        )
     }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UpdateCommunityRequest {
+    #[schema(value_type = Option<String>)]
+    name: Option<CommunityName>,
+    #[schema(value_type = Option<String>)]
+    description: Option<RequiredDescription>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -164,7 +180,7 @@ pub(crate) async fn create_community(
         .attr("network", AttrValue::Ip(request.network.to_string()))
         .attr(
             "description",
-            AttrValue::String(request.description.clone()),
+            AttrValue::String(request.description.as_str().to_string()),
         ),
     )
     .await?;
@@ -205,6 +221,51 @@ pub(crate) async fn get_community(
     )
     .await?;
     let item = state.services.communities().get(community_id).await?;
+    Ok(HttpResponse::Ok().json(CommunityResponse::from_domain(&item)))
+}
+
+/// Update a community
+#[utoipa::path(
+    patch,
+    path = "/api/v1/policy/network/communities/{community_id}",
+    params(("community_id" = Uuid, Path, description = "Community ID")),
+    request_body = UpdateCommunityRequest,
+    responses(
+        (status = 200, description = "Community updated", body = CommunityResponse),
+        (status = 404, description = "Community not found")
+    ),
+    tag = "Policy"
+)]
+#[patch("/policy/network/communities/{community_id}")]
+pub(crate) async fn update_community(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+    payload: web::Json<UpdateCommunityRequest>,
+) -> Result<HttpResponse, AppError> {
+    let community_id = path.into_inner();
+    let request = payload.into_inner();
+    require(
+        &state,
+        authz_request(
+            &req,
+            authz::actions::community::UPDATE,
+            authz::actions::resource_kinds::COMMUNITY,
+            community_id.to_string(),
+        ),
+    )
+    .await?;
+    let item = state
+        .services
+        .communities()
+        .update(
+            community_id,
+            UpdateCommunity {
+                name: request.name,
+                description: request.description,
+            },
+        )
+        .await?;
     Ok(HttpResponse::Ok().json(CommunityResponse::from_domain(&item)))
 }
 
@@ -255,20 +316,24 @@ mod tests {
         )
         .await;
 
-        // Create a network
-        let net_req = test::TestRequest::post()
-            .uri("/inventory/networks")
-            .set_json(serde_json::json!({"cidr": "172.30.0.0/24", "description": "comm-test"}))
-            .to_request();
-        let resp = test::call_service(&app, net_req).await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-
         // Create a network policy
         let policy_req = test::TestRequest::post()
             .uri("/policy/network/policies")
             .set_json(serde_json::json!({"name": "comm-policy", "description": "test"}))
             .to_request();
         let resp = test::call_service(&app, policy_req).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Create a network assigned to the policy
+        let net_req = test::TestRequest::post()
+            .uri("/inventory/networks")
+            .set_json(serde_json::json!({
+                "cidr": "172.30.0.0/24",
+                "description": "comm-test",
+                "policy_name": "comm-policy"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, net_req).await;
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Create a community

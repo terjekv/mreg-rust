@@ -10,11 +10,14 @@ use uuid::Uuid;
 
 use crate::{
     db::{
-        models::{HostRow, IpAddressAssignmentRow},
-        schema::{forward_zones, hosts},
+        models::{HostRow, IpAddressAssignmentRow, UuidRow},
+        schema::{forward_zones, host_community_assignments, hosts},
     },
     domain::{
-        attachment::{CreateAttachmentDhcpIdentifier, DhcpIdentifierFamily, DhcpIdentifierKind},
+        attachment::{
+            CreateAttachmentDhcpIdentifier, DhcpIdentifierFamily, DhcpIdentifierKind,
+            HostAttachment,
+        },
         filters::HostFilter,
         host::{
             AllocationPolicy, AssignIpAddress, CreateHost, Host, HostAuthContext,
@@ -176,13 +179,8 @@ impl PostgresStorage {
                     ip.created_at,
                     ip.updated_at
              FROM ip_addresses ip
-             JOIN LATERAL (
-               SELECT id
-               FROM networks
-               WHERE ip.address <<= network
-               ORDER BY masklen(network) DESC
-               LIMIT 1
-             ) nw ON true
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id
+             JOIN networks nw ON nw.id = attachment.network_id
              WHERE ip.host_id = ANY($1)
              ORDER BY ip.address",
         )
@@ -240,13 +238,8 @@ impl PostgresStorage {
              FROM hosts h
              LEFT JOIN forward_zones fz ON fz.id = h.zone_id
              LEFT JOIN ip_addresses ip ON ip.host_id = h.id
-             LEFT JOIN LATERAL (
-               SELECT network
-               FROM networks
-               WHERE ip.address <<= network
-               ORDER BY masklen(network) DESC
-               LIMIT 1
-             ) nw ON true
+             LEFT JOIN host_attachments attachment ON attachment.id = ip.attachment_id
+             LEFT JOIN networks nw ON nw.id = attachment.network_id
              WHERE h.name = $1
              GROUP BY h.id, h.name, fz.name, h.ttl, h.comment, h.created_at, h.updated_at",
         )
@@ -270,13 +263,8 @@ impl PostgresStorage {
                     ip.created_at,
                     ip.updated_at
              FROM ip_addresses ip
-             JOIN LATERAL (
-               SELECT id
-               FROM networks
-               WHERE ip.address <<= network
-               ORDER BY masklen(network) DESC
-               LIMIT 1
-             ) nw ON true
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id
+             JOIN networks nw ON nw.id = attachment.network_id
              ORDER BY ip.address",
         )
         .load::<IpAddressAssignmentRow>(connection)?;
@@ -301,13 +289,8 @@ impl PostgresStorage {
                     ip.updated_at
              FROM ip_addresses ip
              JOIN hosts h ON h.id = ip.host_id
-             JOIN LATERAL (
-               SELECT id
-               FROM networks
-               WHERE ip.address <<= network
-               ORDER BY masklen(network) DESC
-               LIMIT 1
-             ) nw ON true
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id
+             JOIN networks nw ON nw.id = attachment.network_id
              WHERE h.name = $1
              ORDER BY ip.address",
         )
@@ -333,13 +316,8 @@ impl PostgresStorage {
                     ip.created_at,
                     ip.updated_at
              FROM ip_addresses ip
-             JOIN LATERAL (
-               SELECT id
-               FROM networks
-               WHERE ip.address <<= network
-               ORDER BY masklen(network) DESC
-               LIMIT 1
-             ) nw ON true
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id
+             JOIN networks nw ON nw.id = attachment.network_id
              WHERE host(ip.address) = $1",
         )
         .bind::<Text, _>(address.as_str())
@@ -349,12 +327,11 @@ impl PostgresStorage {
         .into_domain()
     }
 
-    pub(super) fn assign_ip_address_tx(
+    fn resolve_assignment_attachment(
         connection: &mut PgConnection,
-        command: AssignIpAddress,
-    ) -> Result<IpAddressAssignment, AppError> {
-        let host = Self::query_host_by_name(connection, command.host_name())?;
-
+        command: &AssignIpAddress,
+        host: &Host,
+    ) -> Result<Option<HostAttachment>, AppError> {
         let requested_attachment = command
             .attachment_id()
             .map(|id| Self::query_attachment_by_id(connection, id))
@@ -374,6 +351,18 @@ impl PostgresStorage {
                 ));
             }
         }
+
+        Ok(requested_attachment)
+    }
+
+    pub(super) fn assign_ip_address_tx(
+        connection: &mut PgConnection,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        let host = Self::query_host_by_name(connection, command.host_name())?;
+
+        let requested_attachment =
+            Self::resolve_assignment_attachment(connection, &command, &host)?;
 
         let (network, address) = if let Some(address) = command.address().cloned() {
             let network = if let Some(attachment) = &requested_attachment {
@@ -430,12 +419,14 @@ impl PostgresStorage {
             )?
         };
 
+        let assignment_id = Uuid::new_v4();
         let assignment = sql_query(
-            "INSERT INTO ip_addresses (host_id, attachment_id, address, family, mac_address)
-             VALUES ($1, $2, $3::inet, $4, $5)
-             RETURNING id, host_id, attachment_id, host(address) AS address, family::int AS family, $6 AS network_id,
+            "INSERT INTO ip_addresses (id, host_id, attachment_id, address, family, mac_address)
+             VALUES ($1, $2, $3, $4::inet, $5, $6)
+             RETURNING id, host_id, attachment_id, host(address) AS address, family::int AS family, $7 AS network_id,
                        mac_address, created_at, updated_at",
         )
+        .bind::<SqlUuid, _>(assignment_id)
         .bind::<SqlUuid, _>(host.id())
         .bind::<SqlUuid, _>(attachment.id())
         .bind::<Text, _>(address.as_str())
@@ -446,6 +437,17 @@ impl PostgresStorage {
         .map_err(map_unique("IP address is already allocated"))?
         .into_domain()?;
 
+        Self::create_assignment_dhcp_identifiers(connection, &command, &attachment, &assignment)?;
+
+        Ok(assignment)
+    }
+
+    fn create_assignment_dhcp_identifiers(
+        connection: &mut PgConnection,
+        command: &AssignIpAddress,
+        attachment: &HostAttachment,
+        assignment: &IpAddressAssignment,
+    ) -> Result<(), AppError> {
         // Auto-create Ethernet DHCP identifiers from EUI-48 addresses only.
         if let Some(mac) = attachment
             .mac_address()
@@ -487,7 +489,7 @@ impl PostgresStorage {
             }
         }
 
-        Ok(assignment)
+        Ok(())
     }
 
     /// Shared logic for auto-creating a DNS record (A/AAAA or PTR) when an IP is assigned.
@@ -562,6 +564,7 @@ impl PostgresStorage {
                     ),
                 )?
             }
+
             crate::domain::resource_records::ValidatedRecordContent::RawRdata(_) => BTreeMap::new(),
         };
         let alias_owner_names = alias_lookup
@@ -1152,6 +1155,108 @@ impl PostgresStorage {
         Ok(assignment)
     }
 
+    pub(super) fn move_ip_address_in_conn(
+        connection: &mut PgConnection,
+        old_address: &IpAddressValue,
+        command: AssignIpAddress,
+    ) -> Result<IpAddressAssignment, AppError> {
+        sql_query("SELECT id FROM ip_addresses WHERE address = $1::inet FOR UPDATE")
+            .bind::<Text, _>(old_address.as_str())
+            .get_result::<UuidRow>(connection)
+            .optional()?
+            .ok_or_else(|| AppError::not_found("IP address was not found"))?;
+        let old = Self::query_ip_address(connection, old_address)?;
+        let ptr_override = sql_query("SELECT id FROM ptr_overrides WHERE address = $1::inet")
+            .bind::<Text, _>(old_address.as_str())
+            .get_result::<UuidRow>(connection)
+            .optional()?;
+        if ptr_override.is_some() {
+            return Err(AppError::conflict(
+                "remove the PTR override before moving the IP address",
+            ));
+        }
+        let old_network = Self::query_network_by_id(connection, old.network_id())?;
+        if old_network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+        let host = Self::query_host_by_name(connection, command.host_name())?;
+        let new_address = command
+            .address()
+            .copied()
+            .ok_or_else(|| AppError::validation("IP address move requires an explicit address"))?;
+        let requested_attachment =
+            Self::resolve_assignment_attachment(connection, &command, &host)?;
+        let network = if let Some(attachment) = &requested_attachment {
+            Self::query_network_by_cidr(connection, attachment.network_cidr())?
+        } else {
+            Self::query_network_containing_ip(connection, &new_address)?
+        };
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
+        if new_address != *old.address() {
+            Self::ensure_address_usable(connection, &network, &new_address)?;
+        } else {
+            Self::ensure_address_eligible(connection, &network, &new_address)?;
+        }
+        if network.id() != old.network_id() {
+            let mapping_count = host_community_assignments::table
+                .filter(host_community_assignments::ip_address_id.eq(old.id()))
+                .count()
+                .get_result::<i64>(connection)?;
+            if mapping_count != 0 {
+                return Err(AppError::conflict(
+                    "cannot move an IP address to another network while it has community assignments",
+                ));
+            }
+        }
+        let attachment = match requested_attachment {
+            Some(attachment) => attachment,
+            None => Self::find_or_create_attachment(
+                connection,
+                host.name(),
+                network.cidr(),
+                command.mac_address(),
+            )?,
+        };
+        Self::delete_managed_ip_records(connection, old.id(), None)?;
+        let family = if new_address.as_inner().is_ipv4() {
+            4
+        } else {
+            6
+        };
+        let updated = sql_query(
+            "UPDATE ip_addresses
+             SET host_id = $1, attachment_id = $2, address = $3::inet, family = $4,
+                 mac_address = $5, updated_at = now()
+             WHERE id = $6
+             RETURNING id, host_id, attachment_id, host(address) AS address,
+                       family::int AS family, $7 AS network_id, mac_address,
+                       created_at, updated_at",
+        )
+        .bind::<SqlUuid, _>(host.id())
+        .bind::<SqlUuid, _>(attachment.id())
+        .bind::<Text, _>(new_address.as_str())
+        .bind::<Integer, _>(family)
+        .bind::<Nullable<Text>, _>(attachment.mac_address().map(|value| value.as_str()))
+        .bind::<SqlUuid, _>(old.id())
+        .bind::<SqlUuid, _>(network.id())
+        .get_result::<IpAddressAssignmentRow>(connection)
+        .map_err(map_unique("IP address is already allocated"))?
+        .into_domain()?;
+        sql_query(
+            "UPDATE host_community_assignments SET host_id = $1, updated_at = now()
+             WHERE ip_address_id = $2",
+        )
+        .bind::<SqlUuid, _>(host.id())
+        .bind::<SqlUuid, _>(old.id())
+        .execute(connection)?;
+        Self::create_assignment_dhcp_identifiers(connection, &command, &attachment, &updated)?;
+        Self::auto_create_forward_record(connection, &updated)?;
+        Self::auto_create_ptr_record(connection, &updated)?;
+        Ok(updated)
+    }
+
     pub(super) fn update_ip_address_in_conn(
         connection: &mut PgConnection,
         address: &IpAddressValue,
@@ -1163,9 +1268,8 @@ impl PostgresStorage {
                 "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
                  nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
                  FROM ip_addresses ip \
-                 JOIN LATERAL ( \
-                   SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-                 ) nw ON true \
+                 JOIN host_attachments attachment ON attachment.id = ip.attachment_id \
+             JOIN networks nw ON nw.id = attachment.network_id \
                  WHERE ip.address = $1::inet",
             )
             .bind::<Text, _>(&addr)
@@ -1184,9 +1288,8 @@ impl PostgresStorage {
             "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
              nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
              FROM ip_addresses ip \
-             JOIN LATERAL ( \
-               SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-             ) nw ON true \
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id \
+             JOIN networks nw ON nw.id = attachment.network_id \
              WHERE ip.address = $1::inet",
         )
         .bind::<Text, _>(&addr)
@@ -1227,9 +1330,8 @@ impl PostgresStorage {
             "SELECT ip.id, ip.host_id, ip.attachment_id, host(ip.address) AS address, ip.family::int AS family, \
              nw.id AS network_id, ip.mac_address, ip.created_at, ip.updated_at \
              FROM ip_addresses ip \
-             JOIN LATERAL ( \
-               SELECT id FROM networks WHERE ip.address <<= network ORDER BY masklen(network) DESC LIMIT 1 \
-             ) nw ON true \
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id \
+             JOIN networks nw ON nw.id = attachment.network_id \
              WHERE ip.address = $1::inet",
         )
         .bind::<Text, _>(&addr)
@@ -1257,13 +1359,8 @@ impl PostgresStorage {
                     ip.created_at,
                     ip.updated_at
              FROM ip_addresses ip
-             JOIN LATERAL (
-               SELECT id
-               FROM networks
-               WHERE ip.address <<= network
-               ORDER BY masklen(network) DESC
-               LIMIT 1
-             ) nw ON true
+             JOIN host_attachments attachment ON attachment.id = ip.attachment_id
+             JOIN networks nw ON nw.id = attachment.network_id
              WHERE ip.address = $1::inet",
         )
         .bind::<Text, _>(&addr)

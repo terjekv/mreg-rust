@@ -11,7 +11,7 @@ pub mod v1;
     info(
         title = "mreg DNS Management API",
         version = "1.0.0",
-        description = "REST API for managing DNS zones, hosts, records, and related resources."
+        description = "The mreg-rust REST API for managing DNS zones, hosts, records, and related resources."
     ),
     paths(
         // System
@@ -134,11 +134,18 @@ pub mod v1;
         v1::network_policies::list_network_policies,
         v1::network_policies::create_network_policy,
         v1::network_policies::get_network_policy,
+        v1::network_policies::update_network_policy,
         v1::network_policies::delete_network_policy,
+        v1::network_policies::list_network_policy_attributes,
+        v1::network_policies::create_network_policy_attribute,
+        v1::network_policies::get_network_policy_attribute,
+        v1::network_policies::update_network_policy_attribute,
+        v1::network_policies::delete_network_policy_attribute,
         // Policy – Communities
         v1::communities::list_communities,
         v1::communities::create_community,
         v1::communities::get_community,
+        v1::communities::update_community,
         v1::communities::delete_community,
         // Policy – Host community assignments
         v1::host_community_assignments::list_host_community_assignments,
@@ -260,7 +267,14 @@ pub mod v1;
         v1::ptr_overrides::PtrOverrideResponse,
         v1::network_policies::CreateNetworkPolicyRequest,
         v1::network_policies::NetworkPolicyResponse,
+        v1::network_policies::NetworkPolicyAttributeValueRequest,
+        v1::network_policies::NetworkPolicyAttributeValueResponse,
+        v1::network_policies::CreateNetworkPolicyAttributeRequest,
+        v1::network_policies::UpdateNetworkPolicyAttributeRequest,
+        v1::network_policies::NetworkPolicyAttributeResponse,
+        v1::network_policies::NetworkPolicyAttributePageResponse,
         v1::communities::CreateCommunityRequest,
+        v1::communities::UpdateCommunityRequest,
         v1::communities::CommunityResponse,
         v1::host_community_assignments::CreateHostCommunityAssignmentRequest,
         v1::host_community_assignments::HostCommunityAssignmentResponse,

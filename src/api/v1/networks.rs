@@ -13,7 +13,10 @@ use crate::{
         filters::NetworkFilter,
         network::{CreateExcludedRange, CreateNetwork, ExcludedRange, Network, UpdateNetwork},
         pagination::{PageLimit, PageRequest, PageResponse, SortDirection},
-        types::{CidrValue, IpAddressValue, ReservedCount, UpdateField, VlanId},
+        types::{
+            CidrValue, CommunityLimit, IpAddressValue, NetworkPolicyName, ReservedCount,
+            UpdateField, VlanId,
+        },
     },
     errors::AppError,
 };
@@ -106,11 +109,17 @@ pub struct CreateNetworkRequest {
     #[serde(default = "default_reserved")]
     #[schema(value_type = u32)]
     reserved: ReservedCount,
+    #[serde(default)]
+    #[schema(value_type = Option<u32>)]
+    max_communities: Option<CommunityLimit>,
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    policy_name: Option<NetworkPolicyName>,
 }
 
 impl CreateNetworkRequest {
     fn into_command(self) -> Result<CreateNetwork, AppError> {
-        CreateNetwork::new_full(
+        Ok(CreateNetwork::new_full(
             self.cidr,
             self.description,
             self.vlan,
@@ -119,7 +128,9 @@ impl CreateNetworkRequest {
             self.location,
             self.frozen,
             self.reserved,
-        )
+        )?
+        .with_policy(self.policy_name)
+        .with_max_communities(self.max_communities))
     }
 }
 
@@ -135,6 +146,12 @@ pub struct UpdateNetworkRequest {
     frozen: Option<bool>,
     #[schema(value_type = Option<u32>)]
     reserved: Option<ReservedCount>,
+    #[serde(default)]
+    #[schema(value_type = Option<u32>)]
+    max_communities: UpdateField<CommunityLimit>,
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    policy_name: UpdateField<NetworkPolicyName>,
 }
 
 fn build_network_update_authz(
@@ -178,6 +195,20 @@ fn build_network_update_authz(
         request.reserved.map(ReservedCount::as_u32),
         authz::actions::network::UPDATE_RESERVED,
         "new_reserved",
+    )
+    .field_clearable(
+        &request.max_communities,
+        authz::actions::network::UPDATE_MAX_COMMUNITIES,
+        "new_max_communities",
+        "clear_max_communities",
+        |value| AttrValue::Long(i64::from(value.as_u32())),
+    )
+    .field_clearable(
+        &request.policy_name,
+        authz::actions::network::UPDATE_POLICY,
+        "new_policy_name",
+        "clear_policy",
+        |value| AttrValue::String(value.as_str().to_string()),
     );
     b.build()
 }
@@ -218,6 +249,8 @@ pub struct NetworkResponse {
     location: String,
     frozen: bool,
     reserved: u32,
+    max_communities: Option<u32>,
+    policy_id: Option<Uuid>,
     capacity: NetworkCapacitySummary,
     hosts: Vec<NetworkHostInventoryResponse>,
     created_at: DateTime<Utc>,
@@ -236,6 +269,8 @@ impl NetworkResponse {
             location: network.location().to_string(),
             frozen: network.frozen(),
             reserved: network.reserved().as_u32(),
+            max_communities: network.max_communities().map(|value| value.as_u32()),
+            policy_id: network.policy_id(),
             capacity: NetworkCapacitySummary::default(),
             hosts: Vec::new(),
             created_at: network.created_at(),
@@ -509,6 +544,18 @@ pub(crate) async fn create_network(
     if let Some(vlan) = request.vlan {
         authz = authz.attr("vlan", AttrValue::Long(i64::from(vlan.as_u32())));
     }
+    if let Some(max_communities) = request.max_communities {
+        authz = authz.attr(
+            "max_communities",
+            AttrValue::Long(i64::from(max_communities.as_u32())),
+        );
+    }
+    if let Some(policy_name) = &request.policy_name {
+        authz = authz.attr(
+            "policy_name",
+            AttrValue::String(policy_name.as_str().to_string()),
+        );
+    }
     require(&state, authz).await?;
     let network = state
         .services
@@ -582,6 +629,8 @@ pub(crate) async fn update_network(
         location: request.location,
         frozen: request.frozen,
         reserved: request.reserved,
+        max_communities: request.max_communities,
+        policy: request.policy_name,
     };
     let network = state.services.networks().update(&cidr, command).await?;
     Ok(HttpResponse::Ok().json(build_network_response(state.get_ref(), &network, false).await?))

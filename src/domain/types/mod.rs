@@ -1,16 +1,20 @@
 mod addresses;
+mod descriptions;
 mod dns_names;
 mod encoded;
 mod identifiers;
 mod numerics;
+mod policy;
 mod record_values;
 mod update_field;
 
 pub use addresses::*;
+pub use descriptions::*;
 pub use dns_names::*;
 pub use encoded::*;
 pub use identifiers::*;
 pub use numerics::*;
+pub use policy::*;
 pub use record_values::record_type_names;
 pub use record_values::*;
 pub use update_field::*;
@@ -72,6 +76,13 @@ mod tests {
     #[test]
     fn hostname_rejects_underscores() {
         assert!(Hostname::new("bad_name.example.org").is_err());
+    }
+
+    #[test]
+    fn hostname_rejects_wildcards() {
+        assert!(Hostname::new("*.Example.Org").is_err());
+        assert!(Hostname::new("foo.*.example.org").is_err());
+        assert!(Hostname::new("foo*.example.org").is_err());
     }
 
     #[test]
@@ -190,11 +201,6 @@ mod tests {
     #[test]
     fn dns_name_rejects_double_dot() {
         assert!(DnsName::new("example..org").is_err());
-    }
-
-    #[test]
-    fn hostname_rejects_wildcards() {
-        assert!(Hostname::new("*.example.org").is_err());
     }
 
     #[test]

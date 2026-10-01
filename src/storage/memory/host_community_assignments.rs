@@ -30,7 +30,7 @@ pub(super) fn create_host_community_assignment_in_state(
         })?;
     let assignment = state
         .ip_addresses
-        .get(&command.address().as_str())
+        .get(command.address())
         .cloned()
         .ok_or_else(|| {
             AppError::not_found(format!(
@@ -154,7 +154,7 @@ pub(super) fn delete_host_community_assignment_in_state(
         })?;
     let ip = state
         .ip_addresses
-        .get(&assignment.address().as_str())
+        .get(assignment.address())
         .ok_or_else(|| AppError::internal("community assignment references an unknown IP"))?;
     let network = state
         .networks

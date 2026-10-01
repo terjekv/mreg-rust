@@ -82,6 +82,7 @@ impl CreateLabel {
 /// Partial update for a label's description.
 #[derive(Clone, Debug)]
 pub struct UpdateLabel {
+    pub name: Option<LabelName>,
     pub description: Option<String>,
 }
 
@@ -93,9 +94,18 @@ impl UpdateLabel {
                 return Err(AppError::validation("label description cannot be empty"));
             }
             return Ok(Self {
+                name: None,
                 description: Some(trimmed.to_string()),
             });
         }
-        Ok(Self { description })
+        Ok(Self {
+            name: None,
+            description,
+        })
+    }
+
+    pub fn with_name(mut self, name: Option<LabelName>) -> Self {
+        self.name = name;
+        self
     }
 }

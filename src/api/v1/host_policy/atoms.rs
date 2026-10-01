@@ -220,6 +220,7 @@ pub(crate) async fn update_atom(
     }
     require(&state, authz).await?;
     let command = UpdateHostPolicyAtom {
+        name: None,
         description: request.description,
     };
     let atom = state

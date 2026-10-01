@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Configurable atomic startup seeding (`MREG_SEED_CONFIG_PATH`) for policy attributes and policies, labels, nameservers, and host-policy atoms and roles, with audit events and explicit protection configuration.
+- Native policy attributes, ordered attribute membership, community template identifiers, network policy assignment and community limits, and validated update operations for inventory and policy resources.
+
 - EUI-48 and EUI-64 MAC address support across inventory APIs, storage backends, imports, and exports, with Ethernet-specific DHCP automation and matcher fallback limited to EUI-48 addresses.
 - Core DNS management with forward zones, reverse zones, zone delegations, nameservers, and hosts with IP address management.
 - DNS record system supporting 25 built-in record types (A, AAAA, NS, PTR, CNAME, MX, TXT, SRV, NAPTR, SSHFP, LOC, HINFO, DS, DNSKEY, CDS, CDNSKEY, CSYNC, CAA, TLSA, SVCB, HTTPS, DNAME, OPENPGPKEY, SMIMEA, URI) with RFC validation, plus runtime-defined types via RFC 3597 raw RDATA.
@@ -26,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (communities/database):** community creation, including imports and direct storage calls, requires the network's assigned policy and an available community slot. Policy removal/replacement and limit reductions cannot invalidate existing communities. Run migrations `00000000000004_network_policy_attribute_order` and `00000000000005_community_policy_invariants`; repair existing mismatches first as described in `docs/core-mutation-upgrade.md`.
+- **Breaking (validation):** network-policy names are limited to 100 characters; policy and community descriptions must be nonblank; community template identifiers require 1–100 ASCII letters, digits, or underscores and must be unique. Correct invalid persisted data before upgrading; use `null` to clear optional patterns.
+- **Breaking (Rust API/configuration):** new validated update commands and transactional store operations are required by custom storage implementations. Explicit `Config` literals must supply `seed_data: SeedData::default()`. Implement `TxStorage::lock_seed_data` for the lifetime of each seed transaction. Configure desired initial policy attributes in a seed TOML file and `MREG_PROTECTED_POLICY_ATTRIBUTES`; no attribute name is implicitly created or protected.
+
 - **Breaking (Rust API):** pagination requests now have private fields and use validated `PageLimit` values. Replace `PageRequest` literals and `deserialize_page_limit` with `PageRequest::new` and `Option<PageLimit>`; use `PageRequest::all()` for trusted internal enumeration. Host-policy membership APIs and role membership vectors now require `Hostname`, `LabelName`, and `HostPolicyName` instead of strings.
 - **Breaking (validation):** constrained DNS, inventory, and policy request values now validate and normalize during JSON/path/query extraction, before handler authorization or lookup. Clients must handle HTTP 400 for invalid values rather than relying on later 403/404 responses, and authorization policies must match canonical names and addresses. Valid JSON and PATCH shapes remain compatible. Persisted invalid import batches, record schemas, and oversized raw RDATA must be corrected before loading; no database schema migration is required.
 - **Breaking (Rust API):** `MacAddressValue::as_inner()` now returns `macaddr::MacAddr` instead of `macaddr::MacAddr6` so it can represent both EUI-48 and EUI-64 values. Callers that require a fixed width must migrate to `as_eui48()` or `as_eui64()` and handle `None`; callers that support both widths can match on `MacAddr::V6` and `MacAddr::V8`.
@@ -42,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced the `iai-callgrind` benchmark harness with Gungraun 0.19.4 under `rust-pr-bench`; benchmark target names remain stable so the migration pull request retains base-versus-head measurements.
 
 ### Fixed
+
+- Delegation updates retain identity, DS records and glue, change only the delegation's NS records, and leave zone serials unchanged for comment-only edits.
+- IP moves honor explicit attachments and their ownership, MAC, network and allocation constraints on both backends; moves with PTR overrides return a conflict until the override is explicitly removed.
+- PostgreSQL IP reads and authorization retain the network selected by the persisted attachment when networks overlap.
+- Memory policy/community renames refresh dependent community and assignment names. IP unassignment removes PTR overrides and host-community assignments consistently with PostgreSQL.
+- PostgreSQL serializes community creation against the network's policy and limit, including concurrent requests; database triggers also enforce those invariants for direct SQL.
 
 - Fixed intermittent PostgreSQL DNS reads failing under concurrent imports: current built-in record definitions are no longer rewritten on reads, and initialization or refresh is serialized within a transaction.
 - Reduced memory-backend host-filter and record-listing work by evaluating address conditions once per inventory and cloning only the requested page.

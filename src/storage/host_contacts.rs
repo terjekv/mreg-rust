@@ -22,6 +22,10 @@ pub trait HostContactStore: Send + Sync {
         &self,
         command: CreateHostContact,
     ) -> Result<HostContact, AppError>;
+    async fn replace_host_contact(
+        &self,
+        command: CreateHostContact,
+    ) -> Result<HostContact, AppError>;
     async fn get_host_contact_by_email(
         &self,
         email: &EmailAddressValue,
