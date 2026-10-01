@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A Django-mreg compatibility API at `/api/v1`, translating requests into validated native commands, with pinned CLI comparison coverage and documented strict-validation and unsupported-operation gaps.
+
 - Configurable atomic startup seeding (`MREG_SEED_CONFIG_PATH`) for policy attributes and policies, labels, nameservers, and host-policy atoms and roles, with audit events and explicit protection configuration.
 - Native policy attributes, ordered attribute membership, community template identifiers, network policy assignment and community limits, and validated update operations for inventory and policy resources.
 
@@ -28,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Service-layer audit recording for all mutations.
 
 ### Changed
+
+- **Breaking (API paths):** the native API, authentication and OpenAPI paths move from `/api/v1` to `/api/v2`. Update native clients and regenerated SDKs before deployment; `/api/v1` now follows the Django-mreg contract.
+- **Breaking (legacy compatibility):** compatibility requests enforce native DNS, inventory and policy invariants. Correct invalid DNS data and descriptions, use allocatable IP addresses, and unfreeze networks before mutations. Explicit SOA serial writes and implicit replacement of community membership return HTTP 501; omit `serialno` and let native mutations advance serials, and explicitly remove old community membership before adding a new one. Delegation PATCH preserves absent fields and rejects null or empty nameserver lists; grant `zone.forward.delegation.update` to principals allowed to edit delegations.
+- Legacy wildcard hosts translate into unanchored DNS owners while retaining native hostname validation.
 
 - **Breaking (communities/database):** community creation, including imports and direct storage calls, requires the network's assigned policy and an available community slot. Policy removal/replacement and limit reductions cannot invalidate existing communities. Run migrations `00000000000004_network_policy_attribute_order` and `00000000000005_community_policy_invariants`; repair existing mismatches first as described in `docs/core-mutation-upgrade.md`.
 - **Breaking (validation):** network-policy names are limited to 100 characters; policy and community descriptions must be nonblank; community template identifiers require 1–100 ASCII letters, digits, or underscores and must be unique. Correct invalid persisted data before upgrading; use `null` to clear optional patterns.

@@ -2,6 +2,7 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
+use actix_web::{App, test, web};
 use async_trait::async_trait;
 use mreg_rust::{
     domain::{
@@ -215,6 +216,27 @@ dual_backend_test!(seed_attribute_available_in_native_api, |ctx| {
         .await;
     assert_eq!(body["description"], "Custom flag");
 });
+
+#[actix_web::test]
+async fn configured_seed_is_visible_through_legacy_api() {
+    let state = common::memory_state();
+    let seeds: SeedData = toml::from_str(include_str!("../scripts/mreg-cli-seeds.toml")).unwrap();
+    state.services.seed(&seeds).await.unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let request = test::TestRequest::get()
+        .uri("/api/v1/networkpolicyattributes/")
+        .to_request();
+    let body: serde_json::Value = test::call_and_read_body_json(&app, request).await;
+    assert_eq!(
+        body["results"][0]["description"],
+        "The network uses client isolation."
+    );
+}
 
 dual_backend_test!(no_implicit_isolated_attribute, |ctx| {
     assert!(matches!(

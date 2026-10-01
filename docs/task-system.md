@@ -28,17 +28,17 @@ A task envelope includes:
 
 Workflows API:
 
-- `GET /api/v1/workflows/tasks` lists tasks.
-- `POST /api/v1/workflows/tasks/run-next` claims and executes one queued task.
+- `GET /api/v2/workflows/tasks` lists tasks.
+- `POST /api/v2/workflows/tasks/run-next` claims and executes one queued task.
 
 Workflow creators:
 
-- `POST /api/v1/workflows/imports` creates an `import_batch` task.
-- `POST /api/v1/workflows/export-runs` creates an `export_run` task.
+- `POST /api/v2/workflows/imports` creates an `import_batch` task.
+- `POST /api/v2/workflows/export-runs` creates an `export_run` task.
 
 ## run-next Semantics
 
-`POST /api/v1/workflows/tasks/run-next` is a worker-facing endpoint.
+`POST /api/v2/workflows/tasks/run-next` is a worker-facing endpoint.
 
 Behavior:
 
@@ -79,7 +79,7 @@ The API server stores and serves task state, but workflow execution still requir
 In practice, production should run one or more automation workers that repeatedly invoke:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/workflows/tasks/run-next
+curl -X POST http://localhost:8080/api/v2/workflows/tasks/run-next
 ```
 
 Manual `run-next` calls are useful for tests, debugging, and ad-hoc operations.

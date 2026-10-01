@@ -5,7 +5,7 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use mreg_rust::{
-    api::v1::hosts::build_host_response,
+    api::v2::hosts::build_host_response,
     domain::{filters::HostFilter, host_view::HostViewExpansions, pagination::PageRequest},
 };
 

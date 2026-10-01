@@ -10,7 +10,7 @@
 ## Completed (Previously Deferred)
 
 - ~~migration of hostpolicy roles/atoms~~ — implemented as `HostPolicyStore` with atoms, roles, and membership management (see [host-policy.md](host-policy.md))
-- ~~compatibility shims for legacy clients~~ — planned as `/api/compat/` layer (see [api-compatibility.md](api-compatibility.md))
+- route compatibility shims for legacy clients are available at `/api/v1/`; full payload and identifier translation remains backlog work (see [api-compatibility.md](api-compatibility.md))
 
 ## Early Design Constraints
 

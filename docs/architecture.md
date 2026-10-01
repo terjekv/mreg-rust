@@ -25,7 +25,7 @@ The design is intentionally pragmatic:
 
 This service owns:
 
-- HTTP API behavior under `/api/v1`
+- HTTP API behavior under `/api/v2`
 - authentication and local bearer-token issuance/validation
 - domain validation and normalization
 - persistence and transactional side-effects
@@ -108,7 +108,7 @@ Handlers build explicit authorization requests using:
 Relevant modules:
 
 - `src/authz/`
-- `src/api/v1/authz.rs`
+- `src/api/v2/authz.rs`
 
 See [authorization.md](authorization.md) and [authz-action-matrix.md](authz-action-matrix.md).
 
@@ -235,7 +235,7 @@ For a typical protected request:
 
 ## Domain Boundaries in the API
 
-The current `/api/v1` surface is grouped by domain:
+The current `/api/v2` surface is grouped by domain:
 
 - `dns`
   - nameservers

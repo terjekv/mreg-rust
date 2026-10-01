@@ -435,7 +435,7 @@ impl TestCtx {
                     self.state.config.json_payload_limit_bytes,
                 ))
                 .wrap(mreg_rust::middleware::Authn)
-                .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+                .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
         )
         .await;
         test::call_service(&app, request).await.status()
@@ -449,7 +449,7 @@ impl TestCtx {
                     self.state.config.json_payload_limit_bytes,
                 ))
                 .wrap(mreg_rust::middleware::Authn)
-                .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+                .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
         )
         .await;
         let response = test::call_service(&app, request).await;
