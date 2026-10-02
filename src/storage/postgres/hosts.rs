@@ -393,6 +393,9 @@ impl PostgresStorage {
                     "requested network does not match the attachment network",
                 ));
             }
+            if network.frozen() {
+                return Err(AppError::conflict("network is frozen"));
+            }
             let address = match command.allocation() {
                 AllocationPolicy::FirstFree => {
                     Self::allocate_address_in_network(connection, &network)?

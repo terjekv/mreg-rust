@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Automatic IP allocation rejects frozen networks before creating assignments or attachments, including reuse of explicit attachments. Memory host deletion also removes attachment lookup entries.
+- Adding nameservers to a memory-backed delegation advances the parent SOA serial; unchanged nameservers and comment-only edits preserve it.
+- PostgreSQL label updates atomically target the original label and return NotFound when it does not exist, without modifying another label at the requested new name.
+- Memory IP moves preserve the assignment's original creation timestamp across address, attachment and host changes.
+- Policy attribute names validate and normalize during JSON/path extraction, before authorization or lookup. Invalid attribute membership and rename requests consistently return HTTP 400, with primitive wire shapes and PATCH semantics preserved.
+
 - Delegation updates retain identity, DS records and glue, change only the delegation's NS records, and leave zone serials unchanged for comment-only edits.
 - IP moves honor explicit attachments and their ownership, MAC, network and allocation constraints on both backends; moves with PTR overrides return a conflict until the override is explicitly removed.
 - PostgreSQL IP reads and authorization retain the network selected by the persisted attachment when networks overlap.

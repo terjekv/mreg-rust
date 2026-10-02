@@ -85,23 +85,21 @@ impl CreateNetworkPolicyRequest {
             self.attributes
                 .into_iter()
                 .map(NetworkPolicyAttributeValueRequest::into_domain)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect(),
         ))
     }
 }
 
 #[derive(Clone, Deserialize, Serialize, ToSchema)]
 pub struct NetworkPolicyAttributeValueRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: NetworkPolicyAttributeName,
     value: bool,
 }
 
 impl NetworkPolicyAttributeValueRequest {
-    fn into_domain(self) -> Result<SetNetworkPolicyAttributeValue, AppError> {
-        Ok(SetNetworkPolicyAttributeValue::new(
-            NetworkPolicyAttributeName::new(self.name)?,
-            self.value,
-        ))
+    fn into_domain(self) -> SetNetworkPolicyAttributeValue {
+        SetNetworkPolicyAttributeValue::new(self.name, self.value)
     }
 }
 
@@ -157,34 +155,33 @@ pub struct UpdateNetworkPolicyRequest {
 }
 
 impl UpdateNetworkPolicyRequest {
-    fn into_domain(self) -> Result<UpdateNetworkPolicy, AppError> {
-        Ok(UpdateNetworkPolicy {
+    fn into_domain(self) -> UpdateNetworkPolicy {
+        UpdateNetworkPolicy {
             name: self.name,
             description: self.description,
             community_template_pattern: self.community_template_pattern,
-            attributes: self
-                .attributes
-                .map(|values| {
-                    values
-                        .into_iter()
-                        .map(NetworkPolicyAttributeValueRequest::into_domain)
-                        .collect()
-                })
-                .transpose()?,
-        })
+            attributes: self.attributes.map(|values| {
+                values
+                    .into_iter()
+                    .map(NetworkPolicyAttributeValueRequest::into_domain)
+                    .collect()
+            }),
+        }
     }
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateNetworkPolicyAttributeRequest {
-    name: String,
+    #[schema(value_type = String)]
+    name: NetworkPolicyAttributeName,
     #[serde(default)]
     description: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateNetworkPolicyAttributeRequest {
-    name: Option<String>,
+    #[schema(value_type = Option<String>)]
+    name: Option<NetworkPolicyAttributeName>,
     description: Option<String>,
 }
 
@@ -372,7 +369,7 @@ pub(crate) async fn update_network_policy(
     let item = state
         .services
         .network_policies()
-        .update(&name, payload.into_inner().into_domain()?)
+        .update(&name, payload.into_inner().into_domain())
         .await?;
     let details = state
         .services
@@ -462,7 +459,7 @@ pub(crate) async fn create_network_policy_attribute(
     payload: web::Json<CreateNetworkPolicyAttributeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let payload = payload.into_inner();
-    let name = NetworkPolicyAttributeName::new(payload.name)?;
+    let name = payload.name;
     require(
         &state,
         authz_request(
@@ -493,9 +490,9 @@ pub(crate) async fn create_network_policy_attribute(
 pub(crate) async fn get_network_policy_attribute(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<NetworkPolicyAttributeName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = NetworkPolicyAttributeName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -527,10 +524,10 @@ pub(crate) async fn get_network_policy_attribute(
 pub(crate) async fn update_network_policy_attribute(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<NetworkPolicyAttributeName>,
     payload: web::Json<UpdateNetworkPolicyAttributeRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let name = NetworkPolicyAttributeName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(
@@ -548,10 +545,7 @@ pub(crate) async fn update_network_policy_attribute(
         .update_attribute(
             &name,
             UpdateNetworkPolicyAttribute {
-                name: payload
-                    .name
-                    .map(NetworkPolicyAttributeName::new)
-                    .transpose()?,
+                name: payload.name,
                 description: payload.description,
             },
         )
@@ -571,9 +565,9 @@ pub(crate) async fn update_network_policy_attribute(
 pub(crate) async fn delete_network_policy_attribute(
     req: HttpRequest,
     state: web::Data<AppState>,
-    path: web::Path<String>,
+    path: web::Path<NetworkPolicyAttributeName>,
 ) -> Result<HttpResponse, AppError> {
-    let name = NetworkPolicyAttributeName::new(path.into_inner())?;
+    let name = path.into_inner();
     require(
         &state,
         authz_request(

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -72,13 +72,14 @@ fn assign_ip_in_state(
     state: &mut MemoryState,
     command: &AssignIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
-    assign_ip_with_id_in_state(state, command, Uuid::new_v4())
+    assign_ip_with_id_in_state(state, command, Uuid::new_v4(), None)
 }
 
 fn assign_ip_with_id_in_state(
     state: &mut MemoryState,
     command: &AssignIpAddress,
     assignment_id: Uuid,
+    created_at: Option<DateTime<Utc>>,
 ) -> Result<IpAddressAssignment, AppError> {
     let host = state
         .hosts
@@ -160,6 +161,9 @@ fn assign_ip_with_id_in_state(
                 "requested network does not match the attachment network",
             ));
         }
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
         let address = match command.allocation() {
             AllocationPolicy::FirstFree => allocate_address_in_network(state, &network)?,
             AllocationPolicy::Random => allocate_random_address_in_network(state, &network)?,
@@ -192,7 +196,7 @@ fn assign_ip_with_id_in_state(
         address,
         network.id(),
         attachment.mac_address().cloned(),
-        now,
+        created_at.unwrap_or(now),
         now,
     )?;
     state.ip_addresses.insert(address, assignment.clone());
@@ -652,6 +656,9 @@ pub(super) fn delete_host_in_state(
         .host_attachments
         .retain(|id, _| !attachment_ids.contains(id));
     state
+        .host_attachment_keys
+        .retain(|_, id| !attachment_ids.contains(id));
+    state
         .host_community_assignments
         .retain(|_, assignment| assignment.host_id() != host.id());
     state
@@ -1052,7 +1059,7 @@ pub(super) fn move_ip_address_in_state(
         }
     }
     unassign_ip_address_in_state(state, old_address)?;
-    let updated = assign_ip_with_id_in_state(state, &command, old.id())?;
+    let updated = assign_ip_with_id_in_state(state, &command, old.id(), Some(old.created_at()))?;
     create_managed_forward_record_in_state(state, &updated, command.host_name())?;
     create_managed_ptr_record_in_state(state, &updated, command.host_name())?;
     let host_name = state
@@ -1192,6 +1199,52 @@ mod tests {
         },
         storage::build_storage,
     };
+
+    #[test]
+    fn deleting_hosts_removes_attachment_index_entries() {
+        use super::super::{
+            attachments::create_attachment_in_state, networks::create_network_in_state,
+        };
+        use super::{MemoryState, create_host_in_state, delete_host_in_state};
+        use crate::domain::{attachment::CreateHostAttachment, types::ReservedCount};
+        let mut state = MemoryState::default();
+        let cidr = CidrValue::new("10.0.0.0/24").unwrap();
+        create_network_in_state(
+            &mut state,
+            CreateNetwork::new(cidr.clone(), "Network", ReservedCount::new(3).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let keeper = Hostname::new("keeper.example.org").unwrap();
+        create_host_in_state(
+            &mut state,
+            CreateHost::new(keeper.clone(), None, None, "Keep").unwrap(),
+        )
+        .unwrap();
+        create_attachment_in_state(
+            &mut state,
+            CreateHostAttachment::new(keeper, cidr.clone(), None, None),
+        )
+        .unwrap();
+        let expected = state.host_attachment_keys.clone();
+        for _ in 0..4 {
+            let name = Hostname::new("ephemeral.example.org").unwrap();
+            create_host_in_state(
+                &mut state,
+                CreateHost::new(name.clone(), None, None, "Delete").unwrap(),
+            )
+            .unwrap();
+            create_attachment_in_state(
+                &mut state,
+                CreateHostAttachment::new(name.clone(), cidr.clone(), None, None),
+            )
+            .unwrap();
+            delete_host_in_state(&mut state, &name).unwrap();
+        }
+        assert_eq!(
+            (state.host_attachment_keys, state.host_attachments.len()),
+            (expected, 1)
+        );
+    }
 
     #[tokio::test]
     async fn host_auth_context_includes_attached_networks() {

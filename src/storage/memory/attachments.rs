@@ -30,7 +30,10 @@ fn insert_new_attachment_in_state(
     network: &Network,
     mac_address: Option<MacAddressValue>,
     comment: Option<String>,
-) -> HostAttachment {
+) -> Result<HostAttachment, AppError> {
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let attachment_key = HostAttachmentKey::new(host.id(), network.id(), mac_address.as_ref());
     let now = Utc::now();
     let attachment = HostAttachment::restore(
@@ -50,7 +53,7 @@ fn insert_new_attachment_in_state(
     state
         .host_attachment_keys
         .insert(attachment_key, attachment.id());
-    attachment
+    Ok(attachment)
 }
 
 fn matches_mac_address(
@@ -174,13 +177,13 @@ pub(super) fn create_attachment_in_state(
         return Err(AppError::conflict("host attachment already exists"));
     }
 
-    Ok(insert_new_attachment_in_state(
+    insert_new_attachment_in_state(
         state,
         &host,
         &network,
         command.mac_address().cloned(),
         command.comment().map(str::to_string),
-    ))
+    )
 }
 
 pub(super) fn find_or_create_attachment_in_state(
@@ -203,6 +206,9 @@ pub(super) fn find_or_create_attachment_in_state(
         .ok_or_else(|| {
             AppError::not_found(format!("network '{}' was not found", network.as_str()))
         })?;
+    if network_obj.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
     let attachment_key = HostAttachmentKey::new(host.id(), network_obj.id(), mac_address.as_ref());
     if let Some(attachment_id) = state.host_attachment_keys.get(&attachment_key) {
         return state
@@ -212,13 +218,7 @@ pub(super) fn find_or_create_attachment_in_state(
             .ok_or_else(|| AppError::internal("host attachment index is inconsistent"));
     }
 
-    Ok(insert_new_attachment_in_state(
-        state,
-        &host,
-        &network_obj,
-        mac_address,
-        None,
-    ))
+    insert_new_attachment_in_state(state, &host, &network_obj, mac_address, None)
 }
 
 pub(super) fn create_attachment_dhcp_identifier_in_state(

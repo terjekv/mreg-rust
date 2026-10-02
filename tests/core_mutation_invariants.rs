@@ -1,20 +1,21 @@
 mod common;
 
-use common::TestCtx;
+use common::{TestBackend, TestCtx};
 use mreg_rust::{
     domain::{
         attachment::{CreateAttachmentCommunityAssignment, CreateHostAttachment},
         community::{Community, CreateCommunity, UpdateCommunity},
-        host::{AssignIpAddress, Host, IpAddressAssignment},
+        host::{AllocationPolicy, AssignIpAddress, Host, IpAddressAssignment},
         host_community_assignment::CreateHostCommunityAssignment,
         imports::CreateImportBatch,
+        label::{CreateLabel, UpdateLabel},
         network::CreateNetwork,
         network_policy::{CreateNetworkPolicy, UpdateNetworkPolicy},
         pagination::PageRequest,
         ptr_override::CreatePtrOverride,
         resource_records::{CreateRecordInstance, RecordInstance, RecordOwnerKind},
         types::{
-            CidrValue, CommunityLimit, CommunityName, DnsName, Hostname, IpAddressValue,
+            CidrValue, CommunityLimit, CommunityName, DnsName, Hostname, IpAddressValue, LabelName,
             MacAddressValue, NetworkPolicyName, ReservedCount, ZoneName, record_type_names,
         },
         zone::{CreateForwardZoneDelegation, ForwardZoneDelegation, UpdateForwardZoneDelegation},
@@ -734,3 +735,243 @@ dual_backend_test!(
         assert_eq!((rejected, current.id()), (true, community.id()));
     }
 );
+
+async fn review_ctx(backend: TestBackend) -> Option<TestCtx> {
+    match backend {
+        TestBackend::Memory => Some(TestCtx::memory()),
+        TestBackend::Postgres => {
+            let ctx = TestCtx::postgres().await;
+            if ctx.is_none() {
+                eprintln!("{}", common::postgres_skip_message("review regressions"));
+            }
+            ctx
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AttachmentSelection {
+    New,
+    Existing,
+    Explicit,
+}
+
+#[rstest::rstest]
+#[actix_web::test]
+async fn frozen_network_rejects_automatic_assignment_without_side_effects(
+    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[values(AllocationPolicy::FirstFree, AllocationPolicy::Random)] allocation: AllocationPolicy,
+    #[values(
+        AttachmentSelection::New,
+        AttachmentSelection::Existing,
+        AttachmentSelection::Explicit
+    )]
+    selection: AttachmentSelection,
+) {
+    let Some(ctx) = review_ctx(backend).await else {
+        return;
+    };
+    let (_, cidr) = policy_network(&ctx, 1).await;
+    let host = Hostname::new(ctx.host("frozen")).unwrap();
+    ctx.seed_host(host.as_str()).await;
+    let storage = ctx.storage();
+    let attachment = if matches!(selection, AttachmentSelection::New) {
+        None
+    } else {
+        Some(
+            storage
+                .attachments()
+                .create_attachment(CreateHostAttachment::new(
+                    host.clone(),
+                    cidr.clone(),
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+    };
+    ctx.patch(
+        &format!("/inventory/networks/{}", cidr.as_str()),
+        json!({"frozen":true}),
+    )
+    .await;
+    let mut command = AssignIpAddress::new(host.clone(), None, Some(cidr), None)
+        .unwrap()
+        .with_allocation(allocation);
+    if matches!(selection, AttachmentSelection::Explicit) {
+        command = command.within_attachment(attachment.as_ref().unwrap().id());
+    }
+    let result = storage.hosts().assign_ip_address(command).await;
+    let attachments = storage
+        .attachments()
+        .list_attachments_for_host(&host)
+        .await
+        .unwrap();
+    let addresses = storage
+        .hosts()
+        .list_ip_addresses_for_host(&host, &PageRequest::all())
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            matches!(result, Err(AppError::Conflict(_))),
+            attachments.len(),
+            addresses.items.len()
+        ),
+        (true, usize::from(attachment.is_some()), 0)
+    );
+}
+
+dual_backend_test!(delegation_ns_addition_advances_parent_serial, |ctx| {
+    let fixture = delegation_fixture(&ctx).await;
+    let storage = ctx.storage();
+    let before = storage
+        .zones()
+        .get_forward_zone_by_name(&fixture.zone)
+        .await
+        .unwrap()
+        .serial_no();
+    let id = fixture.delegation.id();
+    let mut nameservers = fixture.delegation.nameservers().to_vec();
+    nameservers.push(fixture.next_ns);
+    storage
+        .transaction(move |tx| {
+            tx.zones().update_forward_zone_delegation(
+                id,
+                UpdateForwardZoneDelegation::new(None, Some(nameservers))?,
+            )
+        })
+        .await
+        .unwrap();
+    let after = storage
+        .zones()
+        .get_forward_zone_by_name(&fixture.zone)
+        .await
+        .unwrap()
+        .serial_no();
+    assert!(after.is_newer_than(before));
+});
+
+dual_backend_test!(unchanged_delegation_nameservers_preserve_serial, |ctx| {
+    let fixture = delegation_fixture(&ctx).await;
+    let storage = ctx.storage();
+    let before = storage
+        .zones()
+        .get_forward_zone_by_name(&fixture.zone)
+        .await
+        .unwrap()
+        .serial_no();
+    let id = fixture.delegation.id();
+    let nameservers = fixture.delegation.nameservers().to_vec();
+    storage
+        .transaction(move |tx| {
+            tx.zones().update_forward_zone_delegation(
+                id,
+                UpdateForwardZoneDelegation::new(None, Some(nameservers))?,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .zones()
+            .get_forward_zone_by_name(&fixture.zone)
+            .await
+            .unwrap()
+            .serial_no(),
+        before
+    );
+});
+
+#[rstest::rstest]
+#[case(None)]
+#[case(Some("Unrelated update".to_string()))]
+#[actix_web::test]
+async fn missing_label_rename_cannot_change_existing_target(
+    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[case] description: Option<String>,
+) {
+    let Some(ctx) = review_ctx(backend).await else {
+        return;
+    };
+    let storage = ctx.storage();
+    let existing = LabelName::new(ctx.name("existing")).unwrap();
+    let label = storage
+        .labels()
+        .create_label(CreateLabel::new(existing.clone(), "Original").unwrap())
+        .await
+        .unwrap();
+    let result = storage
+        .labels()
+        .update_label(
+            &LabelName::new(ctx.name("missing")).unwrap(),
+            UpdateLabel {
+                name: Some(existing.clone()),
+                description,
+            },
+        )
+        .await;
+    let after = storage.labels().get_label_by_name(&existing).await.unwrap();
+    assert_eq!(
+        (matches!(result, Err(AppError::NotFound(_))), after),
+        (true, label)
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MoveKind {
+    Address,
+    Attachment,
+    Host,
+}
+
+#[rstest::rstest]
+#[actix_web::test]
+async fn ip_move_preserves_creation_timestamp(
+    #[values(TestBackend::Memory, TestBackend::Postgres)] backend: TestBackend,
+    #[values(MoveKind::Address, MoveKind::Attachment, MoveKind::Host)] kind: MoveKind,
+) {
+    let Some(ctx) = review_ctx(backend).await else {
+        return;
+    };
+    let (_, cidr) = policy_network(&ctx, 1).await;
+    let (host, old) = host_ip(&ctx, &cidr).await;
+    let storage = ctx.storage();
+    let target = if matches!(kind, MoveKind::Host) {
+        let name = Hostname::new(ctx.host("target")).unwrap();
+        ctx.seed_host(name.as_str()).await;
+        name
+    } else {
+        host.name().clone()
+    };
+    let address = if matches!(kind, MoveKind::Address) {
+        IpAddressValue::new(ctx.ip_in_cidr(&cidr.as_str(), 11)).unwrap()
+    } else {
+        *old.address()
+    };
+    let mut command = AssignIpAddress::new(target.clone(), Some(address), None, None).unwrap();
+    if matches!(kind, MoveKind::Attachment) {
+        let attachment = storage
+            .attachments()
+            .create_attachment(CreateHostAttachment::new(
+                target,
+                cidr,
+                Some(MacAddressValue::new("02:00:00:00:00:99").unwrap()),
+                None,
+            ))
+            .await
+            .unwrap();
+        command = command.within_attachment(attachment.id());
+    }
+    let old_address = *old.address();
+    let moved = storage
+        .transaction(move |tx| tx.hosts().move_ip_address(&old_address, command))
+        .await
+        .unwrap();
+    let stored = storage.hosts().get_ip_address(&address).await.unwrap();
+    assert_eq!(
+        (moved.id(), moved.created_at(), stored.created_at()),
+        (old.id(), old.created_at(), old.created_at())
+    );
+}

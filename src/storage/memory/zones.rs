@@ -24,7 +24,8 @@ use crate::{
 use super::{
     MemoryState, MemoryStorage, bump_zone_serial_in_state,
     delete_records_by_name_and_type_in_state, delete_records_by_owner_in_state, paginate_by_cursor,
-    records::create_record_in_state, sort_and_paginate,
+    records::{create_record_in_state, create_record_with_serial_bump_in_state},
+    sort_and_paginate,
 };
 use super::{
     hosts::{
@@ -447,7 +448,7 @@ pub(super) fn update_forward_zone_delegation_in_state(
                 .iter()
                 .any(|record| record.data()["nsdname"].as_str() == Some(ns.as_str()))
             {
-                create_record_in_state(
+                create_record_with_serial_bump_in_state(
                     state,
                     CreateRecordInstance::new(
                         record_type_names::ns(),

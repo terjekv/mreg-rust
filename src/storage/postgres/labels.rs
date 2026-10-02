@@ -112,30 +112,23 @@ impl PostgresStorage {
         name: &LabelName,
         command: UpdateLabel,
     ) -> Result<Label, AppError> {
-        let name = name.as_str().to_string();
-        let mut current_name = name.clone();
-        if let Some(new_name) = command.name {
-            current_name = new_name.as_str().to_string();
-            update(labels::table.filter(labels::name.eq(&name)))
-                .set((
-                    labels::name.eq(&current_name),
-                    labels::updated_at.eq(diesel::dsl::now),
-                ))
-                .execute(connection)
-                .map_err(map_unique("label already exists"))?;
+        if command.name.is_none() && command.description.is_none() {
+            return Self::get_label_by_name_in_conn(connection, name);
         }
-        if let Some(description) = command.description {
-            update(labels::table.filter(labels::name.eq(&current_name)))
-                .set((
-                    labels::description.eq(description),
-                    labels::updated_at.eq(diesel::dsl::now),
-                ))
-                .execute(connection)?;
-        }
-        labels::table
-            .filter(labels::name.eq(&current_name))
-            .first::<LabelRow>(connection)
-            .optional()?
+        update(labels::table.filter(labels::name.eq(name.as_str())))
+            .set((
+                command
+                    .name
+                    .map(|name| labels::name.eq(name.as_str().to_string())),
+                command
+                    .description
+                    .map(|description| labels::description.eq(description)),
+                labels::updated_at.eq(diesel::dsl::now),
+            ))
+            .returning(LabelRow::as_returning())
+            .get_result(connection)
+            .optional()
+            .map_err(map_unique("label already exists"))?
             .ok_or_else(|| AppError::not_found(format!("label '{}' was not found", name)))?
             .into_domain()
     }
