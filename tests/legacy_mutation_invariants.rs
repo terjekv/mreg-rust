@@ -220,3 +220,36 @@ async fn community_replacement_preserves_existing_membership() {
             .await;
     assert_eq!((status, after), (StatusCode::NOT_IMPLEMENTED, before));
 }
+
+#[rstest]
+#[case("POST", "/api/v1/networkpolicies/", json!({"name":"policy","description":"Policy","attributes":[{"name":"bad name","value":true}]}))]
+#[case("PATCH", "/api/v1/networkpolicies/9999", json!({"attributes":[{"name":"bad name","value":true}]}))]
+#[case("POST", "/api/v1/networkpolicyattributes/", json!({"name":"bad name"}))]
+#[case("PATCH", "/api/v1/networkpolicyattributes/9999", json!({"name":"bad name"}))]
+#[actix_web::test]
+async fn legacy_attribute_names_validate_before_authorization_or_lookup(
+    #[case] method: &str,
+    #[case] uri: &str,
+    #[case] body: Value,
+) {
+    use actix_web::http::Method;
+    use mreg_rust::{authz::AuthorizerClient, config::Config};
+    let mut state = memory_state();
+    state.authz = AuthorizerClient::from_config(&Config::default()).unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(|cfg| mreg_rust::api::configure(cfg, false)),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::default()
+            .method(method.parse::<Method>().unwrap())
+            .uri(uri)
+            .set_json(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

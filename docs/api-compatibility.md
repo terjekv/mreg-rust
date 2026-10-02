@@ -154,9 +154,9 @@ not a claim about the current branch. The upstream recording contains invalid
 NAPTR/SSHFP payloads and inventory operations that conflict with the shared
 model invariants. Compatibility must not be achieved by accepting those values.
 
-The strict run on 2026-10-02 executed all 401 commands: 231 exact command
-matches, 15 explicit unsupported operations, 29 expected strict-validation
-rejections, and 126 downstream commands whose equality is unverified after
+The strict run on 2026-10-02 executed all 401 commands: 230 exact command
+matches, 15 explicit unsupported operations, 27 expected strict-validation
+rejections, and 129 downstream commands whose equality is unverified after
 rejected mutations. There were zero unexpected differences. The unsupported
 operations include explicit SOA serial writes and implicit community membership
 replacement, as well as permission data. Rejecting the bundled SOA update near

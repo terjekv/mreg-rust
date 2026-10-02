@@ -2723,17 +2723,14 @@ async fn network_policies(
 
 #[derive(Deserialize)]
 struct LegacyPolicyAttributeValue {
-    name: String,
+    name: NetworkPolicyAttributeName,
     #[serde(default)]
     value: bool,
 }
 
 impl LegacyPolicyAttributeValue {
-    fn into_domain(self) -> Result<SetNetworkPolicyAttributeValue, AppError> {
-        Ok(SetNetworkPolicyAttributeValue::new(
-            NetworkPolicyAttributeName::new(self.name)?,
-            self.value,
-        ))
+    fn into_domain(self) -> SetNetworkPolicyAttributeValue {
+        SetNetworkPolicyAttributeValue::new(self.name, self.value)
     }
 }
 
@@ -2775,7 +2772,7 @@ async fn create_network_policy(
                     .attributes
                     .into_iter()
                     .map(LegacyPolicyAttributeValue::into_domain)
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect(),
             ),
         )
         .await?;
@@ -2853,15 +2850,12 @@ async fn update_network_policy(
         name: payload.name.map(NetworkPolicyName::new).transpose()?,
         description: payload.description,
         community_template_pattern: payload.community_template_pattern,
-        attributes: payload
-            .attributes
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(LegacyPolicyAttributeValue::into_domain)
-                    .collect()
-            })
-            .transpose()?,
+        attributes: payload.attributes.map(|values| {
+            values
+                .into_iter()
+                .map(LegacyPolicyAttributeValue::into_domain)
+                .collect()
+        }),
     };
     let updated = state
         .services
@@ -2947,7 +2941,7 @@ async fn network_policy_attributes(
 
 #[derive(Deserialize)]
 struct LegacyCreateNetworkPolicyAttribute {
-    name: String,
+    name: NetworkPolicyAttributeName,
     #[serde(default)]
     description: String,
 }
@@ -2958,7 +2952,7 @@ async fn create_network_policy_attribute(
     payload: web::Json<LegacyCreateNetworkPolicyAttribute>,
 ) -> Result<HttpResponse, AppError> {
     let payload = payload.into_inner();
-    let name = NetworkPolicyAttributeName::new(payload.name)?;
+    let name = payload.name;
     authorize(
         &req,
         &state,
@@ -3017,7 +3011,7 @@ async fn network_policy_attribute_detail(
 
 #[derive(Deserialize)]
 struct LegacyUpdateNetworkPolicyAttribute {
-    name: Option<String>,
+    name: Option<NetworkPolicyAttributeName>,
     description: Option<String>,
 }
 
@@ -3043,10 +3037,7 @@ async fn update_network_policy_attribute(
         .update_attribute(
             old.name(),
             UpdateNetworkPolicyAttribute {
-                name: payload
-                    .name
-                    .map(NetworkPolicyAttributeName::new)
-                    .transpose()?,
+                name: payload.name,
                 description: payload.description,
             },
         )
