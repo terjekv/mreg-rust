@@ -120,7 +120,7 @@ For host authorization, `networks` is the canonical network context attribute an
 
 ### Logout-all
 
-`POST /api/v1/auth/logout-all` is an authorization-controlled operation.
+`POST /api/v2/auth/logout-all` is an authorization-controlled operation.
 
 - action: `auth_session.logout_all`
 - resource kind: `auth_session`

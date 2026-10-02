@@ -10,8 +10,13 @@ use actix_web::{
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     http::header,
 };
+use chrono::Utc;
 
-use crate::{AppState, audit, authn, errors::AppError};
+use crate::{
+    AppState, audit,
+    authn::{self, PrincipalContext},
+    errors::AppError,
+};
 
 pub struct Authn;
 
@@ -68,12 +73,26 @@ where
         Box::pin(async move {
             let auth_result = async {
                 let state = app_state.ok_or_else(|| AppError::internal("missing app state"))?;
-                if !state.authn.requires_bearer_auth() {
+                if !state.authn.requires_bearer_auth() && !req.path().starts_with("/api/v1/") {
                     return Ok(());
                 }
 
-                let token = bearer_token(req.headers())
-                    .ok_or_else(|| AppError::unauthorized("missing Authorization: Bearer token"))?;
+                let token = if req.path().starts_with("/api/v1/") {
+                    legacy_token(req.headers()).ok_or_else(|| {
+                        AppError::unauthorized("missing Authorization: Token token")
+                    })?
+                } else {
+                    bearer_token(req.headers()).ok_or_else(|| {
+                        AppError::unauthorized("missing Authorization: Bearer token")
+                    })?
+                };
+                if !state.authn.requires_bearer_auth() {
+                    req.extensions_mut().insert(PrincipalContext::headers(
+                        crate::authn::header_principal(req.request()),
+                        Utc::now(),
+                    ));
+                    return Ok(());
+                }
                 let context = state.authn.authenticate_bearer(&token).await?;
                 req.extensions_mut().insert(context);
                 Ok::<(), AppError>(())
@@ -97,6 +116,16 @@ where
     }
 }
 
+fn legacy_token(headers: &actix_web::http::header::HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    value
+        .strip_prefix("Token ")
+        .or_else(|| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
 fn bearer_token(headers: &actix_web::http::header::HeaderMap) -> Option<String> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     value
@@ -109,14 +138,17 @@ fn bearer_token(headers: &actix_web::http::header::HeaderMap) -> Option<String> 
 fn is_exempt_path(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/auth/login"
-            | "/api/v1/auth/providers"
-            | "/api/v1/system/health"
-            | "/api/v1/system/version"
+        "/api/token-auth/"
+            | "/api/meta/health/heartbeat"
+            | "/api/v2/auth/login"
+            | "/api/v2/auth/providers"
+            | "/api/v2/system/health"
+            | "/api/v2/system/version"
             | "/auth/login"
             | "/auth/providers"
             | "/system/health"
             | "/system/version"
-    ) || path.starts_with("/swagger-ui/")
+    ) || path.starts_with("/docs")
+        || path.starts_with("/swagger-ui/")
         || path == "/api-docs/openapi.json"
 }

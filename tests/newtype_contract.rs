@@ -305,7 +305,7 @@ async fn policy_attribute_validation_precedes_authorization(
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state))
-            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+            .configure(|cfg| mreg_rust::api::v2::configure(cfg, false)),
     )
     .await;
     let response = test::call_service(

@@ -4,7 +4,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use mreg_rust::api::v1::networks::build_network_response;
+use mreg_rust::api::v2::networks::build_network_response;
 
 fn network_detail_assembly(c: &mut Criterion) {
     let runtime = support::runtime();

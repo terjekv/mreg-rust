@@ -39,7 +39,7 @@ pair if one doesn't exist.
 
 ```bash
 # Create host with IP inline (attachment auto-created)
-curl -X POST http://localhost:8080/api/v1/inventory/hosts \
+curl -X POST http://localhost:8080/api/v2/inventory/hosts \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "web.example.org",
@@ -51,7 +51,7 @@ curl -X POST http://localhost:8080/api/v1/inventory/hosts \
   }'
 
 # Or assign IP separately (attachment also auto-created)
-curl -X POST http://localhost:8080/api/v1/inventory/ip-addresses \
+curl -X POST http://localhost:8080/api/v2/inventory/ip-addresses \
   -H 'Content-Type: application/json' \
   -d '{
     "host_name": "web.example.org",
@@ -65,7 +65,7 @@ curl -X POST http://localhost:8080/api/v1/inventory/ip-addresses \
 You can also create attachments directly, without assigning an IP first:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/inventory/hosts/web.example.org/attachments \
+curl -X POST http://localhost:8080/api/v2/inventory/hosts/web.example.org/attachments \
   -H 'Content-Type: application/json' \
   -d '{
     "network": "10.0.1.0/24",
@@ -83,7 +83,7 @@ DHCP identifiers tell the DHCP server how to identify the client.
 **IPv4 — client-id:**
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/dhcp-identifiers \
+curl -X POST http://localhost:8080/api/v2/inventory/attachments/{attachment_id}/dhcp-identifiers \
   -H 'Content-Type: application/json' \
   -d '{
     "family": 4,
@@ -96,7 +96,7 @@ curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/
 **IPv6 — DUID:**
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/dhcp-identifiers \
+curl -X POST http://localhost:8080/api/v2/inventory/attachments/{attachment_id}/dhcp-identifiers \
   -H 'Content-Type: application/json' \
   -d '{
     "family": 6,
@@ -170,7 +170,7 @@ A typical setup for a dual-stack host (with auto-creation enabled):
 ```bash
 # With MREG_DHCP_AUTO_V4_CLIENT_ID=true and MREG_DHCP_AUTO_V6_DUID_LL=true,
 # creating a host with IPs and a MAC address will auto-create both identifiers:
-curl -X POST http://localhost:8080/api/v1/inventory/hosts \
+curl -X POST http://localhost:8080/api/v2/inventory/hosts \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "web.example.org",
@@ -189,7 +189,7 @@ A typical setup without auto-creation:
 
 ```bash
 # 1. Create host with IPs (attachment auto-created with MAC)
-curl -X POST http://localhost:8080/api/v1/inventory/hosts \
+curl -X POST http://localhost:8080/api/v2/inventory/hosts \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "web.example.org",
@@ -205,7 +205,7 @@ curl -X POST http://localhost:8080/api/v1/inventory/hosts \
 #    No extra steps needed — the export will use hardware ethernet aa:bb:cc:dd:ee:ff
 
 # 3. For DHCPv6, add a DUID identifier to the attachment
-curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/dhcp-identifiers \
+curl -X POST http://localhost:8080/api/v2/inventory/attachments/{attachment_id}/dhcp-identifiers \
   -H 'Content-Type: application/json' \
   -d '{
     "family": 6,
@@ -220,7 +220,7 @@ curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/
 For IPv6 prefix delegation (DHCPv6-PD):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/prefix-reservations \
+curl -X POST http://localhost:8080/api/v2/inventory/attachments/{attachment_id}/prefix-reservations \
   -H 'Content-Type: application/json' \
   -d '{ "prefix": "fd00:1:2::/120" }'
 ```
@@ -248,7 +248,7 @@ direct database writes and cascading deletes.
 ### 5. Assign IPs to an existing attachment
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/ip-addresses \
+curl -X POST http://localhost:8080/api/v2/inventory/attachments/{attachment_id}/ip-addresses \
   -H 'Content-Type: application/json' \
   -d '{ "address": "10.0.1.52" }'
 ```
@@ -256,13 +256,13 @@ curl -X POST http://localhost:8080/api/v1/inventory/attachments/{attachment_id}/
 ### 6. List attachments for a host
 
 ```bash
-curl http://localhost:8080/api/v1/inventory/hosts/web.example.org/attachments
+curl http://localhost:8080/api/v2/inventory/hosts/web.example.org/attachments
 ```
 
 ### 7. Get attachment detail (includes IPs, DHCP IDs, prefix reservations)
 
 ```bash
-curl http://localhost:8080/api/v1/inventory/attachments/{attachment_id}
+curl http://localhost:8080/api/v2/inventory/attachments/{attachment_id}
 ```
 
 Response:
@@ -304,7 +304,7 @@ Use the export templating system to render DHCP configs:
 
 ```bash
 # Create an export run using a built-in template
-curl -X POST http://localhost:8080/api/v1/workflows/export-runs \
+curl -X POST http://localhost:8080/api/v2/workflows/export-runs \
   -H 'Content-Type: application/json' \
   -d '{
     "template_name": "kea-dhcp4-full",
@@ -312,7 +312,7 @@ curl -X POST http://localhost:8080/api/v1/workflows/export-runs \
   }'
 
 # Execute the pending task
-curl -X POST http://localhost:8080/api/v1/workflows/tasks/run-next
+curl -X POST http://localhost:8080/api/v2/workflows/tasks/run-next
 ```
 
 Built-in DHCP templates:

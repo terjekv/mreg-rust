@@ -38,16 +38,16 @@ Deleting an atom that is referenced by any role is rejected (RESTRICT). Deleting
 ### Atom management
 
 ```
-POST   /api/v1/policy/host/atoms              Create atom
-GET    /api/v1/policy/host/atoms              List atoms (paginated)
-GET    /api/v1/policy/host/atoms/{name}       Get atom details
-PATCH  /api/v1/policy/host/atoms/{name}       Update atom description
-DELETE /api/v1/policy/host/atoms/{name}       Delete atom (409 if in use)
+POST   /api/v2/policy/host/atoms              Create atom
+GET    /api/v2/policy/host/atoms              List atoms (paginated)
+GET    /api/v2/policy/host/atoms/{name}       Get atom details
+PATCH  /api/v2/policy/host/atoms/{name}       Update atom description
+DELETE /api/v2/policy/host/atoms/{name}       Delete atom (409 if in use)
 ```
 
 **Create atom:**
 ```json
-POST /api/v1/policy/host/atoms
+POST /api/v2/policy/host/atoms
 {
   "name": "autoconfigure",
   "description": "Host should be auto-configured"
@@ -57,16 +57,16 @@ POST /api/v1/policy/host/atoms
 ### Role management
 
 ```
-POST   /api/v1/policy/host/roles              Create role
-GET    /api/v1/policy/host/roles              List roles (paginated)
-GET    /api/v1/policy/host/roles/{name}       Get role (includes atoms, hosts, labels)
-PATCH  /api/v1/policy/host/roles/{name}       Update role description
-DELETE /api/v1/policy/host/roles/{name}       Delete role (cascades)
+POST   /api/v2/policy/host/roles              Create role
+GET    /api/v2/policy/host/roles              List roles (paginated)
+GET    /api/v2/policy/host/roles/{name}       Get role (includes atoms, hosts, labels)
+PATCH  /api/v2/policy/host/roles/{name}       Update role description
+DELETE /api/v2/policy/host/roles/{name}       Delete role (cascades)
 ```
 
 **Create role:**
 ```json
-POST /api/v1/policy/host/roles
+POST /api/v2/policy/host/roles
 {
   "name": "standard-server",
   "description": "Standard server policy"
@@ -90,14 +90,14 @@ POST /api/v1/policy/host/roles
 ### Membership management
 
 ```
-POST   /api/v1/policy/host/roles/{role}/atoms/{atom}     Add atom to role
-DELETE /api/v1/policy/host/roles/{role}/atoms/{atom}     Remove atom from role
+POST   /api/v2/policy/host/roles/{role}/atoms/{atom}     Add atom to role
+DELETE /api/v2/policy/host/roles/{role}/atoms/{atom}     Remove atom from role
 
-POST   /api/v1/policy/host/roles/{role}/hosts/{host}     Assign host to role
-DELETE /api/v1/policy/host/roles/{role}/hosts/{host}     Remove host from role
+POST   /api/v2/policy/host/roles/{role}/hosts/{host}     Assign host to role
+DELETE /api/v2/policy/host/roles/{role}/hosts/{host}     Remove host from role
 
-POST   /api/v1/policy/host/roles/{role}/labels/{label}   Link label to role
-DELETE /api/v1/policy/host/roles/{role}/labels/{label}   Unlink label from role
+POST   /api/v2/policy/host/roles/{role}/labels/{label}   Link label to role
+DELETE /api/v2/policy/host/roles/{role}/labels/{label}   Unlink label from role
 ```
 
 ## Database schema
@@ -124,8 +124,8 @@ The host policy system in mreg-rust maps directly to the old mreg's `hostpolicy`
 
 | Old mreg | mreg-rust |
 |----------|-----------|
-| `POST /api/v1/hostpolicy/atoms/` | `POST /api/v1/policy/host/atoms` |
-| `POST /api/v1/hostpolicy/roles/` | `POST /api/v1/policy/host/roles` |
-| `PATCH /api/v1/hostpolicy/roles/{name}/hosts/` | `POST /api/v1/policy/host/roles/{name}/hosts/{host}` |
+| `POST /api/v2/hostpolicy/atoms/` | `POST /api/v2/policy/host/atoms` |
+| `POST /api/v2/hostpolicy/roles/` | `POST /api/v2/policy/host/roles` |
+| `PATCH /api/v2/hostpolicy/roles/{name}/hosts/` | `POST /api/v2/policy/host/roles/{name}/hosts/{host}` |
 
 The key difference is URL structure (kebab-case paths, RESTful sub-resources) and that membership operations use individual POST/DELETE rather than PATCH with lists.
