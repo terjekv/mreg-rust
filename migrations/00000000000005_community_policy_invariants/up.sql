@@ -51,6 +51,10 @@ FOR EACH ROW EXECUTE FUNCTION enforce_community_policy();
 
 CREATE FUNCTION enforce_network_community_policy() RETURNS trigger AS $$
 BEGIN
+    -- Clearing a policy also clears its limit, including ON DELETE SET NULL.
+    IF NEW.policy_id IS NULL THEN
+        NEW.max_communities := NULL;
+    END IF;
     IF EXISTS (SELECT 1 FROM communities WHERE network_id = NEW.id
                AND policy_id IS DISTINCT FROM NEW.policy_id) THEN
         RAISE EXCEPTION 'network policy is still referenced by communities' USING ERRCODE = '23514';

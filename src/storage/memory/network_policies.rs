@@ -280,7 +280,7 @@ pub(super) fn list_network_policy_attributes_in_state(
     sort_and_paginate(
         state.network_policy_attributes.values().cloned().collect(),
         &page,
-        &["description", "created_at", "updated_at"],
+        &["name", "description", "created_at", "updated_at"],
         |attribute, field| match field {
             "description" => attribute.description().to_string(),
             "created_at" => attribute.created_at().to_rfc3339(),

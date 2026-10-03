@@ -415,6 +415,7 @@ pub(crate) async fn delete_network_policy(
 #[utoipa::path(
     get,
     path = "/api/v1/policy/network/attributes",
+    params(PageRequest),
     responses((status = 200, body = NetworkPolicyAttributePageResponse)),
     tag = "Policy"
 )]
@@ -422,6 +423,7 @@ pub(crate) async fn delete_network_policy(
 pub(crate) async fn list_network_policy_attributes(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<PageRequest>,
 ) -> Result<HttpResponse, AppError> {
     require(
         &state,
@@ -436,7 +438,7 @@ pub(crate) async fn list_network_policy_attributes(
     let page = state
         .services
         .network_policies()
-        .list_attributes(&PageRequest::all())
+        .list_attributes(&query.into_inner())
         .await?;
     Ok(HttpResponse::Ok().json(PageResponse::from_page(
         page,

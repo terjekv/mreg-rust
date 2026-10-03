@@ -263,32 +263,33 @@ pub(super) fn update(
     command: UpdateNetworkPolicy,
 ) -> Result<NetworkPolicy, AppError> {
     connection.transaction(|connection| {
-        let old = get_by_name(connection, name)?;
-        let new_name = command.name.unwrap_or_else(|| old.name().clone());
-        let description = command
-            .description
-            .map(|value| value.as_str().to_string())
-            .unwrap_or_else(|| old.description().to_string());
-        let pattern = match command.community_template_pattern {
-            UpdateField::Unchanged => old.community_template_pattern().map(str::to_string),
-            UpdateField::Clear => None,
-            UpdateField::Set(value) => Some(value.as_str().to_string()),
+        let (replace_pattern, pattern) = match &command.community_template_pattern {
+            UpdateField::Unchanged => (false, None),
+            UpdateField::Clear => (true, None),
+            UpdateField::Set(value) => (true, Some(value.as_str())),
         };
+        // Preserve omitted fields from the row being updated, including changes
+        // committed while this statement waits for another writer's row lock.
         let row = sql_query(
             "UPDATE network_policies
-             SET name = $2, description = $3, community_template_pattern = $4, updated_at = now()
+             SET name = COALESCE($2, name), description = COALESCE($3, description),
+                 community_template_pattern = CASE WHEN $4 THEN $5 ELSE community_template_pattern END,
+                 updated_at = now()
              WHERE name = $1
              RETURNING id, name::text AS name, description, community_template_pattern,
                        created_at, updated_at",
         )
         .bind::<Text, _>(name)
-        .bind::<Text, _>(new_name.as_str())
-        .bind::<Text, _>(&description)
-        .bind::<Nullable<Text>, _>(&pattern)
+        .bind::<Nullable<Text>, _>(command.name.as_ref().map(|name| name.as_str()))
+        .bind::<Nullable<Text>, _>(command.description.as_ref().map(|value| value.as_str()))
+        .bind::<Bool, _>(replace_pattern)
+        .bind::<Nullable<Text>, _>(pattern)
         .get_result::<NetworkPolicyRow>(connection)
+        .optional()
         .map_err(map_unique(
             "network policy already exists or community template pattern is in use",
-        ))?;
+        ))?
+        .ok_or_else(|| AppError::not_found(format!("network policy '{}' was not found", name)))?;
         if let Some(values) = command.attributes {
             sql_query("DELETE FROM network_policy_attribute_values WHERE policy_id = $1")
                 .bind::<SqlUuid, _>(row.id)
@@ -352,7 +353,7 @@ pub(super) fn list_attributes(
     sort_and_vec_to_page_by(
         attributes,
         &page,
-        &["description", "created_at", "updated_at"],
+        &["name", "description", "created_at", "updated_at"],
         |attribute, field| match field {
             "description" => attribute.description().to_string(),
             "created_at" => attribute.created_at().to_rfc3339(),

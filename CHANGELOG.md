@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking (communities/database):** community creation, including imports and direct storage calls, requires the network's assigned policy and an available community slot. Policy removal/replacement and limit reductions cannot invalidate existing communities. Run migrations `00000000000004_network_policy_attribute_order` and `00000000000005_community_policy_invariants`; repair existing mismatches first as described in `docs/core-mutation-upgrade.md`.
-- **Breaking (validation):** network-policy names are limited to 100 characters; policy and community descriptions must be nonblank; community template identifiers require 1–100 ASCII letters, digits, or underscores and must be unique. Correct invalid persisted data before upgrading; use `null` to clear optional patterns.
+- **Breaking (validation):** network-policy and policy-attribute names are limited to 100 characters; attribute imports validate and normalize names as API writes do. Repair invalid or noncanonical persisted attribute names and resolve normalization collisions before upgrading. Policy and community descriptions must be nonblank; community template identifiers require 1–100 ASCII letters, digits, or underscores and must be unique. Correct invalid persisted data before upgrading; use `null` to clear optional patterns.
 - **Breaking (Rust API/configuration):** new validated update commands and transactional store operations are required by custom storage implementations. Explicit `Config` literals must supply `seed_data: SeedData::default()`. Implement `TxStorage::lock_seed_data` for the lifetime of each seed transaction. Configure desired initial policy attributes in a seed TOML file and `MREG_PROTECTED_POLICY_ATTRIBUTES`; no attribute name is implicitly created or protected.
 
 - **Breaking (Rust API):** pagination requests now have private fields and use validated `PageLimit` values. Replace `PageRequest` literals and `deserialize_page_limit` with `PageRequest::new` and `Option<PageLimit>`; use `PageRequest::all()` for trusted internal enumeration. Host-policy membership APIs and role membership vectors now require `Hostname`, `LabelName`, and `HostPolicyName` instead of strings.
@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced the `iai-callgrind` benchmark harness with Gungraun 0.19.4 under `rust-pr-bench`; benchmark target names remain stable so the migration pull request retains base-versus-head measurements.
 
 ### Fixed
+
+- Concurrent PostgreSQL policy PATCH requests preserve omitted fields instead of overwriting unrelated edits.
+- PostgreSQL policy-attribute imports use validated names for definitions and memberships, reject normalized duplicates, and roll back invalid batches without breaking attribute listing.
+- Removing a network policy clears its networks' community limits consistently across both backends, including PostgreSQL foreign-key cascades.
+- Native policy-attribute listing honors page limits, cursors and sorting, with the standard default of 100 and maximum of 1000 entries per page.
 
 - Automatic IP allocation rejects frozen networks before creating assignments or attachments, including reuse of explicit attachments. Memory host deletion also removes attachment lookup entries.
 - Adding nameservers to a memory-backed delegation advances the parent SOA serial; unchanged nameservers and comment-only edits preserve it.
