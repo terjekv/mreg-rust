@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use uuid::Uuid;
@@ -57,6 +59,65 @@ pub(super) fn create_host_group_in_state(
         now,
     )?;
     state.host_groups.insert(key, group.clone());
+    Ok(group)
+}
+
+pub(super) fn replace_host_group_in_state(
+    state: &mut MemoryState,
+    name: &HostGroupName,
+    command: CreateHostGroup,
+) -> Result<HostGroup, AppError> {
+    if command.name() != name {
+        return Err(AppError::validation(
+            "host group replacement cannot rename the group",
+        ));
+    }
+    let old = get_host_group_by_name_in_state(state, name)?;
+    let mut pending = command.parent_groups().to_vec();
+    let mut visited = HashSet::new();
+    while let Some(parent) = pending.pop() {
+        if &parent == name {
+            return Err(AppError::validation(
+                "host group parents would form a cycle",
+            ));
+        }
+        if visited.insert(parent.clone()) {
+            let group = get_host_group_by_name_in_state(state, &parent)?;
+            pending.extend_from_slice(group.parent_groups());
+        }
+    }
+    for host in command.hosts() {
+        if !state.hosts.contains_key(host.as_str()) {
+            return Err(AppError::not_found(format!(
+                "host '{}' was not found",
+                host.as_str()
+            )));
+        }
+    }
+    for parent in command.parent_groups() {
+        if parent == name {
+            return Err(AppError::validation("host group cannot be its own parent"));
+        }
+        if !state.host_groups.contains_key(parent.as_str()) {
+            return Err(AppError::not_found(format!(
+                "host group '{}' was not found",
+                parent.as_str()
+            )));
+        }
+    }
+    let group = HostGroup::restore(
+        old.id(),
+        name.clone(),
+        command.description(),
+        command.hosts().to_vec(),
+        command.parent_groups().to_vec(),
+        command.owner_groups().to_vec(),
+        old.created_at(),
+        Utc::now(),
+    )?;
+    state
+        .host_groups
+        .insert(name.as_str().to_string(), group.clone());
     Ok(group)
 }
 

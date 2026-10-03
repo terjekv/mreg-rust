@@ -223,6 +223,8 @@ async fn invalid_paths_and_queries_return_validation_errors(#[case] path: &str) 
 #[case("CreateForwardZoneRequest", "refresh", "integer")]
 #[case("CreateNetworkRequest", "cidr", "string")]
 #[case("CreateLabelRequest", "name", "string")]
+#[case("NetworkPolicyAttributeValueRequest", "name", "string")]
+#[case("CreateNetworkPolicyAttributeRequest", "name", "string")]
 fn newtypes_keep_primitive_openapi_shapes(
     #[case] schema: &str,
     #[case] field: &str,
@@ -279,3 +281,80 @@ dual_backend_test!(policy_membership_normalizes_names, |ctx| {
         ([host].as_slice(), [label].as_slice())
     );
 });
+
+#[rstest]
+#[case("POST", "/policy/network/policies", json!({"name":"policy","description":"Policy","attributes":[{"name":"bad name","value":true}]}), StatusCode::BAD_REQUEST)]
+#[case("PATCH", "/policy/network/policies/missing", json!({"attributes":[{"name":"bad name","value":true}]}), StatusCode::BAD_REQUEST)]
+#[case("POST", "/policy/network/attributes", json!({"name":"bad name"}), StatusCode::BAD_REQUEST)]
+#[case("PATCH", "/policy/network/attributes/missing", json!({"name":"bad name"}), StatusCode::BAD_REQUEST)]
+#[case("POST", "/policy/network/policies", json!({"name":"policy","description":"Policy","attributes":[{"name":"valid","value":false}]}), StatusCode::FORBIDDEN)]
+#[case("PATCH", "/policy/network/policies/missing", json!({"attributes":[{"name":"valid","value":false}]}), StatusCode::FORBIDDEN)]
+#[case("POST", "/policy/network/attributes", json!({"name":"valid"}), StatusCode::FORBIDDEN)]
+#[case("PATCH", "/policy/network/attributes/missing", json!({"name":"valid"}), StatusCode::FORBIDDEN)]
+#[actix_web::test]
+async fn policy_attribute_validation_precedes_authorization(
+    #[case] method: &str,
+    #[case] path: &str,
+    #[case] body: Value,
+    #[case] expected: StatusCode,
+) {
+    use actix_web::{App, http::Method, test, web};
+    use mreg_rust::{authz::AuthorizerClient, config::Config};
+    let mut state = common::memory_state();
+    state.authz = AuthorizerClient::from_config(&Config::default()).unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(|cfg| mreg_rust::api::v1::configure(cfg, false)),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::default()
+            .method(method.parse::<Method>().unwrap())
+            .uri(path)
+            .set_json(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), expected);
+}
+
+#[rstest]
+#[case(json!({}), "original")]
+#[case(json!({"name":null}), "original")]
+#[case(json!({"name":"  RENAMED  "}), "renamed")]
+#[actix_web::test]
+async fn attribute_rename_preserves_patch_and_wire_semantics(
+    #[case] patch: Value,
+    #[case] expected: &str,
+) {
+    let ctx = common::TestCtx::memory();
+    ctx.post(
+        "/policy/network/attributes",
+        json!({"name":" ORIGINAL ","description":"Attribute"}),
+    )
+    .await;
+    let (status, body) = ctx
+        .patch_json("/policy/network/attributes/original", patch)
+        .await;
+    assert_eq!(
+        (status, body["name"].clone()),
+        (StatusCode::OK, json!(expected))
+    );
+}
+
+#[actix_web::test]
+async fn policy_attribute_values_normalize_names_and_preserve_false() {
+    let ctx = common::TestCtx::memory();
+    ctx.post(
+        "/policy/network/attributes",
+        json!({"name":"Flag","description":"Attribute"}),
+    )
+    .await;
+    let (status, body) = ctx.post_json("/policy/network/policies", json!({"name":"policy","description":"Policy", "attributes":[{"name":" FLAG ","value":false}]})).await;
+    assert_eq!(
+        (status, body["attributes"].clone()),
+        (StatusCode::CREATED, json!([{"name":"flag","value":false}]))
+    );
+}

@@ -503,6 +503,14 @@ pub struct AttachmentCommunityAssignment {
 }
 
 impl AttachmentCommunityAssignment {
+    pub(crate) fn rename_policy(&mut self, name: NetworkPolicyName) {
+        self.policy_name = name;
+    }
+
+    pub(crate) fn rename_community(&mut self, name: CommunityName) {
+        self.community_name = name;
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn restore(
         id: Uuid,

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{Page, PageRequest},
         types::{CidrValue, CommunityName, NetworkPolicyName},
@@ -130,11 +130,17 @@ pub(in crate::storage::postgres) fn create(
             PostgresStorage::resolve_network_policy_id(connection, command.policy_name())?;
 
         // Resolve network
-        let network = PostgresStorage::query_network_by_cidr(connection, command.network_cidr())?;
+        let network = PostgresStorage::lock_network_by_cidr(connection, command.network_cidr())?;
         if network.frozen() {
             return Err(AppError::conflict("network is frozen"));
         }
 
+        let count = run_count_query(
+            connection,
+            "SELECT COUNT(*) AS count FROM communities WHERE network_id = $1::uuid",
+            &[network.id().to_string()],
+        )?;
+        network.validate_new_community(policy_id, count)?;
         let row = sql_query(
             "INSERT INTO communities (policy_id, network_id, name, description)
              VALUES ($1, $2, $3, $4)
@@ -177,6 +183,41 @@ pub(super) fn get_by_id(
     .optional()?
     .ok_or_else(|| AppError::not_found("community was not found"))?;
 
+    row_to_community(row)
+}
+
+pub(in crate::storage::postgres) fn update(
+    connection: &mut PgConnection,
+    community_id: Uuid,
+    command: UpdateCommunity,
+) -> Result<Community, AppError> {
+    let old = get_by_id(connection, community_id)?;
+    let network = PostgresStorage::query_network_by_cidr(connection, old.network_cidr())?;
+    if network.frozen() {
+        return Err(AppError::conflict("network is frozen"));
+    }
+    let name = command.name.unwrap_or_else(|| old.name().clone());
+    let description = command
+        .description
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| old.description().to_string());
+    let row = sql_query(
+        "UPDATE communities
+         SET name = $1, description = $2, updated_at = now()
+         WHERE id = $3
+         RETURNING id, policy_id,
+                   $4::text AS policy_name,
+                   $5::text AS network_cidr,
+                   name::text AS name, description,
+                   created_at, updated_at",
+    )
+    .bind::<Text, _>(name.as_str())
+    .bind::<Text, _>(description)
+    .bind::<SqlUuid, _>(community_id)
+    .bind::<Text, _>(old.policy_name().as_str())
+    .bind::<Text, _>(old.network_cidr().as_str())
+    .get_result::<CommunityRow>(connection)
+    .map_err(map_unique("community already exists"))?;
     row_to_community(row)
 }
 
@@ -259,6 +300,16 @@ impl CommunityStore for PostgresStorage {
     async fn get_community(&self, community_id: Uuid) -> Result<Community, AppError> {
         self.database
             .run(move |connection| get_by_id(connection, community_id))
+            .await
+    }
+
+    async fn update_community(
+        &self,
+        community_id: Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError> {
+        self.database
+            .run(move |connection| update(connection, community_id, command))
             .await
     }
 

@@ -532,6 +532,42 @@ impl CreateForwardZoneDelegation {
     }
 }
 
+/// Partial update of a delegation. Identity and parent zone cannot change.
+#[derive(Clone, Debug, Default)]
+pub struct UpdateForwardZoneDelegation {
+    comment: Option<String>,
+    nameservers: Option<Vec<DnsName>>,
+}
+
+impl UpdateForwardZoneDelegation {
+    pub fn new(
+        comment: Option<String>,
+        nameservers: Option<Vec<DnsName>>,
+    ) -> Result<Self, AppError> {
+        if nameservers.as_ref().is_some_and(Vec::is_empty) {
+            return Err(AppError::validation(
+                "a zone delegation requires at least one nameserver",
+            ));
+        }
+        let nameservers = nameservers.map(|mut names| {
+            names.sort();
+            names.dedup();
+            names
+        });
+        Ok(Self {
+            comment,
+            nameservers,
+        })
+    }
+
+    pub fn comment(&self) -> Option<&str> {
+        self.comment.as_deref()
+    }
+    pub fn nameservers(&self) -> Option<&[DnsName]> {
+        self.nameservers.as_deref()
+    }
+}
+
 /// Sub-zone delegation within a reverse zone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReverseZoneDelegation {

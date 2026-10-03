@@ -1,3 +1,9 @@
+use crate::domain::zone::UpdateForwardZoneDelegation;
+use crate::domain::{
+    resource_records::{CreateRecordInstance, RecordOwnerKind},
+    types::record_type_names,
+};
+use serde_json::json;
 use std::collections::HashMap;
 
 use diesel::{
@@ -184,6 +190,95 @@ impl PostgresStorage {
             }
 
             Ok(())
+        })
+    }
+
+    pub(in crate::storage::postgres) fn update_forward_zone_delegation_impl(
+        connection: &mut PgConnection,
+        delegation_id: Uuid,
+        command: UpdateForwardZoneDelegation,
+    ) -> Result<ForwardZoneDelegation, AppError> {
+        connection.transaction(|connection| {
+            let row = forward_zone_delegations::table
+                .filter(forward_zone_delegations::id.eq(delegation_id))
+                .select(ForwardDelegationRow::as_select())
+                .for_update()
+                .first::<ForwardDelegationRow>(connection)
+                .optional()?
+                .ok_or_else(|| AppError::not_found("forward zone delegation was not found"))?;
+            let old_ns = forward_zone_delegation_nameservers::table
+                .inner_join(nameservers::table)
+                .filter(forward_zone_delegation_nameservers::delegation_id.eq(delegation_id))
+                .select(nameservers::name)
+                .order(nameservers::name)
+                .load::<String>(connection)?
+                .into_iter()
+                .map(DnsName::new)
+                .collect::<Result<Vec<_>, _>>()?;
+            let old = row.into_forward_delegation(old_ns)?;
+            let nameserver_values = command.nameservers().unwrap_or(old.nameservers());
+            let ns_ids = Self::lookup_nameserver_ids(connection, nameserver_values)?;
+            let row = diesel::update(
+                forward_zone_delegations::table
+                    .filter(forward_zone_delegations::id.eq(delegation_id)),
+            )
+            .set((
+                forward_zone_delegations::comment.eq(command.comment().unwrap_or(old.comment())),
+                forward_zone_delegations::updated_at.eq(diesel::dsl::now),
+            ))
+            .returning(ForwardDelegationRow::as_returning())
+            .get_result(connection)?;
+            if command.nameservers().is_some() {
+                diesel::delete(
+                    forward_zone_delegation_nameservers::table.filter(
+                        forward_zone_delegation_nameservers::delegation_id.eq(delegation_id),
+                    ),
+                )
+                .execute(connection)?;
+                for ns_id in ns_ids {
+                    insert_into(forward_zone_delegation_nameservers::table)
+                        .values((
+                            forward_zone_delegation_nameservers::delegation_id.eq(delegation_id),
+                            forward_zone_delegation_nameservers::nameserver_id.eq(ns_id),
+                        ))
+                        .execute(connection)?;
+                }
+                let records = Self::find_records_by_owner_in_conn(connection, delegation_id)?
+                    .into_iter()
+                    .filter(|record| {
+                        record.owner_id() == Some(delegation_id)
+                            && record.owner_name() == old.name().as_str()
+                            && record.type_name().as_str() == "NS"
+                    })
+                    .collect::<Vec<_>>();
+                let ttl = records.first().and_then(|record| record.ttl());
+                for record in &records {
+                    if !nameserver_values
+                        .iter()
+                        .any(|ns| record.data()["nsdname"].as_str() == Some(ns.as_str()))
+                    {
+                        Self::delete_record_in_conn(connection, record.id())?;
+                    }
+                }
+                for ns in nameserver_values {
+                    if !records
+                        .iter()
+                        .any(|record| record.data()["nsdname"].as_str() == Some(ns.as_str()))
+                    {
+                        Self::create_record_in_conn(
+                            connection,
+                            CreateRecordInstance::new(
+                                record_type_names::ns(),
+                                RecordOwnerKind::ForwardZoneDelegation,
+                                old.name().as_str(),
+                                ttl,
+                                json!({"nsdname": ns.as_str()}),
+                            )?,
+                        )?;
+                    }
+                }
+            }
+            row.into_forward_delegation(nameserver_values.to_vec())
         })
     }
 

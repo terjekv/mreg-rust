@@ -803,6 +803,7 @@ impl ExportStore for PostgresStorage {
         self.database
             .run(move |connection| {
                 connection.transaction::<ExportRun, AppError, _>(|connection| {
+                    Self::ensure_builtin_export_templates(connection)?;
                     let template_id = export_templates::table
                         .filter(export_templates::name.eq(command.template_name()))
                         .select(export_templates::id)

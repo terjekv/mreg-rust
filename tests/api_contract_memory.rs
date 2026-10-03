@@ -140,16 +140,16 @@ async fn policy_mapping_contract_shape_is_stable() {
 
     for (uri, body) in [
         (
+            "/policy/network/policies",
+            json!({"name":"campus-core","description":"Campus core policy"}),
+        ),
+        (
             "/inventory/networks",
-            json!({"cidr":"10.0.0.0/24","description":"LAN","reserved":3}),
+            json!({"cidr":"10.0.0.0/24","description":"LAN","reserved":3,"policy_name":"campus-core"}),
         ),
         (
             "/inventory/hosts",
             json!({"name":"app.example.org","comment":"app host"}),
-        ),
-        (
-            "/policy/network/policies",
-            json!({"name":"campus-core","description":"Campus core policy"}),
         ),
         (
             "/policy/network/communities",

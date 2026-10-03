@@ -1,3 +1,4 @@
+use crate::domain::zone::UpdateForwardZoneDelegation;
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -22,7 +23,8 @@ use crate::{
 
 use super::{
     MemoryState, MemoryStorage, bump_zone_serial_in_state,
-    delete_records_by_name_and_type_in_state, paginate_by_cursor, records::create_record_in_state,
+    delete_records_by_name_and_type_in_state, delete_records_by_owner_in_state, paginate_by_cursor,
+    records::{create_record_in_state, create_record_with_serial_bump_in_state},
     sort_and_paginate,
 };
 use super::{
@@ -384,14 +386,85 @@ pub(super) fn delete_forward_zone_delegation_in_state(
 ) -> Result<(), AppError> {
     if let Some(delegation) = state.forward_zone_delegations.get(&delegation_id) {
         let zone_id = delegation.zone_id();
-        let del_name = delegation.name().as_str().to_string();
-        delete_records_by_name_and_type_in_state(state, &del_name, "NS");
+        delete_records_by_owner_in_state(state, delegation_id);
         bump_zone_serial_in_state(state, zone_id);
     }
     match state.forward_zone_delegations.remove(&delegation_id) {
         Some(_removed) => Ok(()),
         None => Err(AppError::not_found("forward zone delegation was not found")),
     }
+}
+
+pub(super) fn update_forward_zone_delegation_in_state(
+    state: &mut MemoryState,
+    delegation_id: Uuid,
+    command: UpdateForwardZoneDelegation,
+) -> Result<ForwardZoneDelegation, AppError> {
+    let old = state
+        .forward_zone_delegations
+        .get(&delegation_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("forward zone delegation was not found"))?;
+    let nameservers = command.nameservers().unwrap_or(old.nameservers());
+    for nameserver in nameservers {
+        if !state.nameservers.contains_key(nameserver.as_str()) {
+            return Err(AppError::not_found(format!(
+                "nameserver '{}' was not found",
+                nameserver
+            )));
+        }
+    }
+    let item = ForwardZoneDelegation::restore(
+        old.id(),
+        old.zone_id(),
+        old.name().clone(),
+        command.comment().unwrap_or(old.comment()).to_string(),
+        nameservers.to_vec(),
+        old.created_at(),
+        Utc::now(),
+    )?;
+    if command.nameservers().is_some() {
+        let records = state
+            .records
+            .iter()
+            .filter(|record| {
+                record.owner_id() == Some(old.id())
+                    && record.owner_name() == old.name().as_str()
+                    && record.type_name().as_str() == "NS"
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let ttl = records.first().and_then(|record| record.ttl());
+        for record in &records {
+            if !nameservers
+                .iter()
+                .any(|ns| record.data()["nsdname"].as_str() == Some(ns.as_str()))
+            {
+                super::records::delete_record_in_state(state, record.id())?;
+            }
+        }
+        for ns in nameservers {
+            if !records
+                .iter()
+                .any(|record| record.data()["nsdname"].as_str() == Some(ns.as_str()))
+            {
+                create_record_with_serial_bump_in_state(
+                    state,
+                    CreateRecordInstance::new(
+                        record_type_names::ns(),
+                        RecordOwnerKind::ForwardZoneDelegation,
+                        old.name().as_str(),
+                        ttl,
+                        json!({"nsdname": ns.as_str()}),
+                    )?,
+                )?;
+            }
+        }
+    }
+    state
+        .forward_zone_delegations
+        .insert(delegation_id, item.clone());
+    Ok(item)
 }
 
 pub(super) fn list_reverse_zones_in_state(

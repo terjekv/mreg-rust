@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for DomainNameValue {
     }
 }
 
-/// Validated hostname (subset of DNS name, no underscores or wildcards).
+/// Validated infrastructure hostname (a strict subset of DNS names).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Hostname(DnsName);
 

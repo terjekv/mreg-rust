@@ -26,7 +26,7 @@ use crate::{
         host_policy::{CreateHostPolicyAtom, CreateHostPolicyRole},
         imports::{CreateImportBatch, ImportBatchSummary, ImportItem, ImportKind, ImportOperation},
         network::{CreateExcludedRange, CreateNetwork},
-        network_policy::CreateNetworkPolicy,
+        network_policy::{CreateNetworkPolicy, CreateNetworkPolicyAttribute},
         pagination::{Page, PageRequest},
         ptr_override::CreatePtrOverride,
         resource_records::{
@@ -37,8 +37,8 @@ use crate::{
         types::{
             BacnetIdentifier, CidrValue, CommunityName, DhcpPriority, DnsName, EmailAddressValue,
             HostGroupName, HostPolicyName, Hostname, IpAddressValue, LabelName, MacAddressValue,
-            NetworkPolicyName, OwnerGroupName, RecordTypeName, ReservedCount, SerialNumber,
-            SoaSeconds, Ttl, VlanId, ZoneName,
+            NetworkPolicyAttributeName, NetworkPolicyName, OwnerGroupName, RecordTypeName,
+            ReservedCount, SerialNumber, SoaSeconds, Ttl, VlanId, ZoneName,
         },
         zone::{
             CreateForwardZone, CreateForwardZoneDelegation, CreateReverseZone,
@@ -227,7 +227,8 @@ impl PostgresStorage {
              VALUES
                 ($1::cidr, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING id, network::text AS network, description, vlan, dns_delegated,
-                       category, location, frozen, reserved, created_at, updated_at",
+                       category, location, frozen, reserved, max_communities, policy_id,
+                       created_at, updated_at",
         )
         .bind::<Text, _>(command.cidr().as_str())
         .bind::<Text, _>(command.description())
@@ -347,17 +348,15 @@ impl PostgresStorage {
         attributes: &Value,
         refs: &BTreeMap<String, String>,
     ) -> Result<Value, AppError> {
-        let name = resolve_string(attributes, "name", refs)?;
-        let description = resolve_string(attributes, "description", refs)?;
-        sql_query(
-            "INSERT INTO network_policy_attributes (name, description)
-             VALUES ($1, $2)",
-        )
-        .bind::<Text, _>(&name)
-        .bind::<Text, _>(&description)
-        .execute(connection)
-        .map_err(map_unique("network policy attribute already exists"))?;
-        Ok(Value::String(name))
+        let name = NetworkPolicyAttributeName::new(resolve_string(attributes, "name", refs)?)?;
+        let attribute = super::network_policies::create_attribute(
+            connection,
+            CreateNetworkPolicyAttribute::new(
+                name,
+                resolve_string(attributes, "description", refs)?,
+            ),
+        )?;
+        Ok(Value::String(attribute.name().as_str().to_string()))
     }
 
     fn import_network_policy_attribute_value(
@@ -365,18 +364,22 @@ impl PostgresStorage {
         attributes: &Value,
         refs: &BTreeMap<String, String>,
     ) -> Result<Value, AppError> {
-        let policy_name = resolve_string(attributes, "policy_name", refs)?;
-        let attribute_name = resolve_string(attributes, "attribute_name", refs)?;
+        let policy_name = NetworkPolicyName::new(resolve_string(attributes, "policy_name", refs)?)?;
+        let attribute_name =
+            NetworkPolicyAttributeName::new(resolve_string(attributes, "attribute_name", refs)?)?;
         let value = resolve_bool(attributes, "value")?
             .ok_or_else(|| AppError::validation("missing required import attribute 'value'"))?;
         let updated = sql_query(
-            "INSERT INTO network_policy_attribute_values (policy_id, attribute_id, value)
-             SELECT p.id, a.id, $3
+            "INSERT INTO network_policy_attribute_values (policy_id, attribute_id, value, position)
+             SELECT p.id, a.id, $3,
+                    COALESCE((SELECT MAX(v.position) + 1
+                              FROM network_policy_attribute_values v
+                              WHERE v.policy_id = p.id), 0)
              FROM network_policies p, network_policy_attributes a
              WHERE p.name = $1 AND a.name = $2",
         )
-        .bind::<Text, _>(&policy_name)
-        .bind::<Text, _>(&attribute_name)
+        .bind::<Text, _>(policy_name.as_str())
+        .bind::<Text, _>(attribute_name.as_str())
         .bind::<Bool, _>(value)
         .execute(connection)
         .map_err(map_unique("network policy attribute value already exists"))?;
@@ -1096,6 +1099,14 @@ impl ImportStore for PostgresStorage {
                                     item.kind(),
                                     message
                                 )),
+                                AppError::NotAcceptable(message) => {
+                                    AppError::not_acceptable(format!(
+                                        "import item '{}' ({}) failed: {}",
+                                        item.reference(),
+                                        item.kind(),
+                                        message
+                                    ))
+                                }
                                 AppError::Forbidden(message) => AppError::forbidden(format!(
                                     "import item '{}' ({}) failed: {}",
                                     item.reference(),

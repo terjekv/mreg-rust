@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use utoipa::ToSchema;
 
-use crate::errors::AppError;
+use crate::{domain::seeds::SeedData, errors::AppError};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum StorageBackendSetting {
@@ -154,6 +154,7 @@ pub struct Config {
     pub json_payload_limit_bytes: usize,
     pub database_url: Option<String>,
     pub run_migrations: bool,
+    pub seed_data: SeedData,
     pub storage_backend: StorageBackendSetting,
     pub treetop_url: Option<String>,
     pub treetop_timeout_ms: u64,
@@ -186,6 +187,7 @@ impl Default for Config {
             json_payload_limit_bytes: 1024 * 1024,
             database_url: None,
             run_migrations: true,
+            seed_data: SeedData::default(),
             storage_backend: StorageBackendSetting::Auto,
             treetop_url: None,
             treetop_timeout_ms: 1500,
@@ -238,6 +240,11 @@ impl Config {
             )?,
             database_url: env::var("MREG_DATABASE_URL").ok(),
             run_migrations: parse_bool_or_default("MREG_RUN_MIGRATIONS", true)?,
+            seed_data: env::var("MREG_SEED_CONFIG_PATH")
+                .ok()
+                .map(|path| read_seed_data_file(&path))
+                .transpose()?
+                .unwrap_or_default(),
             storage_backend: parse_storage_backend("MREG_STORAGE_BACKEND")?,
             treetop_url: env::var("MREG_TREETOP_URL").ok(),
             treetop_timeout_ms: parse_or_default("MREG_TREETOP_TIMEOUT_MS", 1500)?,
@@ -305,6 +312,17 @@ impl Config {
         }
         Ok(())
     }
+}
+
+fn read_seed_data_file(path: &str) -> Result<SeedData, AppError> {
+    let contents = fs::read_to_string(path).map_err(|error| {
+        AppError::config(format!(
+            "cannot read MREG_SEED_CONFIG_PATH '{path}': {error}"
+        ))
+    })?;
+    toml::from_str(&contents).map_err(|error| {
+        AppError::config(format!("invalid MREG_SEED_CONFIG_PATH '{path}': {error}"))
+    })
 }
 
 fn default_auth_timeout_ms() -> u64 {
@@ -864,6 +882,24 @@ groups = ["ops", "net"]
             }
             _ => panic!("expected local provider"),
         }
+    }
+
+    #[test]
+    fn seed_file_errors_include_configured_path() {
+        let path = temp_toml_path("invalid-seeds");
+        fs::write(&path, "[[items]]\nkind = 'invalid'\nname = 'test'\n").unwrap();
+        let error = read_seed_data_file(path.to_str().unwrap()).unwrap_err();
+        fs::remove_file(&path).unwrap();
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn missing_seed_file_fails_with_config_error() {
+        let path = temp_toml_path("missing-seeds");
+        assert!(matches!(
+            read_seed_data_file(path.to_str().unwrap()),
+            Err(AppError::Config(_))
+        ));
     }
 
     #[test]

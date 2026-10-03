@@ -242,7 +242,7 @@ fn build_extended_import_batch(
             json!({
                 "name": policy,
                 "description": "Imported policy",
-                "community_template_pattern": "campus"
+                "community_template_pattern": ctx.name("campus").replace('-', "_")
             }),
         )?,
         ImportItem::new(
@@ -1112,7 +1112,10 @@ async fn postgres_imports_extended_legacy_entities() -> Result<(), Box<dyn std::
         .network_policies()
         .get_network_policy_by_name(&NetworkPolicyName::new(&fixture.policy)?)
         .await?;
-    assert_eq!(imported_policy.community_template_pattern(), Some("campus"));
+    assert_eq!(
+        imported_policy.community_template_pattern(),
+        Some(ctx.name("campus").replace('-', "_").as_str())
+    );
 
     let imported_community = storage
         .communities()
@@ -1637,6 +1640,7 @@ async fn postgres_host_detail_query_budget_stays_batched() -> Result<(), Box<dyn
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr_a, &policy).await;
     assert_eq!(
         ctx.post(
             "/policy/network/communities",
@@ -2223,6 +2227,7 @@ async fn postgres_community_and_assignment_filters_use_sql()
     let community_alpha = ctx.name("alpha-community");
     let community_beta = ctx.name("beta-community");
     for (network, name) in [(&cidr_a, &community_alpha), (&cidr_b, &community_beta)] {
+        ctx.assign_network_policy(network, &policy).await;
         assert_eq!(
             ctx.post(
                 "/policy/network/communities",
@@ -2400,6 +2405,7 @@ async fn postgres_delete_host_cascades_attachment_graph() -> Result<(), Box<dyn 
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr, &policy).await;
     assert_eq!(
         ctx.post(
             "/policy/network/communities",
@@ -2516,6 +2522,7 @@ async fn postgres_network_delete_rejects_related_attachment_state()
         .await,
         actix_web::http::StatusCode::CREATED
     );
+    ctx.assign_network_policy(&cidr, &policy).await;
     assert_eq!(
         ctx.post(
             "/policy/network/communities",

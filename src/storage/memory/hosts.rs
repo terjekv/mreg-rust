@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -71,6 +71,15 @@ fn insert_host_record_in_state(
 fn assign_ip_in_state(
     state: &mut MemoryState,
     command: &AssignIpAddress,
+) -> Result<IpAddressAssignment, AppError> {
+    assign_ip_with_id_in_state(state, command, Uuid::new_v4(), None)
+}
+
+fn assign_ip_with_id_in_state(
+    state: &mut MemoryState,
+    command: &AssignIpAddress,
+    assignment_id: Uuid,
+    created_at: Option<DateTime<Utc>>,
 ) -> Result<IpAddressAssignment, AppError> {
     let host = state
         .hosts
@@ -152,6 +161,9 @@ fn assign_ip_in_state(
                 "requested network does not match the attachment network",
             ));
         }
+        if network.frozen() {
+            return Err(AppError::conflict("network is frozen"));
+        }
         let address = match command.allocation() {
             AllocationPolicy::FirstFree => allocate_address_in_network(state, &network)?,
             AllocationPolicy::Random => allocate_random_address_in_network(state, &network)?,
@@ -159,11 +171,10 @@ fn assign_ip_in_state(
         (network, address)
     };
 
-    let key = address.as_str();
-    if state.ip_addresses.contains_key(&key) {
+    if state.ip_addresses.contains_key(&address) {
         return Err(AppError::conflict(format!(
             "IP address '{}' is already allocated",
-            key
+            address.as_str()
         )));
     }
 
@@ -179,16 +190,16 @@ fn assign_ip_in_state(
         )?
     };
     let assignment = IpAddressAssignment::restore(
-        Uuid::new_v4(),
+        assignment_id,
         host.id(),
         attachment.id(),
         address,
         network.id(),
         attachment.mac_address().cloned(),
-        now,
+        created_at.unwrap_or(now),
         now,
     )?;
-    state.ip_addresses.insert(key, assignment.clone());
+    state.ip_addresses.insert(address, assignment.clone());
 
     // Auto-create Ethernet DHCP identifiers from EUI-48 addresses only.
     if let Some(mac) = attachment
@@ -287,7 +298,7 @@ fn ensure_address_is_usable(
             "IP address falls inside an excluded range",
         ));
     }
-    if state.ip_addresses.contains_key(&address.as_str()) {
+    if state.ip_addresses.contains_key(address) {
         return Err(AppError::conflict(format!(
             "IP address '{}' is already allocated",
             address.as_str()
@@ -645,6 +656,9 @@ pub(super) fn delete_host_in_state(
         .host_attachments
         .retain(|id, _| !attachment_ids.contains(id));
     state
+        .host_attachment_keys
+        .retain(|_, id| !attachment_ids.contains(id));
+    state
         .host_community_assignments
         .retain(|_, assignment| assignment.host_id() != host.id());
     state
@@ -771,12 +785,11 @@ pub(super) fn get_ip_address_in_state(
     state: &MemoryState,
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
     state
         .ip_addresses
-        .get(&key)
+        .get(address)
         .cloned()
-        .ok_or_else(|| AppError::not_found(format!("IP address {key}")))
+        .ok_or_else(|| AppError::not_found(format!("IP address {}", address.as_str())))
 }
 
 pub(super) fn assign_ip_address_in_state(
@@ -930,9 +943,11 @@ pub(super) fn update_ip_address_in_state(
     address: &IpAddressValue,
     command: UpdateIpAddress,
 ) -> Result<IpAddressAssignment, AppError> {
-    let key = address.as_str();
-    let existing = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
-        AppError::not_found(format!("IP address assignment '{}' was not found", key))
+    let existing = state.ip_addresses.get(address).cloned().ok_or_else(|| {
+        AppError::not_found(format!(
+            "IP address assignment '{}' was not found",
+            address.as_str()
+        ))
     })?;
     let network = state
         .networks
@@ -954,7 +969,7 @@ pub(super) fn update_ip_address_in_state(
         existing.created_at(),
         now,
     )?;
-    state.ip_addresses.insert(key.clone(), updated.clone());
+    state.ip_addresses.insert(*address, updated.clone());
     Ok(updated)
 }
 
@@ -963,7 +978,7 @@ pub(super) fn unassign_ip_address_in_state(
     address: &IpAddressValue,
 ) -> Result<IpAddressAssignment, AppError> {
     let key = address.as_str();
-    let assignment = state.ip_addresses.get(&key).cloned().ok_or_else(|| {
+    let assignment = state.ip_addresses.get(address).cloned().ok_or_else(|| {
         AppError::not_found(format!("IP address assignment '{}' was not found", key))
     })?;
     let network = state
@@ -974,7 +989,11 @@ pub(super) fn unassign_ip_address_in_state(
     if network.frozen() {
         return Err(AppError::conflict("network is frozen"));
     }
-    state.ip_addresses.remove(&key);
+    state.ip_addresses.remove(address);
+    state.ptr_overrides.remove(&address.as_str());
+    state
+        .host_community_assignments
+        .retain(|_, mapping| mapping.ip_address_id() != assignment.id());
 
     let managed_record_ids = state
         .managed_ip_records
@@ -991,6 +1010,82 @@ pub(super) fn unassign_ip_address_in_state(
     }
 
     Ok(assignment)
+}
+
+pub(super) fn move_ip_address_in_state(
+    state: &mut MemoryState,
+    old_address: &IpAddressValue,
+    command: AssignIpAddress,
+) -> Result<IpAddressAssignment, AppError> {
+    let old = get_ip_address_in_state(state, old_address)?;
+    if state.ptr_overrides.contains_key(&old_address.as_str()) {
+        return Err(AppError::conflict(
+            "remove the PTR override before moving the IP address",
+        ));
+    }
+
+    let new_address = command
+        .address()
+        .copied()
+        .ok_or_else(|| AppError::validation("IP address move requires an explicit address"))?;
+    let new_network = if let Some(id) = command.attachment_id() {
+        let attachment = state
+            .host_attachments
+            .get(&id)
+            .ok_or_else(|| AppError::not_found("host attachment was not found"))?;
+        state
+            .networks
+            .get(&attachment.network_cidr().as_str())
+            .cloned()
+            .ok_or_else(|| AppError::not_found("attachment network was not found"))?
+    } else {
+        most_specific_network_for_address(state, &new_address)?
+    };
+    let related = state
+        .host_community_assignments
+        .values()
+        .filter(|item| item.ip_address_id() == old.id())
+        .cloned()
+        .collect::<Vec<_>>();
+    for item in &related {
+        let community = state
+            .communities
+            .get(&item.community_id())
+            .ok_or_else(|| AppError::not_found("community assignment target was not found"))?;
+        if community.network_cidr() != new_network.cidr() {
+            return Err(AppError::conflict(
+                "cannot move an IP address to another network while it has community assignments",
+            ));
+        }
+    }
+    unassign_ip_address_in_state(state, old_address)?;
+    let updated = assign_ip_with_id_in_state(state, &command, old.id(), Some(old.created_at()))?;
+    create_managed_forward_record_in_state(state, &updated, command.host_name())?;
+    create_managed_ptr_record_in_state(state, &updated, command.host_name())?;
+    let host_name = state
+        .hosts
+        .values()
+        .find(|host| host.id() == updated.host_id())
+        .map(|host| host.name().clone())
+        .ok_or_else(|| AppError::not_found("host for moved IP address was not found"))?;
+    for old_mapping in related {
+        state.host_community_assignments.insert(
+            old_mapping.id(),
+            crate::domain::host_community_assignment::HostCommunityAssignment::restore(
+                old_mapping.id(),
+                updated.host_id(),
+                host_name.clone(),
+                updated.id(),
+                *updated.address(),
+                old_mapping.community_id(),
+                old_mapping.community_name().clone(),
+                old_mapping.policy_name().clone(),
+                old_mapping.created_at(),
+                Utc::now(),
+            ),
+        );
+    }
+    Ok(updated)
 }
 
 #[async_trait]
@@ -1104,6 +1199,52 @@ mod tests {
         },
         storage::build_storage,
     };
+
+    #[test]
+    fn deleting_hosts_removes_attachment_index_entries() {
+        use super::super::{
+            attachments::create_attachment_in_state, networks::create_network_in_state,
+        };
+        use super::{MemoryState, create_host_in_state, delete_host_in_state};
+        use crate::domain::{attachment::CreateHostAttachment, types::ReservedCount};
+        let mut state = MemoryState::default();
+        let cidr = CidrValue::new("10.0.0.0/24").unwrap();
+        create_network_in_state(
+            &mut state,
+            CreateNetwork::new(cidr.clone(), "Network", ReservedCount::new(3).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let keeper = Hostname::new("keeper.example.org").unwrap();
+        create_host_in_state(
+            &mut state,
+            CreateHost::new(keeper.clone(), None, None, "Keep").unwrap(),
+        )
+        .unwrap();
+        create_attachment_in_state(
+            &mut state,
+            CreateHostAttachment::new(keeper, cidr.clone(), None, None),
+        )
+        .unwrap();
+        let expected = state.host_attachment_keys.clone();
+        for _ in 0..4 {
+            let name = Hostname::new("ephemeral.example.org").unwrap();
+            create_host_in_state(
+                &mut state,
+                CreateHost::new(name.clone(), None, None, "Delete").unwrap(),
+            )
+            .unwrap();
+            create_attachment_in_state(
+                &mut state,
+                CreateHostAttachment::new(name.clone(), cidr.clone(), None, None),
+            )
+            .unwrap();
+            delete_host_in_state(&mut state, &name).unwrap();
+        }
+        assert_eq!(
+            (state.host_attachment_keys, state.host_attachments.len()),
+            (expected, 1)
+        );
+    }
 
     #[tokio::test]
     async fn host_auth_context_includes_attached_networks() {

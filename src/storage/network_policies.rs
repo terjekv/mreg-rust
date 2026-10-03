@@ -3,9 +3,13 @@ use async_trait::async_trait;
 use crate::{
     domain::{
         filters::NetworkPolicyFilter,
-        network_policy::{CreateNetworkPolicy, NetworkPolicy},
+        network_policy::{
+            CreateNetworkPolicy, CreateNetworkPolicyAttribute, NetworkPolicy,
+            NetworkPolicyAttribute, NetworkPolicyAttributeValue, UpdateNetworkPolicy,
+            UpdateNetworkPolicyAttribute,
+        },
         pagination::{Page, PageRequest},
-        types::NetworkPolicyName,
+        types::{NetworkPolicyAttributeName, NetworkPolicyName},
     },
     errors::AppError,
 };
@@ -26,5 +30,35 @@ pub trait NetworkPolicyStore: Send + Sync {
         &self,
         name: &NetworkPolicyName,
     ) -> Result<NetworkPolicy, AppError>;
+    async fn update_network_policy(
+        &self,
+        name: &NetworkPolicyName,
+        command: UpdateNetworkPolicy,
+    ) -> Result<NetworkPolicy, AppError>;
     async fn delete_network_policy(&self, name: &NetworkPolicyName) -> Result<(), AppError>;
+    async fn list_network_policy_attribute_values(
+        &self,
+        policy: &NetworkPolicyName,
+    ) -> Result<Vec<NetworkPolicyAttributeValue>, AppError>;
+    async fn list_network_policy_attributes(
+        &self,
+        page: &PageRequest,
+    ) -> Result<Page<NetworkPolicyAttribute>, AppError>;
+    async fn create_network_policy_attribute(
+        &self,
+        command: CreateNetworkPolicyAttribute,
+    ) -> Result<NetworkPolicyAttribute, AppError>;
+    async fn get_network_policy_attribute_by_name(
+        &self,
+        name: &NetworkPolicyAttributeName,
+    ) -> Result<NetworkPolicyAttribute, AppError>;
+    async fn update_network_policy_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+        command: UpdateNetworkPolicyAttribute,
+    ) -> Result<NetworkPolicyAttribute, AppError>;
+    async fn delete_network_policy_attribute(
+        &self,
+        name: &NetworkPolicyAttributeName,
+    ) -> Result<(), AppError>;
 }

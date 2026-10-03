@@ -1,6 +1,6 @@
 use crate::{
     domain::{
-        community::{Community, CreateCommunity},
+        community::{Community, CreateCommunity, UpdateCommunity},
         filters::CommunityFilter,
         pagination::{Page, PageRequest},
         types::{CommunityName, NetworkPolicyName},
@@ -17,6 +17,11 @@ pub trait TxCommunityStore {
     ) -> Result<Page<Community>, AppError>;
     fn create_community(&self, command: CreateCommunity) -> Result<Community, AppError>;
     fn get_community(&self, community_id: uuid::Uuid) -> Result<Community, AppError>;
+    fn update_community(
+        &self,
+        community_id: uuid::Uuid,
+        command: UpdateCommunity,
+    ) -> Result<Community, AppError>;
     fn delete_community(&self, community_id: uuid::Uuid) -> Result<(), AppError>;
     fn find_community_by_names(
         &self,

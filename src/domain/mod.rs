@@ -20,6 +20,7 @@ pub mod pagination;
 pub mod ptr_override;
 pub mod record_validation;
 pub mod resource_records;
+pub mod seeds;
 pub mod tasks;
 pub mod types;
 pub mod zone;
