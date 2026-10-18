@@ -25,8 +25,10 @@ jobs:
         id: matrix
         env:
           CRITERION_ARGS: "--noplot --sample-size 80 --measurement-time 6"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          BENCHMARKS=$(python3 .github/scripts/benchmark_matrix.py)
+          BENCHMARKS=$(python3 .github/scripts/benchmark_matrix.py "$BASE_SHA" "$HEAD_SHA" --criterion-args "$CRITERION_ARGS")
           printf 'benchmarks=%s\ncriterion_args=%s\n' "$BENCHMARKS" "$CRITERION_ARGS" >> "$GITHUB_OUTPUT"
 
   bench:

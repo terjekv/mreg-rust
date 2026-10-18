@@ -1,9 +1,10 @@
 mod support;
 
+use std::cell::Cell;
 use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 
 use mreg_rust::domain::{
@@ -47,25 +48,38 @@ fn wildcard_zone_match(c: &mut Criterion) {
     });
 
     let counter = AtomicUsize::new(0);
+    let previous_record = Cell::new(None);
 
     c.bench_function("wildcard_zone_match_50", |b| {
-        b.iter(|| {
-            let n = counter.fetch_add(1, Ordering::Relaxed);
-            // Always target the deepest-nested zone (z49.bench.test) so the
-            // longest-suffix match must compare against every seeded zone.
-            let owner = format!("h{n:08}.z49.bench.test");
-            let cmd = CreateRecordInstance::new_unanchored(
-                RecordTypeName::new("A").expect("type"),
-                owner,
-                None,
-                json!({"address": format!("10.0.0.{}", (n % 250) + 1)}),
-            )
-            .expect("record cmd");
-            let result = runtime
-                .block_on(storage.records().create_record(black_box(cmd)))
-                .expect("record create succeeds");
-            black_box(result);
-        });
+        b.iter_batched_ref(
+            || {
+                // Keep the inventory fixed: otherwise each iteration adds more
+                // records for later insertions to scan. Cleanup is not timed.
+                if let Some(id) = previous_record.take() {
+                    runtime
+                        .block_on(storage.records().delete_record(id))
+                        .expect("remove previous benchmark record");
+                }
+            },
+            |_| {
+                let n = counter.fetch_add(1, Ordering::Relaxed);
+                // Longest-suffix matching still compares all 50 candidate zones.
+                let owner = format!("h{n:08}.z49.bench.test");
+                let cmd = CreateRecordInstance::new_unanchored(
+                    RecordTypeName::new("A").expect("type"),
+                    owner,
+                    None,
+                    json!({"address": format!("10.0.0.{}", (n % 250) + 1)}),
+                )
+                .expect("record cmd");
+                let result = runtime
+                    .block_on(storage.records().create_record(black_box(cmd)))
+                    .expect("record create succeeds");
+                previous_record.set(Some(result.id()));
+                black_box(result);
+            },
+            BatchSize::PerIteration,
+        );
     });
 }
 

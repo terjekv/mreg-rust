@@ -64,4 +64,5 @@ jobs:
           --bench host_delete_ptr_cascade_criterion
           --bench import_batch_run_criterion
           --bench import_attachment_ip_criterion
+          --bench wildcard_zone_match_criterion
           -- --test
