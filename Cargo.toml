@@ -3,6 +3,11 @@ name = "mreg-rust"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+# Optimize across crate boundaries in both production and benchmark builds.
+lto = "thin"
+codegen-units = 1
+
 [features]
 default = ["rustls"]
 rustls = ["actix-web/rustls-0_23", "dep:rustls"]

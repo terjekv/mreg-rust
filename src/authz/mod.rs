@@ -414,10 +414,14 @@ pub fn scoped_identity_namespace(scope: &str) -> Vec<String> {
 }
 
 pub fn identity_key(namespace: &[String], id: &str) -> String {
-    if namespace.is_empty() {
-        return id.to_string();
+    let capacity = namespace.iter().map(|part| part.len() + 2).sum::<usize>() + id.len();
+    let mut key = String::with_capacity(capacity);
+    for part in namespace {
+        key.push_str(part);
+        key.push_str("::");
     }
-    format!("{}::{id}", namespace.join("::"))
+    key.push_str(id);
+    key
 }
 
 fn principal_to_treetop_user(principal: Principal) -> Result<TreetopUser, TreetopValidationError> {
@@ -545,6 +549,23 @@ mod tests {
         };
 
         assert_eq!(principal.key(), "alice");
+    }
+
+    #[rstest]
+    #[case(&[], "", "")]
+    #[case(&[""], "alice", "::alice")]
+    #[case(&["mreg", ""], "", "mreg::::")]
+    #[case(&["mreg", "lokal"], "bjørn", "mreg::lokal::bjørn")]
+    fn identity_key_preserves_components(
+        #[case] namespace: &[&str],
+        #[case] id: &str,
+        #[case] expected: &str,
+    ) {
+        let namespace = namespace
+            .iter()
+            .map(|part| (*part).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(identity_key(&namespace, id), expected);
     }
 
     #[test]
