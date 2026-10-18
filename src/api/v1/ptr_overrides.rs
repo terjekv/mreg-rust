@@ -123,8 +123,14 @@ async fn require_ptr_override_permission(
         "host_name",
         AttrValue::String(attachment.host_name().as_str().to_string()),
     )
-    .attr("address", AttrValue::Ip(address.as_str()))
-    .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+    .attr(
+        "address",
+        AttrValue::ip(address.as_str()).expect("validated IP address or network"),
+    )
+    .attr(
+        "network",
+        AttrValue::ip(attachment.network_cidr().as_str()).expect("validated IP address or network"),
+    )
     .attr(
         "attachment_id",
         AttrValue::String(attachment.id().to_string()),

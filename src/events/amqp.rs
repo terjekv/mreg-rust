@@ -1,9 +1,8 @@
 use super::{DomainEvent, EventSink, safe_url_for_log};
 use async_trait::async_trait;
 use lapin::{
-    BasicProperties, Channel, Connection, ConnectionProperties, ExchangeKind,
+    BasicProperties, Channel, Confirmation, Connection, ConnectionProperties, ExchangeKind,
     options::{BasicPublishOptions, ConfirmSelectOptions, ExchangeDeclareOptions},
-    publisher_confirm::Confirmation,
     types::FieldTable,
 };
 use tokio::sync::Mutex;
@@ -36,7 +35,7 @@ impl AmqpSink {
         let channel = connection.create_channel().await?;
         channel
             .exchange_declare(
-                &self.exchange,
+                self.exchange.as_str().into(),
                 ExchangeKind::Topic,
                 ExchangeDeclareOptions {
                     durable: true,
@@ -67,8 +66,8 @@ impl EventSink for AmqpSink {
 
         let publish = channel
             .basic_publish(
-                &self.exchange,
-                &routing_key,
+                self.exchange.as_str().into(),
+                routing_key.as_str().into(),
                 BasicPublishOptions::default(),
                 &payload,
                 BasicProperties::default()

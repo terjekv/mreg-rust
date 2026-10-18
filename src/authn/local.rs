@@ -6,7 +6,7 @@ use std::{
 
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 use async_trait::async_trait;
 use tokio::{sync::Semaphore, task::spawn_blocking};
@@ -23,9 +23,8 @@ pub struct LocalAuthProvider {
 
 impl LocalAuthProvider {
     pub fn new(users: Vec<LocalUserConfig>) -> Self {
-        let salt = SaltString::encode_b64(b"mreg-dummy-salt").expect("static dummy salt is valid");
         let dummy_hash = Argon2::default()
-            .hash_password(b"invalid-password", &salt)
+            .hash_password_with_salt(b"invalid-password", b"mreg-dummy-salt")
             .expect("static dummy password can be hashed")
             .to_string();
         Self {
@@ -91,5 +90,35 @@ impl AuthProviderBackend for LocalAuthProvider {
             groups: user.groups,
             max_expires_at: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case("password", true)]
+    #[case("wrong-password", false)]
+    #[tokio::test]
+    async fn verifies_existing_argon2_phc_hashes(#[case] password: &str, #[case] accepted: bool) {
+        // Fixed Argon2id v19 reference vector also supported by argon2 0.5.
+        let provider = LocalAuthProvider::new(vec![LocalUserConfig {
+            username: "admin".to_string(),
+            password_hash: "$argon2id$v=19$m=256,t=2,p=1$c29tZXNhbHQ$nf65EOgLrQMR/uIPnA4rEsF5h7TKyQwu9U1bMCHGi/4".to_string(),
+            groups: Vec::new(),
+        }]);
+        let result = provider
+            .authenticate(BackendLoginRequest {
+                username: "admin".to_string(),
+                password: password.to_string(),
+                service_name: None,
+                otp_code: None,
+            })
+            .await;
+
+        assert_eq!(result.is_ok(), accepted);
     }
 }

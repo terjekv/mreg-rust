@@ -117,7 +117,10 @@ fn assignment_authorization(
         "host_name",
         AttrValue::String(assignment.host_name().as_str().to_string()),
     )
-    .attr("network", AttrValue::Ip(assignment.network_cidr().as_str()))
+    .attr(
+        "network",
+        AttrValue::ip(assignment.network_cidr().as_str()).expect("validated IP address or network"),
+    )
     .attr(
         "policy_name",
         AttrValue::String(assignment.policy_name().as_str().to_string()),
@@ -196,7 +199,11 @@ pub(crate) async fn create_attachment_community_assignment(
             "host_name",
             AttrValue::String(attachment.host_name().as_str().to_string()),
         )
-        .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+        .attr(
+            "network",
+            AttrValue::ip(attachment.network_cidr().as_str())
+                .expect("validated IP address or network"),
+        )
         .attr(
             "policy_name",
             AttrValue::String(community.policy_name().as_str().to_string()),

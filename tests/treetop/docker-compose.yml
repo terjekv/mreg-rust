@@ -1,6 +1,6 @@
 services:
   policy-host:
-    image: svenstaro/miniserve
+    image: svenstaro/miniserve:0.35.0
     ports:
       - "18080:8080"
     volumes:
@@ -8,7 +8,7 @@ services:
     command: ["/data", "--port", "8080"]
 
   treetop-rest:
-    image: ghcr.io/terjekv/treetop-rest:latest
+    image: ${TREETOP_IMAGE:-ghcr.io/treetop-policy-engine/treetop-rest@sha256:e29baeb5b498f21c72dccd9d08ab43198fa4705cecb40643d0ee97b63cc1c932}
     platform: linux/amd64
     depends_on:
       - policy-host

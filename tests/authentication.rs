@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use actix_web::{App, body::to_bytes, http::StatusCode, test, web};
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHasher, SaltString},
-};
+use argon2::{Argon2, password_hash::PasswordHasher};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use mreg_rust::{
@@ -97,9 +94,8 @@ fn remote_token(secret: &str, issuer: &str, sub: &str, groups: &[&str]) -> Strin
 }
 
 fn local_password_hash(password: &str) -> String {
-    let salt = SaltString::encode_b64(b"static-local-salt").expect("salt");
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password_with_salt(password.as_bytes(), b"static-local-salt")
         .expect("password hash")
         .to_string()
 }

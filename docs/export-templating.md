@@ -1,5 +1,9 @@
 # Export Templating
 
+MiniJinja 3 rejects unsupported keyword arguments. When upgrading custom templates,
+replace `default(value=...)` with `default(...)`. Built-in templates already use
+the supported positional form.
+
 ## Overview
 
 The export templating system renders structured data from the mreg domain into text
@@ -242,7 +246,7 @@ $TTL {{ zone.default_ttl }}
 {% for record in records %}
 {% set owner = record.owner_name %}
 {% if owner == zone.name %}{% set owner = "@" %}{% endif %}
-{{ owner }}{% if owner != "@" %}.{% endif %} {{ record.ttl | default(value=zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
+{{ owner }}{% if owner != "@" %}.{% endif %} {{ record.ttl | default(zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
 {% endfor %}
 ```
 
@@ -269,7 +273,7 @@ $TTL {{ zone.default_ttl }}
 
 ; Records
 {% for record in records %}
-{{ record.owner_name }}. {{ record.ttl | default(value=zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
+{{ record.owner_name }}. {{ record.ttl | default(zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
 {% endfor %}
 ```
 
@@ -479,7 +483,7 @@ features available in export templates:
 **Variable interpolation:** `{{ zone.name }}`, `{{ record.ttl }}`
 
 **Filters:** `{{ zone.email | replace("@", ".") }}`,
-`{{ record.ttl | default(value=zone.default_ttl) }}`
+`{{ record.ttl | default(zone.default_ttl) }}`
 
 **Loops:**
 ```jinja

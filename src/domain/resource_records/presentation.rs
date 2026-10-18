@@ -1,4 +1,4 @@
-use minijinja::Environment;
+use minijinja::{Environment, value::Serde};
 use serde_json::Value;
 
 use crate::{domain::types::RecordTypeName, errors::AppError};
@@ -168,7 +168,7 @@ fn render_runtime_template(
         environment
             .get_template("record")
             .map_err(AppError::internal)?
-            .render(minijinja::value::Value::from_serialize(data))
+            .render(Serde(data))
             .map_err(AppError::internal)?,
     ))
 }

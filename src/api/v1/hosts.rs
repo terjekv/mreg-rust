@@ -449,9 +449,15 @@ pub(crate) async fn create_host(
                 "host_name",
                 AttrValue::String(command.name().as_str().to_string()),
             )
-            .attr("network", AttrValue::Ip(network.as_str()));
+            .attr(
+                "network",
+                AttrValue::ip(network.as_str()).expect("validated IP address or network"),
+            );
         if let Some(address) = assignment.address() {
-            requirement = requirement.attr("address", AttrValue::Ip(address.as_str()));
+            requirement = requirement.attr(
+                "address",
+                AttrValue::ip(address.as_str()).expect("validated IP address or network"),
+            );
         }
         if let Some(mac_address) = assignment.mac_address() {
             requirement = requirement.attr(
@@ -475,11 +481,21 @@ pub(crate) async fn create_host(
     .attr("host_groups", AttrValue::Set(Vec::new()))
     .attr(
         "addresses",
-        AttrValue::Set(addresses.into_iter().map(AttrValue::Ip).collect()),
+        AttrValue::Set(
+            addresses
+                .into_iter()
+                .map(|value| AttrValue::ip(value).expect("validated IP address or network"))
+                .collect(),
+        ),
     )
     .attr(
         "networks",
-        AttrValue::Set(networks.into_iter().map(AttrValue::Ip).collect()),
+        AttrValue::Set(
+            networks
+                .into_iter()
+                .map(|value| AttrValue::ip(value).expect("validated IP address or network"))
+                .collect(),
+        ),
     );
     if let Some(zone) = command.zone() {
         authz = authz.attr("zone", AttrValue::String(zone.as_str().to_string()));
@@ -764,9 +780,15 @@ pub(crate) async fn assign_ip_address(
             "host_name",
             AttrValue::String(command.host_name().as_str().to_string()),
         )
-        .attr("network", AttrValue::Ip(network.as_str()));
+        .attr(
+            "network",
+            AttrValue::ip(network.as_str()).expect("validated IP address or network"),
+        );
     if let Some(address) = command.address() {
-        authz = authz.attr("address", AttrValue::Ip(address.as_str()));
+        authz = authz.attr(
+            "address",
+            AttrValue::ip(address.as_str()).expect("validated IP address or network"),
+        );
     }
     if let Some(mac_address) = command.mac_address() {
         authz = authz.attr(
@@ -845,12 +867,18 @@ pub(crate) async fn update_ip_address(
         authz::actions::resource_kinds::IP_ADDRESS,
         address.as_str(),
     )
-    .attr("address", AttrValue::Ip(address.as_str()))
+    .attr(
+        "address",
+        AttrValue::ip(address.as_str()).expect("validated IP address or network"),
+    )
     .attr(
         "host_name",
         AttrValue::String(attachment.host_name().as_str().to_string()),
     )
-    .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+    .attr(
+        "network",
+        AttrValue::ip(attachment.network_cidr().as_str()).expect("validated IP address or network"),
+    )
     .attr(
         "attachment_id",
         AttrValue::String(attachment.id().to_string()),
@@ -904,12 +932,19 @@ pub(crate) async fn unassign_ip_address(
             authz::actions::resource_kinds::IP_ADDRESS,
             address.as_str(),
         )
-        .attr("address", AttrValue::Ip(address.as_str()))
+        .attr(
+            "address",
+            AttrValue::ip(address.as_str()).expect("validated IP address or network"),
+        )
         .attr(
             "host_name",
             AttrValue::String(attachment.host_name().as_str().to_string()),
         )
-        .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+        .attr(
+            "network",
+            AttrValue::ip(attachment.network_cidr().as_str())
+                .expect("validated IP address or network"),
+        )
         .attr(
             "attachment_id",
             AttrValue::String(attachment.id().to_string()),

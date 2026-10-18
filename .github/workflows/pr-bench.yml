@@ -18,7 +18,7 @@ jobs:
       benchmarks: ${{ steps.matrix.outputs.benchmarks }}
       criterion_args: ${{ steps.matrix.outputs.criterion_args }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Discover benchmark targets
@@ -31,10 +31,9 @@ jobs:
 
   bench:
     needs: prepare-benchmarks
-    uses: terjekv/rust-pr-bench/.github/workflows/rust-pr-bench.yml@55dff7c6889e575e9b8c459bf5deb089c0a9bb52 # runner image selection
+    uses: terjekv/rust-pr-bench/.github/workflows/rust-pr-bench.yml@a0307b409009932b15fd2dfdd30e9d9165302fca # dependency and runtime updates
     with:
-      runs_on: ubuntu-26.04
-      action_ref: 55dff7c6889e575e9b8c459bf5deb089c0a9bb52
+      action_ref: a0307b409009932b15fd2dfdd30e9d9165302fca
       backend: all
       benchmarks_json: ${{ needs.prepare-benchmarks.outputs.benchmarks }}
       auto_discover: false

@@ -161,7 +161,10 @@ pub(crate) async fn create_community(
             "policy_name",
             AttrValue::String(request.policy_name.to_string()),
         )
-        .attr("network", AttrValue::Ip(request.network.to_string()))
+        .attr(
+            "network",
+            AttrValue::ip(request.network.to_string()).expect("validated IP address or network"),
+        )
         .attr(
             "description",
             AttrValue::String(request.description.clone()),

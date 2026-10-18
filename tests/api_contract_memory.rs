@@ -996,8 +996,9 @@ async fn export_run_lifecycle_and_listing() {
             .to_request(),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let task_body: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "task failed: {task_body:#}");
     assert_eq!(
         task_body["workflow_result"]["status"], "succeeded",
         "export run should succeed: {task_body:#}"

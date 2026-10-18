@@ -342,16 +342,16 @@ fn allocate_random_address_in_network(
     state: &MemoryState,
     network: &Network,
 ) -> Result<IpAddressValue, AppError> {
-    use rand::Rng;
+    use rand::RngExt;
 
     let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..256 {
         let chosen = if first == last {
             first
         } else {
-            rng.gen_range(first..=last)
+            rng.random_range(first..=last)
         };
         let address = address_from_u128(network, chosen)?;
         if ensure_address_is_usable(state, network, &address).is_ok() {

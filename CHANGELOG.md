@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (build):** the updated Treetop dependency requires Rust 1.93.1 or newer. Upgrade older toolchains before building.
+- **Breaking (custom export templates):** MiniJinja 3 rejects previously ignored keyword arguments. Replace `default(value=...)` with `default(...)` in custom templates; built-in BIND templates use the supported positional form.
+- Update Rust dependencies to current stable releases, including authentication, DNS parsing, export templates, OpenAPI, and optional event sinks; commit the resolved dependency lockfile for reproducible builds.
+- **Breaking (Treetop integration):** use Treetop Client 0.2.0 with the strict current response contract. Upgrade Treetop REST to 0.2.0 (Core 0.3.0) before deploying; rebuild and re-sign signed policy bundles with Bundle CLI 0.3.0 or Bundle Action v3. Namespace components must be valid Cedar identifiers: rename scopes such as `ldap-team1` to `ldap_team1`, update matching policies, and log in again. Rust callers must replace `AttrValue::Ip(String)` with the validating `AttrValue::ip(...)` constructor.
 - **Breaking (Rust API):** pagination requests now have private fields and use validated `PageLimit` values. Replace `PageRequest` literals and `deserialize_page_limit` with `PageRequest::new` and `Option<PageLimit>`; use `PageRequest::all()` for trusted internal enumeration. Host-policy membership APIs and role membership vectors now require `Hostname`, `LabelName`, and `HostPolicyName` instead of strings.
 - **Breaking (validation):** constrained DNS, inventory, and policy request values now validate and normalize during JSON/path/query extraction, before handler authorization or lookup. Clients must handle HTTP 400 for invalid values rather than relying on later 403/404 responses, and authorization policies must match canonical names and addresses. Valid JSON and PATCH shapes remain compatible. Persisted invalid import batches, record schemas, and oversized raw RDATA must be corrected before loading; no database schema migration is required.
 - **Breaking (Rust API):** `MacAddressValue::as_inner()` now returns `macaddr::MacAddr` instead of `macaddr::MacAddr6` so it can represent both EUI-48 and EUI-64 values. Callers that require a fixed width must migrate to `as_eui48()` or `as_eui64()` and handle `None`; callers that support both widths can match on `MacAddr::V6` and `MacAddr::V8`.
@@ -61,5 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Remove vulnerable `h2` 0.3 by disabling Actix's unused HTTP/2 feature (the server uses an HTTP/1 listener), and pin the upstream Swagger UI ZIP 9 fix for RUSTSEC-2026-0367, RUSTSEC-2026-0368, and RUSTSEC-2026-0369. Remove the unused, unmaintained `rustls-pemfile` dependency.
 - Authorization for host/IP, PTR override, and community-assignment mutations now uses persisted host, attachment, address, and network context instead of trusting caller-supplied relationship attributes.
 - Export templates now use a restricted filter set, validate JSON output, and enforce output-size limits.

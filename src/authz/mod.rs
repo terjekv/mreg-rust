@@ -9,6 +9,7 @@ use treetop_client::{
     AuthorizeRequest as TreetopAuthorizeRequest, BatchResult as TreetopBatchResult,
     Client as TreetopClient, DecisionBrief as TreetopDecisionBrief, Group as TreetopGroup,
     Request as TreetopRequest, Resource as TreetopResource, TreetopError, User as TreetopUser,
+    ValidationError as TreetopValidationError,
 };
 
 use crate::{authn, config::Config, errors::AppError};
@@ -362,9 +363,12 @@ impl Authorizer for TreetopAuthorizer {
         requests: Vec<AuthorizationRequest>,
     ) -> Result<Vec<AuthorizationDecision>, AppError> {
         let request_count = requests.len();
-        let batch = TreetopAuthorizeRequest::from_requests(
-            requests.into_iter().map(authorization_request_to_treetop),
-        );
+        let requests = requests
+            .into_iter()
+            .map(authorization_request_to_treetop)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| AppError::validation(error.to_string()))?;
+        let batch = TreetopAuthorizeRequest::from_requests(requests);
         let response = self
             .client
             .authorize(&batch)
@@ -393,12 +397,14 @@ impl Authorizer for TreetopAuthorizer {
     }
 }
 
-fn authorization_request_to_treetop(request: AuthorizationRequest) -> TreetopRequest {
-    TreetopRequest::new(
-        principal_to_treetop_user(request.principal),
-        action_to_treetop(request.action),
-        resource_to_treetop(request.resource),
-    )
+fn authorization_request_to_treetop(
+    request: AuthorizationRequest,
+) -> Result<TreetopRequest, TreetopValidationError> {
+    Ok(TreetopRequest::new(
+        principal_to_treetop_user(request.principal)?,
+        action_to_treetop(request.action)?,
+        resource_to_treetop(request.resource)?,
+    ))
 }
 
 pub const IDENTITY_NAMESPACE_ROOT: &str = "mreg";
@@ -414,28 +420,28 @@ pub fn identity_key(namespace: &[String], id: &str) -> String {
     format!("{}::{id}", namespace.join("::"))
 }
 
-fn principal_to_treetop_user(principal: Principal) -> TreetopUser {
+fn principal_to_treetop_user(principal: Principal) -> Result<TreetopUser, TreetopValidationError> {
     let groups = principal
         .groups
         .into_iter()
-        .map(|group| TreetopGroup::new(group.id).with_namespace(group.namespace))
-        .collect();
+        .map(|group| TreetopGroup::new(group.id)?.with_namespace(group.namespace))
+        .collect::<Result<Vec<_>, _>>()?;
 
-    TreetopUser::new(principal.id)
-        .with_namespace(principal.namespace)
-        .with_groups(groups)
+    Ok(TreetopUser::new(principal.id)?
+        .with_namespace(principal.namespace)?
+        .with_groups(groups))
 }
 
-fn action_to_treetop(action: Action) -> TreetopAction {
-    TreetopAction::new(action.id).with_namespace(action.namespace)
+fn action_to_treetop(action: Action) -> Result<TreetopAction, TreetopValidationError> {
+    TreetopAction::new(action.id)?.with_namespace(action.namespace)
 }
 
-fn resource_to_treetop(resource: Resource) -> TreetopResource {
-    let mut treetop = TreetopResource::new(resource.kind, resource.id);
+fn resource_to_treetop(resource: Resource) -> Result<TreetopResource, TreetopValidationError> {
+    let mut treetop = TreetopResource::new(resource.kind, resource.id)?;
     for (key, value) in resource.attrs {
-        treetop = treetop.with_attr(key, value);
+        treetop = treetop.with_attr(key, value)?;
     }
-    treetop
+    Ok(treetop)
 }
 
 fn map_treetop_error(error: TreetopError) -> AppError {
@@ -447,6 +453,7 @@ fn map_treetop_error(error: TreetopError) -> AppError {
         TreetopError::Deserialization(error) => AppError::authz(error.to_string()),
         TreetopError::Configuration(error) => AppError::authz(error.to_string()),
         TreetopError::InvalidUrl(error) => AppError::authz(error.to_string()),
+        error => AppError::authz(error.to_string()),
     }
 }
 
@@ -454,8 +461,30 @@ fn map_treetop_error(error: TreetopError) -> AppError {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use rstest::rstest;
+
     use super::*;
     use crate::config::Config;
+
+    #[rstest]
+    #[case("local", true)]
+    #[case("ldap_team1", true)]
+    #[case("ldap-team1", false)]
+    #[case("", false)]
+    fn treetop_validates_namespaces_before_transport(#[case] scope: &str, #[case] valid: bool) {
+        let request = AuthorizationRequest::builder(
+            Principal {
+                id: "admin".to_string(),
+                namespace: scoped_identity_namespace(scope),
+                groups: Vec::new(),
+            },
+            actions::host::CREATE,
+            actions::resource_kinds::HOST,
+            "example.org",
+        )
+        .build();
+        assert_eq!(authorization_request_to_treetop(request).is_ok(), valid);
+    }
 
     #[test]
     fn authorization_request_builder_sets_attrs() {
