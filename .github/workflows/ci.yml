@@ -51,7 +51,7 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Test Treetop authorization integration
-        run: scripts/test-treetop-authz.sh
+        run: scripts/test-treetop-authz.sh --all-features
 
       - name: Compile benchmark targets
         run: cargo bench --locked --no-run
