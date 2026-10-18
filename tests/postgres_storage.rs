@@ -4,10 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use actix_web::{App, body::to_bytes, http::StatusCode, test, web};
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHasher, SaltString},
-};
+use argon2::{Argon2, password_hash::PasswordHasher};
 use chrono::{DateTime, Duration, Utc};
 use mreg_rust::domain::{
     attachment::{
@@ -69,9 +66,8 @@ fn task_queue_mutex() -> &'static Mutex<()> {
 }
 
 fn local_password_hash(password: &str) -> String {
-    let salt = SaltString::encode_b64(b"static-local-salt").expect("salt");
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password_with_salt(password.as_bytes(), b"static-local-salt")
         .expect("password hash")
         .to_string()
 }

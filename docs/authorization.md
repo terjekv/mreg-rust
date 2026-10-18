@@ -28,6 +28,23 @@ Authorization is controlled independently from authentication.
 
 See [configuration.md](configuration.md) for the environment variables that control this.
 
+## Treetop compatibility
+
+The client is pinned to Treetop Client 0.2.0 and tested against Treetop REST 0.2.0
+(Core 0.3.0). Upgrade the authorization server before deploying this version of
+mreg-rust; older response formats are no longer accepted. If the server loads
+signed bundles, rebuild and re-sign them with Bundle CLI 0.3.0 or Bundle Action v3
+as part of the server upgrade.
+
+Principal and group namespace components must be valid Cedar identifiers. For
+example, use `ldap_team1` rather than `ldap-team1` for a scoped provider name when
+using Treetop. Rename affected scopes and policy namespaces together and log in
+again to obtain tokens containing the new namespace. Invalid authorization
+requests are rejected locally with a validation error before contacting Treetop.
+
+Rust callers constructing IP attributes must use the fallible
+`AttrValue::ip(value)` constructor instead of `AttrValue::Ip(String)`.
+
 ## Principal mapping
 
 The authz layer consumes the resolved principal from request extensions. That principal comes from:

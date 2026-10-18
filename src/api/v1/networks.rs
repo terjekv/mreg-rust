@@ -497,7 +497,10 @@ pub(crate) async fn create_network(
         authz::actions::resource_kinds::NETWORK,
         &request.cidr,
     )
-    .attr("cidr", AttrValue::Ip(request.cidr.to_string()))
+    .attr(
+        "cidr",
+        AttrValue::ip(request.cidr.to_string()).expect("validated IP address or network"),
+    )
     .attr("category", AttrValue::String(request.category.clone()))
     .attr("location", AttrValue::String(request.location.clone()))
     .attr("dns_delegated", AttrValue::Bool(request.dns_delegated))
@@ -758,9 +761,18 @@ pub(crate) async fn create_excluded_range(
                 request.network, request.start_ip, request.end_ip
             ),
         )
-        .attr("network", AttrValue::Ip(request.network.to_string()))
-        .attr("start_ip", AttrValue::Ip(request.start_ip.to_string()))
-        .attr("end_ip", AttrValue::Ip(request.end_ip.to_string()))
+        .attr(
+            "network",
+            AttrValue::ip(request.network.to_string()).expect("validated IP address or network"),
+        )
+        .attr(
+            "start_ip",
+            AttrValue::ip(request.start_ip.to_string()).expect("validated IP address or network"),
+        )
+        .attr(
+            "end_ip",
+            AttrValue::ip(request.end_ip.to_string()).expect("validated IP address or network"),
+        )
         .attr(
             "description",
             AttrValue::String(request.description.clone()),

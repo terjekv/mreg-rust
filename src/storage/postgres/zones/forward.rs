@@ -1,3 +1,4 @@
+use diesel::result::DatabaseErrorKind;
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -345,7 +346,8 @@ impl PostgresStorage {
                 .execute(connection)
                 .map_err(|error| match error {
                     diesel::result::Error::DatabaseError(
-                        diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                        DatabaseErrorKind::ForeignKeyViolation
+                        | DatabaseErrorKind::RestrictViolation,
                         _,
                     ) => AppError::conflict("forward zone still contains hosts"),
                     other => AppError::internal(other),

@@ -36,6 +36,21 @@ pub struct LocalJwtClaims {
     pub iss: String,
 }
 
+/// Borrow identity data while issuing tokens instead of cloning every claim.
+#[derive(Serialize)]
+struct LocalJwtClaimsRef<'a> {
+    sub: String,
+    principal_id: &'a str,
+    principal_namespace: &'a [String],
+    username: &'a str,
+    groups: &'a [Group],
+    identity_scope: &'a str,
+    auth_provider_kind: &'a str,
+    iat: i64,
+    exp: i64,
+    iss: &'a str,
+}
+
 #[derive(Clone)]
 pub struct LocalJwtIssuer {
     encoding_key: EncodingKey,
@@ -68,28 +83,21 @@ impl LocalJwtIssuer {
             }
             _ => local_expires_at,
         };
-        let claims = LocalJwtClaims {
+        let claims = LocalJwtClaimsRef {
             sub: principal.key(),
-            principal_id: principal.id.clone(),
-            principal_namespace: principal.namespace.clone(),
-            username: raw_username.to_string(),
-            groups: principal
-                .groups
-                .iter()
-                .map(|group| LocalJwtGroupClaim {
-                    id: group.id.clone(),
-                    namespace: group.namespace.clone(),
-                })
-                .collect(),
-            identity_scope: identity_scope.to_string(),
-            auth_provider_kind: auth_provider_kind.to_string(),
+            principal_id: &principal.id,
+            principal_namespace: &principal.namespace,
+            username: raw_username,
+            groups: &principal.groups,
+            identity_scope,
+            auth_provider_kind,
             // Store iat as milliseconds for sub-second revocation precision.
             // This is non-standard (RFC 7519 uses seconds) but allows logout_all
             // to correctly distinguish tokens issued before vs after the cutoff
             // within the same second boundary.
             iat: now.timestamp_millis(),
             exp: expires_at.timestamp(),
-            iss: self.issuer.clone(),
+            iss: &self.issuer,
         };
         let token = encode(&Header::new(Algorithm::HS256), &claims, &self.encoding_key)
             .map_err(AppError::internal)?;
@@ -100,21 +108,21 @@ impl LocalJwtIssuer {
 #[derive(Clone)]
 pub struct LocalJwtValidator {
     decoding_key: DecodingKey,
-    issuer: String,
+    validation: Validation,
 }
 
 impl LocalJwtValidator {
     pub fn new(signing_key: &str, issuer: impl Into<String>) -> Self {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&[issuer.into()]);
         Self {
             decoding_key: DecodingKey::from_secret(signing_key.as_bytes()),
-            issuer: issuer.into(),
+            validation,
         }
     }
 
     pub fn validate(&self, token: &str) -> Result<PrincipalContext, AppError> {
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.set_issuer(&[self.issuer.as_str()]);
-        let data = decode::<LocalJwtClaims>(token, &self.decoding_key, &validation)
+        let data = decode::<LocalJwtClaims>(token, &self.decoding_key, &self.validation)
             .map_err(jwt_error_to_unauthorized)?;
         let expires_at = Utc
             .timestamp_opt(data.claims.exp, 0)
@@ -421,7 +429,25 @@ fn jwt_error_to_unauthorized(error: jsonwebtoken::errors::Error) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
     use super::*;
+
+    #[rstest]
+    #[case(Algorithm::HS384)]
+    #[case(Algorithm::HS512)]
+    fn local_token_rejects_other_hmac_algorithms(#[case] algorithm: Algorithm) {
+        let token = encode(
+            &Header::new(algorithm),
+            &json!({"iss": "mreg-rust", "exp": 4_000_000_000u64}),
+            &EncodingKey::from_secret(b"secret"),
+        )
+        .expect("sign token");
+        let validator = LocalJwtValidator::new("secret", "mreg-rust");
+        let error = validator.validate(&token).expect_err("reject algorithm");
+        assert!(error.to_string().contains("InvalidAlgorithm"));
+    }
 
     #[test]
     fn local_token_round_trip() {

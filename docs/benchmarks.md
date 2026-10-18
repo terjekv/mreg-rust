@@ -5,6 +5,19 @@ counts against the PR base. The regression thresholds remain 8% and 3%,
 respectively. A noisy timing result should be investigated with repeated,
 alternating base/head measurements before attributing it to application code.
 
+Release builds use Thin LTO and a single code-generation unit to optimize across
+crate boundaries. The benchmark profile inherits these production settings;
+release compilation takes longer as a result. `jwt_validate_callgrind` measures
+token creation and signing, validator construction, and validation together,
+including cold cryptographic initialization. Keep that scope in mind when
+comparing its instruction count with the bearer-authentication timing benchmark.
+
+The wildcard-zone benchmark removes its previous record outside the timed
+operation before each insertion. This keeps record and RRset counts bounded;
+accumulating records would make later samples scan progressively larger tables.
+Command construction, creation, zone matching, and dropping the response remain
+inside the timed operation.
+
 Deletion and import benchmarks use `iter_batched_ref`: fixture construction,
 storage teardown, and dropping the returned import summary happen outside the
 timed operation. The record-listing fixture creates its authoritative zone
@@ -44,6 +57,12 @@ introduction of `PageLimit` and private `PageRequest` fields. Future fixture or
 timing-boundary repairs need an explicit comparison strategy that works with
 both revisions; do not leave migration overlays enabled for subsequent PRs.
 
+The bounded wildcard-zone fixture has a one-time comparison override for base
+commit `fbcf2d82621993440cab994196dc355eb41ba777`: only that benchmark file is
+copied from the PR head before measuring the base. Application code, dependencies,
+and build settings remain those of the base. The override is inactive for later
+base commits, so subsequent PRs compile their own matching harnesses normally.
+
 ## Local checks
 
 CI runs the affected benchmark fixtures once in addition to compiling them:
@@ -53,7 +72,8 @@ cargo bench --bench record_listing_criterion \
   --bench attachment_graph_delete_criterion \
   --bench host_delete_ptr_cascade_criterion \
   --bench import_batch_run_criterion \
-  --bench import_attachment_ip_criterion -- --test
+  --bench import_attachment_ip_criterion \
+  --bench wildcard_zone_match_criterion -- --test
 ```
 
 For timing measurements, replace `--test` with

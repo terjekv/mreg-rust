@@ -4,14 +4,14 @@ A Rust reimplementation of [mreg](https://github.com/unioslo/mreg), a Django-bas
 
 ## Development Environment
 
-**Rust toolchain:** Install via [rustup](https://rustup.rs/). The project uses edition 2024.
+**Rust toolchain:** Install via [rustup](https://rustup.rs/). The project uses edition 2024 and dependencies require Rust 1.93.1 or newer. Use the current stable toolchain.
 
 **PostgreSQL 15+:** Required for the full test suite. Quickest setup via Docker:
 
 ```bash
 docker run -d --name mreg-postgres \
   -e POSTGRES_USER=mreg -e POSTGRES_PASSWORD=mreg -e POSTGRES_DB=mreg \
-  -p 5433:5432 postgres:17
+  -p 5433:5432 postgres:18
 
 # Create the test database
 psql "postgres://mreg:mreg@localhost:5433/mreg" -c "CREATE DATABASE mreg_test"

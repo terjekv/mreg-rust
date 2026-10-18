@@ -3,7 +3,7 @@ mod support;
 use std::hint::black_box;
 
 use gungraun::{library_benchmark, library_benchmark_group, main};
-use minijinja::Environment;
+use minijinja::{Environment, value::Serde};
 use serde_json::{Value, json};
 
 use mreg_rust::domain::resource_records::RecordTypeDefinition;
@@ -17,7 +17,7 @@ fn render(definition: &RecordTypeDefinition, payload: &Value) -> String {
     env.add_template("record", template).expect("add template");
     env.get_template("record")
         .expect("template exists")
-        .render(minijinja::value::Value::from_serialize(payload))
+        .render(Serde(payload))
         .expect("render succeeds")
 }
 

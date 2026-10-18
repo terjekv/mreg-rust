@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use minijinja::Environment;
+use minijinja::{Environment, value::Serde};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -49,7 +49,7 @@ fn render_export_template_impl(
                 .map_err(AppError::internal)?;
             env.get_template("export")
                 .map_err(AppError::internal)?
-                .render(minijinja::value::Value::from_serialize(context))
+                .render(Serde(context))
                 .map_err(AppError::internal)
         }
         other => Err(AppError::validation(format!(

@@ -131,8 +131,14 @@ async fn assignment_authorization(
         "host_name",
         AttrValue::String(assignment.host_name().as_str().to_string()),
     )
-    .attr("address", AttrValue::Ip(assignment.address().as_str()))
-    .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+    .attr(
+        "address",
+        AttrValue::ip(assignment.address().as_str()).expect("validated IP address or network"),
+    )
+    .attr(
+        "network",
+        AttrValue::ip(attachment.network_cidr().as_str()).expect("validated IP address or network"),
+    )
     .attr(
         "policy_name",
         AttrValue::String(assignment.policy_name().as_str().to_string()),
@@ -240,8 +246,15 @@ pub(crate) async fn create_host_community_assignment(
             "host_name",
             AttrValue::String(attachment.host_name().as_str().to_string()),
         )
-        .attr("address", AttrValue::Ip(command.address().as_str()))
-        .attr("network", AttrValue::Ip(attachment.network_cidr().as_str()))
+        .attr(
+            "address",
+            AttrValue::ip(command.address().as_str()).expect("validated IP address or network"),
+        )
+        .attr(
+            "network",
+            AttrValue::ip(attachment.network_cidr().as_str())
+                .expect("validated IP address or network"),
+        )
         .attr(
             "policy_name",
             AttrValue::String(community.policy_name().as_str().to_string()),

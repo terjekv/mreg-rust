@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use diesel::result::DatabaseErrorKind;
 use diesel::{
     ExpressionMethods, OptionalExtension, PgConnection, QueryDsl, RunQueryDsl, SelectableHelper,
     delete, insert_into, update,
@@ -109,7 +110,7 @@ impl PostgresStorage {
             .execute(connection)
             .map_err(|error| match error {
                 diesel::result::Error::DatabaseError(
-                    diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                    DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::RestrictViolation,
                     _,
                 ) => AppError::conflict("nameserver is still referenced by another resource"),
                 other => AppError::internal(other),

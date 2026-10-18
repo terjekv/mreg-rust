@@ -302,7 +302,10 @@ pub(crate) async fn create_reverse_zone(
         AttrValue::Long(i64::from(request.default_ttl.as_u32())),
     );
     if let Some(network) = &request.network {
-        authz = authz.attr("network", AttrValue::Ip(network.to_string()));
+        authz = authz.attr(
+            "network",
+            AttrValue::ip(network.to_string()).expect("validated IP address or network"),
+        );
     }
     require(&state, authz).await?;
     let zone = state

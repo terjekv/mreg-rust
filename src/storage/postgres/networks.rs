@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use diesel::result::DatabaseErrorKind;
 use diesel::{
     Connection, OptionalExtension, PgConnection, RunQueryDsl, sql_query,
     sql_types::{BigInt, Integer, Nullable, Text, Uuid as SqlUuid},
@@ -451,7 +452,7 @@ impl PostgresStorage {
             .execute(connection)
             .map_err(|error| match error {
                 diesel::result::Error::DatabaseError(
-                    diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                    DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::RestrictViolation,
                     _,
                 ) => AppError::conflict("network is still referenced by other resources"),
                 other => AppError::internal(other),
@@ -658,7 +659,7 @@ impl PostgresStorage {
         connection: &mut PgConnection,
         network: &Network,
     ) -> Result<IpAddressValue, AppError> {
-        use rand::Rng;
+        use rand::RngExt;
 
         // Lock the network row to serialize concurrent allocations
         sql_query("SELECT id FROM networks WHERE id = $1 FOR UPDATE")
@@ -667,12 +668,12 @@ impl PostgresStorage {
             .map_err(|_| AppError::not_found("network was not found"))?;
 
         let (first, last) = network_usable_bounds(network.cidr(), network.reserved())?;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..256 {
             let chosen = if first == last {
                 first
             } else {
-                rng.gen_range(first..=last)
+                rng.random_range(first..=last)
             };
             let address = address_from_u128(network, chosen)?;
             if Self::ensure_address_usable(connection, network, &address).is_ok() {

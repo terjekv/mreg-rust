@@ -21,7 +21,7 @@ $TTL {{ zone.default_ttl }}
 {% for record in records %}
 {% set owner = record.owner_name %}
 {% if owner == zone.name %}{% set owner = "@" %}{% endif %}
-{{ owner }}{% if owner != "@" %}.{% endif %} {{ record.ttl | default(value=zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
+{{ owner }}{% if owner != "@" %}.{% endif %} {{ record.ttl | default(zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
 {% endfor %}
 "#;
 
@@ -41,7 +41,7 @@ $TTL {{ zone.default_ttl }}
 
 ; Records
 {% for record in records %}
-{{ record.owner_name }}. {{ record.ttl | default(value=zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
+{{ record.owner_name }}. {{ record.ttl | default(zone.default_ttl) }} IN {{ record.type_name }} {{ record.rendered }}
 {% endfor %}
 "#;
 

@@ -1,3 +1,4 @@
+use diesel::result::DatabaseErrorKind;
 use std::collections::HashMap;
 
 use async_trait::async_trait;
@@ -72,23 +73,21 @@ struct NameRow {
 fn map_fk_violation(message: &'static str) -> impl FnOnce(diesel::result::Error) -> AppError {
     move |error| match error {
         diesel::result::Error::DatabaseError(
-            diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+            DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::RestrictViolation,
             _,
         ) => AppError::conflict(message),
-        diesel::result::Error::DatabaseError(
-            diesel::result::DatabaseErrorKind::UniqueViolation,
-            _,
-        ) => AppError::conflict(message),
+        diesel::result::Error::DatabaseError(DatabaseErrorKind::UniqueViolation, _) => {
+            AppError::conflict(message)
+        }
         other => AppError::internal(other),
     }
 }
 
 fn map_unique(message: &'static str) -> impl FnOnce(diesel::result::Error) -> AppError {
     move |error| match error {
-        diesel::result::Error::DatabaseError(
-            diesel::result::DatabaseErrorKind::UniqueViolation,
-            _,
-        ) => AppError::conflict(message),
+        diesel::result::Error::DatabaseError(DatabaseErrorKind::UniqueViolation, _) => {
+            AppError::conflict(message)
+        }
         other => AppError::internal(other),
     }
 }

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use diesel::result::DatabaseErrorKind;
 use diesel::{
     Connection, OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
     sql_types::{Text, Timestamptz, Uuid as SqlUuid},
@@ -194,7 +195,7 @@ pub(super) fn delete_by_id(
         .execute(connection)
         .map_err(|error| match error {
             diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::RestrictViolation,
                 _,
             ) => AppError::conflict("community is still referenced by host community assignments"),
             other => AppError::internal(other),

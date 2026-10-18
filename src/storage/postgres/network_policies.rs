@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use diesel::result::DatabaseErrorKind;
 use diesel::{
     OptionalExtension, PgConnection, QueryableByName, RunQueryDsl, sql_query,
     sql_types::{Nullable, Text, Timestamptz, Uuid as SqlUuid},
@@ -146,7 +147,7 @@ pub(super) fn delete(connection: &mut PgConnection, name: &str) -> Result<(), Ap
         .execute(connection)
         .map_err(|error| match error {
             diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::RestrictViolation,
                 _,
             ) => AppError::conflict("network policy is still referenced by other resources"),
             other => AppError::internal(other),

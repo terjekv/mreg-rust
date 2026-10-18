@@ -9,9 +9,11 @@ use crate::fixtures::{
 #[case::admin_health("/system/health", ADMIN_USER, ADMIN_GROUP, StatusCode::OK)]
 #[case::readonly_version("/system/version", READONLY_USER, READONLY_GROUP, StatusCode::OK)]
 #[case::readonly_status("/system/status", READONLY_USER, READONLY_GROUP, StatusCode::OK)]
-#[case::ungrouped_health("/system/health", "mallory", "", StatusCode::FORBIDDEN)]
+#[case::ungrouped_health("/system/health", "mallory", "", StatusCode::OK)]
+#[case::ungrouped_version("/system/version", "mallory", "", StatusCode::OK)]
+#[case::ungrouped_status("/system/status", "mallory", "", StatusCode::FORBIDDEN)]
 #[actix_web::test]
-async fn system_endpoints_follow_policy(
+async fn system_endpoints_match_public_and_protected_access(
     #[case] endpoint: &str,
     #[case] user: &str,
     #[case] group: &str,
