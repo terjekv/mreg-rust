@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use diesel::result::DatabaseErrorKind;
 use diesel::{
     Connection, OptionalExtension, PgConnection, RunQueryDsl, sql_query,
     sql_types::{BigInt, Integer, Nullable, Text, Uuid as SqlUuid},
@@ -451,7 +452,7 @@ impl PostgresStorage {
             .execute(connection)
             .map_err(|error| match error {
                 diesel::result::Error::DatabaseError(
-                    diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                    DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::RestrictViolation,
                     _,
                 ) => AppError::conflict("network is still referenced by other resources"),
                 other => AppError::internal(other),
