@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Avoid repeated JWT header parsing and temporary claim copies after the authentication dependency upgrade; reuse local token validation settings.
 - Preserve HTTP 409 conflict responses for restricted deletions on PostgreSQL 18 by handling Diesel's distinct `RestrictViolation` error alongside foreign-key violations.
 - Fixed intermittent PostgreSQL DNS reads failing under concurrent imports: current built-in record definitions are no longer rewritten on reads, and initialization or refresh is serialized within a transaction.
 - Reduced memory-backend host-filter and record-listing work by evaluating address conditions once per inventory and cloning only the requested page.

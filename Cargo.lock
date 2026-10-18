@@ -2210,8 +2210,7 @@ dependencies = [
 [[package]]
 name = "jsonwebtoken"
 version = "11.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
+source = "git+https://github.com/Keats/jsonwebtoken?rev=11f83ab50d796f7e3a51d8fbd203ab3d050fed1b#11f83ab50d796f7e3a51d8fbd203ab3d050fed1b"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",

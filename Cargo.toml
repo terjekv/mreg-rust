@@ -275,9 +275,11 @@ harness = false
 name = "host_lookup_by_name_criterion"
 harness = false
 
-# Keep the unreleased Swagger UI ZIP security fix pinned until the next release.
-# Patch the Utoipa family together because its crates use workspace path dependencies.
+# Keep reviewed upstream fixes pinned until compatible releases are published.
 [patch.crates-io]
+# Avoid parsing JWT headers twice during validation.
+jsonwebtoken = { git = "https://github.com/Keats/jsonwebtoken", rev = "11f83ab50d796f7e3a51d8fbd203ab3d050fed1b" }
+# Swagger UI ZIP security fix; patch the family because it uses workspace paths.
 utoipa = { git = "https://github.com/juhaku/utoipa", rev = "5aff30b375c0c72aeccfa8fa6100db8f2901b3ba" }
 utoipa-gen = { git = "https://github.com/juhaku/utoipa", rev = "5aff30b375c0c72aeccfa8fa6100db8f2901b3ba" }
 utoipa-swagger-ui = { git = "https://github.com/juhaku/utoipa", rev = "5aff30b375c0c72aeccfa8fa6100db8f2901b3ba" }
